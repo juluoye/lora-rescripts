@@ -7,6 +7,7 @@ from typing import Optional
 
 from mikazuki import launch_utils
 from mikazuki.utils import train_utils
+from mikazuki.utils.train_utils import parse_boolish
 
 
 AESTHETIC_TARGETS = {"aesthetic", "composition", "color", "sexual"}
@@ -14,22 +15,6 @@ YOLO_LOCAL_REPO = (launch_utils.base_dir_path() / "scripts" / "stable" / "ultral
 NEWBIE_UPSTREAM_REPO = (launch_utils.base_dir_path() / "scripts" / "dev" / "NewbieLoraTrainer").resolve()
 NEWBIE_REQUIRED_RUNTIME_MODULES = ("peft", "torchdiffeq", "timm", "flash_attn")
 NEWBIE_LOKR_RUNTIME_MODULE = "lycoris.wrapper"
-
-
-def parse_boolish(value) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"", "0", "false", "no", "off", "none", "null"}:
-            return False
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-    return bool(value)
 
 
 def normalize_text_list(value) -> list[str]:

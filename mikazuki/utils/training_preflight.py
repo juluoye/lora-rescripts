@@ -9,6 +9,7 @@ from typing import Callable, Optional, TypeVar
 from mikazuki.launch_utils import base_dir_path
 from mikazuki.log import log
 from mikazuki.utils import train_utils
+from mikazuki.utils.train_utils import parse_boolish
 from mikazuki.utils.dataset_cache_preflight import analyze_dataset_cache_preflight
 from mikazuki.utils.dataset_analysis import analyze_dataset
 from mikazuki.utils.distributed import resolve_distributed_runtime
@@ -24,22 +25,6 @@ from mikazuki.utils.trainer_registry import get_trainer_definition
 
 
 _T = TypeVar("_T")
-
-
-def parse_boolish(value) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"", "0", "false", "no", "off", "none", "null"}:
-            return False
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-    return bool(value)
 
 
 def parse_optional_float(value) -> Optional[float]:

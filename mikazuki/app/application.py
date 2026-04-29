@@ -11,9 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 
 from mikazuki.app.config import app_config
-from mikazuki.app.api import load_schemas, load_presets
 from mikazuki.app.api import router as api_router
 from mikazuki.app.aesthetic_labeling_api import router as aesthetic_labeling_router
+from mikazuki.app.tooling_registry import load_presets, load_schemas
 # from mikazuki.app.ipc import router as ipc_router
 from mikazuki.app.proxy import router as proxy_router
 from mikazuki.plugins.runtime import plugin_runtime

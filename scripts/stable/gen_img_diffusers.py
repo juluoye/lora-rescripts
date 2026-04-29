@@ -96,6 +96,17 @@ from PIL.PngImagePlugin import PngInfo
 
 import library.model_util as model_util
 import library.train_util as train_util
+from library.gen_img_diffusers_setup_util import (
+    prepare_diffusers_extension_runtime,
+    prepare_diffusers_model_runtime,
+    prepare_diffusers_pipeline_runtime,
+    prepare_diffusers_scheduler_runtime,
+)
+from library.gen_img_diffusers_input_util import (
+    load_diffusers_textual_inversion_inputs,
+    prepare_diffusers_generation_inputs,
+)
+from library.gen_img_diffusers_batch_util import process_diffusers_generation_batch
 from networks.lora import LoRANetwork
 import tools.original_control_net as original_control_net
 from tools.original_control_net import ControlNetInfo
@@ -2219,342 +2230,74 @@ def main(args):
     if args.v2 and args.clip_skip is not None:
         logger.warning("v2 with clip_skip will be unexpected / v2でclip_skipを使用することは想定されていません")
 
-    # モデルを読み込む
-    if not os.path.isfile(args.ckpt):  # ファイルがないならパターンで探し、一つだけ該当すればそれを使う
-        files = glob.glob(args.ckpt)
-        if len(files) == 1:
-            args.ckpt = files[0]
-
-    use_stable_diffusion_format = os.path.isfile(args.ckpt)
-    if use_stable_diffusion_format:
-        logger.info("load StableDiffusion checkpoint")
-        text_encoder, vae, unet = model_util.load_models_from_stable_diffusion_checkpoint(args.v2, args.ckpt)
-    else:
-        logger.info("load Diffusers pretrained models")
-        loading_pipe = StableDiffusionPipeline.from_pretrained(args.ckpt, safety_checker=None, torch_dtype=dtype)
-        text_encoder = loading_pipe.text_encoder
-        vae = loading_pipe.vae
-        unet = loading_pipe.unet
-        tokenizer = loading_pipe.tokenizer
-        del loading_pipe
-
-        # Diffusers U-Net to original U-Net
-        original_unet = UNet2DConditionModel(
-            unet.config.sample_size,
-            unet.config.attention_head_dim,
-            unet.config.cross_attention_dim,
-            unet.config.use_linear_projection,
-            unet.config.upcast_attention,
-        )
-        original_unet.load_state_dict(unet.state_dict())
-        unet = original_unet
-    unet: InferUNet2DConditionModel = InferUNet2DConditionModel(unet)
-
-    # VAEを読み込む
-    if args.vae is not None:
-        vae = model_util.load_vae(args.vae, dtype)
-        logger.info("additional VAE loaded")
-
-    # # 置換するCLIPを読み込む
-    # if args.replace_clip_l14_336:
-    #   text_encoder = load_clip_l14_336(dtype)
-    #   logger.info(f"large clip {CLIP_ID_L14_336} is loaded")
-
-    if args.clip_guidance_scale > 0.0 or args.clip_image_guidance_scale:
-        logger.info("prepare clip model")
-        clip_model = CLIPModel.from_pretrained(CLIP_MODEL_PATH, torch_dtype=dtype)
-    else:
-        clip_model = None
-
-    if args.vgg16_guidance_scale > 0.0:
-        logger.info("prepare resnet model")
-        vgg16_model = torchvision.models.vgg16(torchvision.models.VGG16_Weights.IMAGENET1K_V1)
-    else:
-        vgg16_model = None
-
-    # xformers、Hypernetwork対応
-    if not args.diffusers_xformers:
-        mem_eff = not (args.xformers or args.sdpa)
-        replace_unet_modules(unet, mem_eff, args.xformers, args.sdpa)
-        replace_vae_modules(vae, mem_eff, args.xformers, args.sdpa)
-
-    # tokenizerを読み込む
-    logger.info("loading tokenizer")
-    if use_stable_diffusion_format:
-        tokenizer = train_util.load_tokenizer(args)
-
-    # schedulerを用意する
-    sched_init_args = {}
-    scheduler_num_noises_per_step = 1
-    if args.sampler == "ddim":
-        scheduler_cls = DDIMScheduler
-        scheduler_module = diffusers.schedulers.scheduling_ddim
-    elif args.sampler == "ddpm":  # ddpmはおかしくなるのでoptionから外してある
-        scheduler_cls = DDPMScheduler
-        scheduler_module = diffusers.schedulers.scheduling_ddpm
-    elif args.sampler == "pndm":
-        scheduler_cls = PNDMScheduler
-        scheduler_module = diffusers.schedulers.scheduling_pndm
-    elif args.sampler == "lms" or args.sampler == "k_lms":
-        scheduler_cls = LMSDiscreteScheduler
-        scheduler_module = diffusers.schedulers.scheduling_lms_discrete
-    elif args.sampler == "euler" or args.sampler == "k_euler":
-        scheduler_cls = EulerDiscreteScheduler
-        scheduler_module = diffusers.schedulers.scheduling_euler_discrete
-    elif args.sampler == "euler_a" or args.sampler == "k_euler_a":
-        scheduler_cls = EulerAncestralDiscreteSchedulerGL
-        scheduler_module = diffusers.schedulers.scheduling_euler_ancestral_discrete
-    elif args.sampler == "dpmsolver" or args.sampler == "dpmsolver++":
-        scheduler_cls = DPMSolverMultistepScheduler
-        sched_init_args["algorithm_type"] = args.sampler
-        scheduler_module = diffusers.schedulers.scheduling_dpmsolver_multistep
-    elif args.sampler == "dpmsingle":
-        scheduler_cls = DPMSolverSinglestepScheduler
-        scheduler_module = diffusers.schedulers.scheduling_dpmsolver_singlestep
-    elif args.sampler == "heun":
-        scheduler_cls = HeunDiscreteScheduler
-        scheduler_module = diffusers.schedulers.scheduling_heun_discrete
-    elif args.sampler == "dpm_2" or args.sampler == "k_dpm_2":
-        scheduler_cls = KDPM2DiscreteScheduler
-        scheduler_module = diffusers.schedulers.scheduling_k_dpm_2_discrete
-    elif args.sampler == "dpm_2_a" or args.sampler == "k_dpm_2_a":
-        scheduler_cls = KDPM2AncestralDiscreteScheduler
-        scheduler_module = diffusers.schedulers.scheduling_k_dpm_2_ancestral_discrete
-        scheduler_num_noises_per_step = 2
-
-    if args.v_parameterization:
-        sched_init_args["prediction_type"] = "v_prediction"
-
-    # samplerの乱数をあらかじめ指定するための処理
-
-    # replace randn
-    class NoiseManager:
-        def __init__(self):
-            self.sampler_noises = None
-            self.sampler_noise_index = 0
-
-        def reset_sampler_noises(self, noises):
-            self.sampler_noise_index = 0
-            self.sampler_noises = noises
-
-        def randn(self, shape, device=None, dtype=None, layout=None, generator=None):
-            # logger.info(f"replacing {shape} {len(self.sampler_noises)} {self.sampler_noise_index}")
-            if self.sampler_noises is not None and self.sampler_noise_index < len(self.sampler_noises):
-                noise = self.sampler_noises[self.sampler_noise_index]
-                if shape != noise.shape:
-                    noise = None
-            else:
-                noise = None
-
-            if noise == None:
-                logger.warning(f"unexpected noise request: {self.sampler_noise_index}, {shape}")
-                noise = torch.randn(shape, dtype=dtype, device=device, generator=generator)
-
-            self.sampler_noise_index += 1
-            return noise
-
-    class TorchRandReplacer:
-        def __init__(self, noise_manager):
-            self.noise_manager = noise_manager
-
-        def __getattr__(self, item):
-            if item == "randn":
-                return self.noise_manager.randn
-            if hasattr(torch, item):
-                return getattr(torch, item)
-            raise AttributeError("'{}' object has no attribute '{}'".format(type(self).__name__, item))
-
-    noise_manager = NoiseManager()
-    if scheduler_module is not None:
-        scheduler_module.torch = TorchRandReplacer(noise_manager)
-
-    scheduler = scheduler_cls(
-        num_train_timesteps=SCHEDULER_TIMESTEPS,
-        beta_start=SCHEDULER_LINEAR_START,
-        beta_end=SCHEDULER_LINEAR_END,
-        beta_schedule=SCHEDLER_SCHEDULE,
-        **sched_init_args,
+    prepared_model_runtime = prepare_diffusers_model_runtime(
+        args=args,
+        dtype=dtype,
+        logger=logger,
+        clip_model_path=CLIP_MODEL_PATH,
+        replace_unet_modules_fn=replace_unet_modules,
+        replace_vae_modules_fn=replace_vae_modules,
     )
+    use_stable_diffusion_format = prepared_model_runtime.use_stable_diffusion_format
+    text_encoder = prepared_model_runtime.text_encoder
+    vae = prepared_model_runtime.vae
+    unet = prepared_model_runtime.unet
+    tokenizer = prepared_model_runtime.tokenizer
+    clip_model = prepared_model_runtime.clip_model
+    vgg16_model = prepared_model_runtime.vgg16_model
 
-    # clip_sample=Trueにする
-    if hasattr(scheduler.config, "clip_sample") and scheduler.config.clip_sample is False:
-        logger.info("set clip_sample to True")
-        scheduler.config.clip_sample = True
-
-    # deviceを決定する
-    device = get_preferred_device()
-
-    # custom pipelineをコピったやつを生成する
-    if args.vae_slices:
-        from library.slicing_vae import SlicingAutoencoderKL
-
-        sli_vae = SlicingAutoencoderKL(
-            act_fn="silu",
-            block_out_channels=(128, 256, 512, 512),
-            down_block_types=["DownEncoderBlock2D", "DownEncoderBlock2D", "DownEncoderBlock2D", "DownEncoderBlock2D"],
-            in_channels=3,
-            latent_channels=4,
-            layers_per_block=2,
-            norm_num_groups=32,
-            out_channels=3,
-            sample_size=512,
-            up_block_types=["UpDecoderBlock2D", "UpDecoderBlock2D", "UpDecoderBlock2D", "UpDecoderBlock2D"],
-            num_slices=args.vae_slices,
-        )
-        sli_vae.load_state_dict(vae.state_dict())  # vaeのパラメータをコピーする
-        vae = sli_vae
-        del sli_vae
-    vae.to(dtype).to(device)
-    vae.eval()
-
-    text_encoder.to(dtype).to(device)
-    unet.to(dtype).to(device)
-
-    text_encoder.eval()
-    unet.eval()
-
-    if clip_model is not None:
-        clip_model.to(dtype).to(device)
-        clip_model.eval()
-    if vgg16_model is not None:
-        vgg16_model.to(dtype).to(device)
-        vgg16_model.eval()
-
-    # networkを組み込む
-    if args.network_module:
-        networks = []
-        network_default_muls = []
-        network_pre_calc = args.network_pre_calc
-
-        # merge関連の引数を統合する
-        if args.network_merge:
-            network_merge = len(args.network_module)  # all networks are merged
-        elif args.network_merge_n_models:
-            network_merge = args.network_merge_n_models
-        else:
-            network_merge = 0
-
-        for i, network_module in enumerate(args.network_module):
-            logger.info(f"import network module: {network_module}")
-            imported_module = importlib.import_module(network_module)
-
-            network_mul = 1.0 if args.network_mul is None or len(args.network_mul) <= i else args.network_mul[i]
-
-            net_kwargs = {}
-            if args.network_args and i < len(args.network_args):
-                network_args = args.network_args[i]
-                # TODO escape special chars
-                network_args = network_args.split(";")
-                for net_arg in network_args:
-                    key, value = net_arg.split("=")
-                    net_kwargs[key] = value
-
-            if args.network_weights is None or len(args.network_weights) <= i:
-                raise ValueError("No weight. Weight is required.")
-
-            network_weight = args.network_weights[i]
-            logger.info(f"load network weights from: {network_weight}")
-
-            if model_util.is_safetensors(network_weight) and args.network_show_meta:
-                from safetensors.torch import safe_open
-
-                with safe_open(network_weight, framework="pt") as f:
-                    metadata = f.metadata()
-                if metadata is not None:
-                    logger.info(f"metadata for: {network_weight}: {metadata}")
-
-            network, weights_sd = imported_module.create_network_from_weights(
-                network_mul, network_weight, vae, text_encoder, unet, for_inference=True, **net_kwargs
-            )
-            if network is None:
-                return
-
-            mergeable = network.is_mergeable()
-            if network_merge and not mergeable:
-                logger.warning("network is not mergiable. ignore merge option.")
-
-            if not mergeable or i >= network_merge:
-                # not merging
-                network.apply_to(text_encoder, unet)
-                info = network.load_state_dict(weights_sd, False)  # network.load_weightsを使うようにするとよい
-                logger.info(f"weights are loaded: {info}")
-
-                if args.opt_channels_last:
-                    network.to(memory_format=torch.channels_last)
-                network.to(dtype).to(device)
-
-                if network_pre_calc:
-                    logger.info("backup original weights")
-                    network.backup_weights()
-
-                networks.append(network)
-                network_default_muls.append(network_mul)
-            else:
-                network.merge_to(text_encoder, unet, weights_sd, dtype, device)
-
-    else:
-        networks = []
-
-    # upscalerの指定があれば取得する
-    upscaler = None
-    if args.highres_fix_upscaler:
-        logger.info(f"import upscaler module {args.highres_fix_upscaler}")
-        imported_module = importlib.import_module(args.highres_fix_upscaler)
-
-        us_kwargs = {}
-        if args.highres_fix_upscaler_args:
-            for net_arg in args.highres_fix_upscaler_args.split(";"):
-                key, value = net_arg.split("=")
-                us_kwargs[key] = value
-
-        logger.info("create upscaler")
-        upscaler = imported_module.create_upscaler(**us_kwargs)
-        upscaler.to(dtype).to(device)
-
-    # ControlNetの処理
-    control_nets: List[ControlNetInfo] = []
-    if args.control_net_models:
-        for i, model in enumerate(args.control_net_models):
-            prep_type = None if not args.control_net_preps or len(args.control_net_preps) <= i else args.control_net_preps[i]
-            weight = 1.0 if not args.control_net_weights or len(args.control_net_weights) <= i else args.control_net_weights[i]
-            ratio = 1.0 if not args.control_net_ratios or len(args.control_net_ratios) <= i else args.control_net_ratios[i]
-
-            ctrl_unet, ctrl_net = original_control_net.load_control_net(args.v2, unet, model)
-            prep = original_control_net.load_preprocess(prep_type)
-            control_nets.append(ControlNetInfo(ctrl_unet, ctrl_net, prep, weight, ratio))
-
-    if args.opt_channels_last:
-        logger.info(f"set optimizing: channels last")
-        text_encoder.to(memory_format=torch.channels_last)
-        vae.to(memory_format=torch.channels_last)
-        unet.to(memory_format=torch.channels_last)
-        if clip_model is not None:
-            clip_model.to(memory_format=torch.channels_last)
-        if networks:
-            for network in networks:
-                network.to(memory_format=torch.channels_last)
-        if vgg16_model is not None:
-            vgg16_model.to(memory_format=torch.channels_last)
-
-        for cn in control_nets:
-            cn.unet.to(memory_format=torch.channels_last)
-            cn.net.to(memory_format=torch.channels_last)
-
-    pipe = PipelineLike(
-        device,
-        vae,
-        text_encoder,
-        tokenizer,
-        unet,
-        scheduler,
-        args.clip_skip,
-        clip_model,
-        args.clip_guidance_scale,
-        args.clip_image_guidance_scale,
-        vgg16_model,
-        args.vgg16_guidance_scale,
-        args.vgg16_guidance_layer,
+    prepared_scheduler_runtime = prepare_diffusers_scheduler_runtime(
+        args=args,
+        logger=logger,
+        scheduler_linear_start=SCHEDULER_LINEAR_START,
+        scheduler_linear_end=SCHEDULER_LINEAR_END,
+        scheduler_timesteps=SCHEDULER_TIMESTEPS,
+        scheduler_schedule=SCHEDLER_SCHEDULE,
     )
+    scheduler = prepared_scheduler_runtime.scheduler
+    scheduler_num_noises_per_step = prepared_scheduler_runtime.scheduler_num_noises_per_step
+    noise_manager = prepared_scheduler_runtime.noise_manager
+
+    prepared_pipeline_runtime = prepare_diffusers_pipeline_runtime(
+        args=args,
+        dtype=dtype,
+        text_encoder=text_encoder,
+        vae=vae,
+        unet=unet,
+        tokenizer=tokenizer,
+        scheduler=scheduler,
+        clip_model=clip_model,
+        vgg16_model=vgg16_model,
+        pipeline_like_cls=PipelineLike,
+        logger=logger,
+    )
+    device = prepared_pipeline_runtime.device
+    vae = prepared_pipeline_runtime.vae
+    text_encoder = prepared_pipeline_runtime.text_encoder
+    unet = prepared_pipeline_runtime.unet
+    clip_model = prepared_pipeline_runtime.clip_model
+    vgg16_model = prepared_pipeline_runtime.vgg16_model
+    pipe = prepared_pipeline_runtime.pipe
+
+    prepared_extension_runtime = prepare_diffusers_extension_runtime(
+        args=args,
+        dtype=dtype,
+        device=device,
+        vae=vae,
+        text_encoder=text_encoder,
+        unet=unet,
+        clip_model=clip_model,
+        vgg16_model=vgg16_model,
+        logger=logger,
+    )
+    if prepared_extension_runtime is None:
+        return
+    networks = prepared_extension_runtime.networks
+    network_default_muls = prepared_extension_runtime.network_default_muls
+    network_pre_calc = prepared_extension_runtime.network_pre_calc
+    upscaler = prepared_extension_runtime.upscaler
+    control_nets = prepared_extension_runtime.control_nets
+
     pipe.set_control_nets(control_nets)
     logger.info("pipeline is ready.")
 
@@ -2588,265 +2331,25 @@ def main(args):
         )
         pipe.set_gradual_latent(gradual_latent)
 
-    # Extended Textual Inversion および Textual Inversionを処理する
-    if args.XTI_embeddings:
-        diffusers.models.UNet2DConditionModel.forward = unet_forward_XTI
-        diffusers.models.unet_2d_blocks.CrossAttnDownBlock2D.forward = downblock_forward_XTI
-        diffusers.models.unet_2d_blocks.CrossAttnUpBlock2D.forward = upblock_forward_XTI
-
-    if args.textual_inversion_embeddings:
-        token_ids_embeds = []
-        for embeds_file in args.textual_inversion_embeddings:
-            if model_util.is_safetensors(embeds_file):
-                from safetensors.torch import load_file
-
-                data = load_file(embeds_file)
-            else:
-                data = torch.load(embeds_file, map_location="cpu")
-
-            if "string_to_param" in data:
-                data = data["string_to_param"]
-            embeds = next(iter(data.values()))
-
-            if type(embeds) != torch.Tensor:
-                raise ValueError(
-                    f"weight file does not contains Tensor / 重みファイルのデータがTensorではありません: {embeds_file}"
-                )
-
-            num_vectors_per_token = embeds.size()[0]
-            token_string = os.path.splitext(os.path.basename(embeds_file))[0]
-            token_strings = [token_string] + [f"{token_string}{i+1}" for i in range(num_vectors_per_token - 1)]
-
-            # add new word to tokenizer, count is num_vectors_per_token
-            num_added_tokens = tokenizer.add_tokens(token_strings)
-            assert (
-                num_added_tokens == num_vectors_per_token
-            ), f"tokenizer has same word to token string (filename). please rename the file / 指定した名前（ファイル名）のトークンが既に存在します。ファイルをリネームしてください: {embeds_file}"
-
-            token_ids = tokenizer.convert_tokens_to_ids(token_strings)
-            logger.info(f"Textual Inversion embeddings `{token_string}` loaded. Tokens are added: {token_ids}")
-            assert (
-                min(token_ids) == token_ids[0] and token_ids[-1] == token_ids[0] + len(token_ids) - 1
-            ), f"token ids is not ordered"
-            assert len(tokenizer) - 1 == token_ids[-1], f"token ids is not end of tokenize: {len(tokenizer)}"
-
-            if num_vectors_per_token > 1:
-                pipe.add_token_replacement(token_ids[0], token_ids)
-
-            token_ids_embeds.append((token_ids, embeds))
-
-        text_encoder.resize_token_embeddings(len(tokenizer))
-        token_embeds = text_encoder.get_input_embeddings().weight.data
-        for token_ids, embeds in token_ids_embeds:
-            for token_id, embed in zip(token_ids, embeds):
-                token_embeds[token_id] = embed
-
-    if args.XTI_embeddings:
-        XTI_layers = [
-            "IN01",
-            "IN02",
-            "IN04",
-            "IN05",
-            "IN07",
-            "IN08",
-            "MID",
-            "OUT03",
-            "OUT04",
-            "OUT05",
-            "OUT06",
-            "OUT07",
-            "OUT08",
-            "OUT09",
-            "OUT10",
-            "OUT11",
-        ]
-        token_ids_embeds_XTI = []
-        for embeds_file in args.XTI_embeddings:
-            if model_util.is_safetensors(embeds_file):
-                from safetensors.torch import load_file
-
-                data = load_file(embeds_file)
-            else:
-                data = torch.load(embeds_file, map_location="cpu")
-            if set(data.keys()) != set(XTI_layers):
-                raise ValueError("NOT XTI")
-            embeds = torch.concat(list(data.values()))
-            num_vectors_per_token = data["MID"].size()[0]
-
-            token_string = os.path.splitext(os.path.basename(embeds_file))[0]
-            token_strings = [token_string] + [f"{token_string}{i+1}" for i in range(num_vectors_per_token - 1)]
-
-            # add new word to tokenizer, count is num_vectors_per_token
-            num_added_tokens = tokenizer.add_tokens(token_strings)
-            assert (
-                num_added_tokens == num_vectors_per_token
-            ), f"tokenizer has same word to token string (filename). please rename the file / 指定した名前（ファイル名）のトークンが既に存在します。ファイルをリネームしてください: {embeds_file}"
-
-            token_ids = tokenizer.convert_tokens_to_ids(token_strings)
-            logger.info(f"XTI embeddings `{token_string}` loaded. Tokens are added: {token_ids}")
-
-            # if num_vectors_per_token > 1:
-            pipe.add_token_replacement(token_ids[0], token_ids)
-
-            token_strings_XTI = []
-            for layer_name in XTI_layers:
-                token_strings_XTI += [f"{t}_{layer_name}" for t in token_strings]
-            tokenizer.add_tokens(token_strings_XTI)
-            token_ids_XTI = tokenizer.convert_tokens_to_ids(token_strings_XTI)
-            token_ids_embeds_XTI.append((token_ids_XTI, embeds))
-            for t in token_ids:
-                t_XTI_dic = {}
-                for i, layer_name in enumerate(XTI_layers):
-                    t_XTI_dic[layer_name] = t + (i + 1) * num_added_tokens
-                pipe.add_token_replacement_XTI(t, t_XTI_dic)
-
-            text_encoder.resize_token_embeddings(len(tokenizer))
-            token_embeds = text_encoder.get_input_embeddings().weight.data
-            for token_ids, embeds in token_ids_embeds_XTI:
-                for token_id, embed in zip(token_ids, embeds):
-                    token_embeds[token_id] = embed
-
-    # promptを取得する
-    if args.from_file is not None:
-        logger.info(f"reading prompts from {args.from_file}")
-        with open(args.from_file, "r", encoding="utf-8") as f:
-            prompt_list = f.read().splitlines()
-            prompt_list = [d for d in prompt_list if len(d.strip()) > 0 and d[0] != "#"]
-    elif args.prompt is not None:
-        prompt_list = [args.prompt]
-    else:
-        prompt_list = []
-
-    if args.interactive:
-        args.n_iter = 1
-
-    # img2imgの前処理、画像の読み込みなど
-    def load_images(path):
-        if os.path.isfile(path):
-            paths = [path]
-        else:
-            paths = (
-                glob.glob(os.path.join(path, "*.png"))
-                + glob.glob(os.path.join(path, "*.jpg"))
-                + glob.glob(os.path.join(path, "*.jpeg"))
-                + glob.glob(os.path.join(path, "*.webp"))
-            )
-            paths.sort()
-
-        images = []
-        for p in paths:
-            image = Image.open(p)
-            if image.mode != "RGB":
-                logger.info(f"convert image to RGB from {image.mode}: {p}")
-                image = image.convert("RGB")
-            images.append(image)
-
-        return images
-
-    def resize_images(imgs, size):
-        resized = []
-        for img in imgs:
-            r_img = img.resize(size, Image.Resampling.LANCZOS)
-            if hasattr(img, "filename"):  # filename属性がない場合があるらしい
-                r_img.filename = img.filename
-            resized.append(r_img)
-        return resized
-
-    if args.image_path is not None:
-        logger.info(f"load image for img2img: {args.image_path}")
-        init_images = load_images(args.image_path)
-        assert len(init_images) > 0, f"No image / 画像がありません: {args.image_path}"
-        logger.info(f"loaded {len(init_images)} images for img2img")
-    else:
-        init_images = None
-
-    if args.mask_path is not None:
-        logger.info(f"load mask for inpainting: {args.mask_path}")
-        mask_images = load_images(args.mask_path)
-        assert len(mask_images) > 0, f"No mask image / マスク画像がありません: {args.image_path}"
-        logger.info(f"loaded {len(mask_images)} mask images for inpainting")
-    else:
-        mask_images = None
-
-    # promptがないとき、画像のPngInfoから取得する
-    if init_images is not None and len(prompt_list) == 0 and not args.interactive:
-        logger.info("get prompts from images' meta data")
-        for img in init_images:
-            if "prompt" in img.text:
-                prompt = img.text["prompt"]
-                if "negative-prompt" in img.text:
-                    prompt += " --n " + img.text["negative-prompt"]
-                prompt_list.append(prompt)
-
-        # プロンプトと画像を一致させるため指定回数だけ繰り返す（画像を増幅する）
-        l = []
-        for im in init_images:
-            l.extend([im] * args.images_per_prompt)
-        init_images = l
-
-        if mask_images is not None:
-            l = []
-            for im in mask_images:
-                l.extend([im] * args.images_per_prompt)
-            mask_images = l
-
-    # 画像サイズにオプション指定があるときはリサイズする
-    if args.W is not None and args.H is not None:
-        # highres fix を考慮に入れる
-        w, h = args.W, args.H
-        if highres_fix:
-            w = int(w * args.highres_fix_scale + 0.5)
-            h = int(h * args.highres_fix_scale + 0.5)
-
-        if init_images is not None:
-            logger.info(f"resize img2img source images to {w}*{h}")
-            init_images = resize_images(init_images, (w, h))
-        if mask_images is not None:
-            logger.info(f"resize img2img mask images to {w}*{h}")
-            mask_images = resize_images(mask_images, (w, h))
-
-    regional_network = False
-    if networks and mask_images:
-        # mask を領域情報として流用する、現在は一回のコマンド呼び出しで1枚だけ対応
-        regional_network = True
-        logger.info("use mask as region")
-
-        size = None
-        for i, network in enumerate(networks):
-            if (i < 3 and args.network_regional_mask_max_color_codes is None) or i < args.network_regional_mask_max_color_codes:
-                np_mask = np.array(mask_images[0])
-
-                if args.network_regional_mask_max_color_codes:
-                    # カラーコードでマスクを指定する
-                    ch0 = (i + 1) & 1
-                    ch1 = ((i + 1) >> 1) & 1
-                    ch2 = ((i + 1) >> 2) & 1
-                    np_mask = np.all(np_mask == np.array([ch0, ch1, ch2]) * 255, axis=2)
-                    np_mask = np_mask.astype(np.uint8) * 255
-                else:
-                    np_mask = np_mask[:, :, i]
-                size = np_mask.shape
-            else:
-                np_mask = np.full(size, 255, dtype=np.uint8)
-            mask = torch.from_numpy(np_mask.astype(np.float32) / 255.0)
-            network.set_region(i, i == len(networks) - 1, mask)
-        mask_images = None
-
-    prev_image = None  # for VGG16 guided
-    if args.guide_image_path is not None:
-        logger.info(f"load image for CLIP/VGG16/ControlNet guidance: {args.guide_image_path}")
-        guide_images = []
-        for p in args.guide_image_path:
-            guide_images.extend(load_images(p))
-
-        logger.info(f"loaded {len(guide_images)} guide images for guidance")
-        if len(guide_images) == 0:
-            logger.info(
-                f"No guide image, use previous generated image. / ガイド画像がありません。直前に生成した画像を使います: {args.image_path}"
-            )
-            guide_images = None
-    else:
-        guide_images = None
+    load_diffusers_textual_inversion_inputs(
+        args=args,
+        pipe=pipe,
+        tokenizer=tokenizer,
+        text_encoder=text_encoder,
+        logger=logger,
+    )
+    prepared_inputs = prepare_diffusers_generation_inputs(
+        args=args,
+        highres_fix=highres_fix,
+        networks=networks,
+        logger=logger,
+    )
+    prompt_list = prepared_inputs.prompt_list
+    init_images = prepared_inputs.init_images
+    mask_images = prepared_inputs.mask_images
+    regional_network = prepared_inputs.regional_network
+    prev_image = prepared_inputs.prev_image
+    guide_images = prepared_inputs.guide_images
 
     # seed指定時はseedを決めておく
     if args.seed is not None:
@@ -2954,194 +2457,28 @@ def main(args):
                 if args.highres_fix_disable_control_net:
                     pipe.set_enable_control_net(False)  # オプション指定時、2nd stageではControlNetを無効にする
 
-            # このバッチの情報を取り出す
-            (
-                return_latents,
-                (step_first, _, _, _, init_image, mask_image, _, guide_image, _),
-                (width, height, steps, scale, negative_scale, strength, network_muls, num_sub_prompts),
-            ) = batch[0]
-            noise_shape = (LATENT_CHANNELS, height // DOWNSAMPLING_FACTOR, width // DOWNSAMPLING_FACTOR)
-
-            prompts = []
-            negative_prompts = []
-            raw_prompts = []
-            start_code = torch.zeros((batch_size, *noise_shape), device=device, dtype=dtype)
-            noises = [
-                torch.zeros((batch_size, *noise_shape), device=device, dtype=dtype)
-                for _ in range(steps * scheduler_num_noises_per_step)
-            ]
-            seeds = []
-            clip_prompts = []
-
-            if init_image is not None:  # img2img?
-                i2i_noises = torch.zeros((batch_size, *noise_shape), device=device, dtype=dtype)
-                init_images = []
-
-                if mask_image is not None:
-                    mask_images = []
-                else:
-                    mask_images = None
-            else:
-                i2i_noises = None
-                init_images = None
-                mask_images = None
-
-            if guide_image is not None:  # CLIP image guided?
-                guide_images = []
-            else:
-                guide_images = None
-
-            # バッチ内の位置に関わらず同じ乱数を使うためにここで乱数を生成しておく。あわせてimage/maskがbatch内で同一かチェックする
-            all_images_are_same = True
-            all_masks_are_same = True
-            all_guide_images_are_same = True
-            for i, (
-                _,
-                (_, prompt, negative_prompt, seed, init_image, mask_image, clip_prompt, guide_image, raw_prompt),
-                _,
-            ) in enumerate(batch):
-                prompts.append(prompt)
-                negative_prompts.append(negative_prompt)
-                seeds.append(seed)
-                clip_prompts.append(clip_prompt)
-                raw_prompts.append(raw_prompt)
-
-                if init_image is not None:
-                    init_images.append(init_image)
-                    if i > 0 and all_images_are_same:
-                        all_images_are_same = init_images[-2] is init_image
-
-                if mask_image is not None:
-                    mask_images.append(mask_image)
-                    if i > 0 and all_masks_are_same:
-                        all_masks_are_same = mask_images[-2] is mask_image
-
-                if guide_image is not None:
-                    if type(guide_image) is list:
-                        guide_images.extend(guide_image)
-                        all_guide_images_are_same = False
-                    else:
-                        guide_images.append(guide_image)
-                        if i > 0 and all_guide_images_are_same:
-                            all_guide_images_are_same = guide_images[-2] is guide_image
-
-                # make start code
-                torch.manual_seed(seed)
-                start_code[i] = torch.randn(noise_shape, device=device, dtype=dtype)
-
-                # make each noises
-                for j in range(steps * scheduler_num_noises_per_step):
-                    noises[j][i] = torch.randn(noise_shape, device=device, dtype=dtype)
-
-                if i2i_noises is not None:  # img2img noise
-                    i2i_noises[i] = torch.randn(noise_shape, device=device, dtype=dtype)
-
-            noise_manager.reset_sampler_noises(noises)
-
-            # すべての画像が同じなら1枚だけpipeに渡すことでpipe側で処理を高速化する
-            if init_images is not None and all_images_are_same:
-                init_images = init_images[0]
-            if mask_images is not None and all_masks_are_same:
-                mask_images = mask_images[0]
-            if guide_images is not None and all_guide_images_are_same:
-                guide_images = guide_images[0]
-
-            # ControlNet使用時はguide imageをリサイズする
-            if control_nets:
-                # TODO resampleのメソッド
-                guide_images = guide_images if type(guide_images) == list else [guide_images]
-                guide_images = [i.resize((width, height), resample=PIL.Image.LANCZOS) for i in guide_images]
-                if len(guide_images) == 1:
-                    guide_images = guide_images[0]
-
-            # generate
-            if networks:
-                # 追加ネットワークの処理
-                shared = {}
-                for n, m in zip(networks, network_muls if network_muls else network_default_muls):
-                    n.set_multiplier(m)
-                    if regional_network:
-                        n.set_current_generation(batch_size, num_sub_prompts, width, height, shared)
-
-                if not regional_network and network_pre_calc:
-                    for n in networks:
-                        n.restore_weights()
-                    for n in networks:
-                        n.pre_calculation()
-                    logger.info("pre-calculation... done")
-
-            images = pipe(
-                prompts,
-                negative_prompts,
-                init_images,
-                mask_images,
-                height,
-                width,
-                steps,
-                scale,
-                negative_scale,
-                strength,
-                latents=start_code,
-                output_type="pil",
+            return process_diffusers_generation_batch(
+                batch,
+                highres_fix=highres_fix,
+                highres_1st=highres_1st,
+                args=args,
+                batch_size=batch_size,
+                latent_channels=LATENT_CHANNELS,
+                downsampling_factor=DOWNSAMPLING_FACTOR,
+                device=device,
+                dtype=dtype,
+                scheduler_num_noises_per_step=scheduler_num_noises_per_step,
+                noise_manager=noise_manager,
+                control_nets=control_nets,
+                networks=networks,
+                network_default_muls=network_default_muls,
+                regional_network=regional_network,
+                network_pre_calc=network_pre_calc,
+                pipe=pipe,
                 max_embeddings_multiples=max_embeddings_multiples,
-                img2img_noise=i2i_noises,
-                vae_batch_size=args.vae_batch_size,
-                return_latents=return_latents,
-                clip_prompts=clip_prompts,
-                clip_guide_images=guide_images,
-            )[0]
-            if highres_1st and not args.highres_fix_save_1st:  # return images or latents
-                return images
-
-            # save image
-            highres_prefix = ("0" if highres_1st else "1") if highres_fix else ""
-            ts_str = time.strftime("%Y%m%d%H%M%S", time.localtime())
-            for i, (image, prompt, negative_prompts, seed, clip_prompt, raw_prompt) in enumerate(
-                zip(images, prompts, negative_prompts, seeds, clip_prompts, raw_prompts)
-            ):
-                if highres_fix:
-                    seed -= 1  # record original seed
-                metadata = PngInfo()
-                metadata.add_text("prompt", prompt)
-                metadata.add_text("seed", str(seed))
-                metadata.add_text("sampler", args.sampler)
-                metadata.add_text("steps", str(steps))
-                metadata.add_text("scale", str(scale))
-                if negative_prompt is not None:
-                    metadata.add_text("negative-prompt", negative_prompt)
-                if negative_scale is not None:
-                    metadata.add_text("negative-scale", str(negative_scale))
-                if clip_prompt is not None:
-                    metadata.add_text("clip-prompt", clip_prompt)
-                if raw_prompt is not None:
-                    metadata.add_text("raw-prompt", raw_prompt)
-
-                if args.use_original_file_name and init_images is not None:
-                    if type(init_images) is list:
-                        fln = os.path.splitext(os.path.basename(init_images[i % len(init_images)].filename))[0] + ".png"
-                    else:
-                        fln = os.path.splitext(os.path.basename(init_images.filename))[0] + ".png"
-                elif args.sequential_file_name:
-                    fln = f"im_{highres_prefix}{step_first + i + 1:06d}.png"
-                else:
-                    fln = f"im_{ts_str}_{highres_prefix}{i:03d}_{seed}.png"
-
-                image.save(os.path.join(args.outdir, fln), pnginfo=metadata)
-
-            if not args.no_preview and not highres_1st and args.interactive:
-                try:
-                    import cv2
-
-                    for prompt, image in zip(prompts, images):
-                        cv2.imshow(prompt[:128], np.array(image)[:, :, ::-1])  # プロンプトが長いと死ぬ
-                        cv2.waitKey()
-                        cv2.destroyAllWindows()
-                except ImportError:
-                    logger.info(
-                        "opencv-python is not installed, cannot preview / opencv-pythonがインストールされていないためプレビューできません"
-                    )
-
-            return images
+                init_images_ref=init_images,
+                logger=logger,
+            )
 
         # 画像生成のプロンプトが一周するまでのループ
         prompt_index = 0

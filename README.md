@@ -18,7 +18,7 @@
 
 _✨ Enjoy Stable Diffusion Train！ ✨_
 
-**v1.5.4**
+**v1.5.5**
 
 Fork from 秋葉 `aaaki/lora-scripts`  
 Modify By `Lulynx`
@@ -60,7 +60,7 @@ LoRA & Dreambooth training GUI & scripts preset & one key training environment f
 
 ## Recent Updates
 
-### v1.5.4
+### v1.5.5
 
 - improved Launcher graceful stop flow, duplicate-stop protection, and clearer `Stopping...` task state feedback
 - fixed failed trainer startup leaving task slots occupied and improved Windows stop / kill behavior

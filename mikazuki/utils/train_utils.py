@@ -11,6 +11,22 @@ from mikazuki.log import log
 python_bin = sys.executable
 
 
+def parse_boolish(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"", "0", "false", "no", "off", "none", "null"}:
+            return False
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+    return bool(value)
+
+
 class ModelType(Enum):
     UNKNOWN = -1
     SD15 = 1

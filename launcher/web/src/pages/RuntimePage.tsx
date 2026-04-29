@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Download, CheckCircle2, AlertCircle, XCircle, Sparkles } from 'lucide-react';
+import { Download, CheckCircle2, AlertCircle, XCircle, Sparkles, Trash2 } from 'lucide-react';
 import { CompatibilitySummary } from '../components/CompatibilitySummary';
 import { useApp } from '../context/AppContext';
 import { useTranslation } from '../hooks/useTranslation';
@@ -78,6 +78,7 @@ export function RuntimePage() {
     selectRuntime,
     initializeRuntime,
     installRuntime,
+    uninstallRuntime,
     isInstalling,
     currentTaskState,
     runtimeRecommendation,
@@ -235,6 +236,8 @@ export function RuntimePage() {
               const runtimePathHint = def.env_dir_names.length > 0 ? `.\\env\\${def.env_dir_names[0]}` : '.\\env';
               const isInitialized = status?.status_text === 'initialized';
               const needsInitialize = !status?.python_exists;
+              const isInstalled = Boolean(status?.installed);
+              const isBusy = isInstalling;
               const installHint = status?.installed
                 ? null
                 : isInitialized
@@ -253,8 +256,7 @@ export function RuntimePage() {
               return (
                 <div
                   key={def.id}
-                  onClick={() => status?.installed && selectRuntime(def.id)}
-                  className={`card-interactive p-5 rounded-2xl cursor-pointer`}
+                  className={`card-interactive p-5 rounded-2xl`}
                   style={{
                     backgroundColor: isSelected ? 'var(--accent-subtle)' : 'var(--bg-card)',
                     border: isSelected ? '1px solid var(--accent-border)' : '1px solid var(--border-card)',
@@ -267,28 +269,6 @@ export function RuntimePage() {
                     </div>
                     <div className="flex items-center gap-2">
                       {status && <StatusBadge status={status} />}
-                      {status && !status.installed && (
-                        <button
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            setActionError(null);
-                            const result = needsInitialize
-                              ? await initializeRuntime(def.id)
-                              : await installRuntime(def.id);
-                            if (result.error) {
-                              setActionError(result.error);
-                            }
-                          }}
-                          disabled={isInstalling}
-                          className={`btn-interactive ${isInstalling ? 'btn-shimmer' : 'btn-accent-glow'} flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-40`}
-                          style={{ backgroundColor: 'var(--accent)', color: '#ffffff' }}
-                          onMouseEnter={(e) => { if (!isInstalling) e.currentTarget.style.backgroundColor = 'var(--accent-light)'; }}
-                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--accent)'}
-                        >
-                          <Download size={14} />
-                          {actionLabel}
-                        </button>
-                      )}
                     </div>
                   </div>
                   <h3 className="font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
@@ -318,6 +298,64 @@ export function RuntimePage() {
                   {installHint && (
                     <p className="text-xs mt-2" style={{ color: 'var(--warning-text)' }}>{installHint}</p>
                   )}
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {isInstalled ? (
+                      <>
+                        <button
+                          onClick={async () => {
+                            setActionError(null);
+                            await selectRuntime(def.id);
+                          }}
+                          disabled={isBusy || isSelected}
+                          className={`btn-interactive flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium disabled:opacity-40`}
+                          style={{
+                            backgroundColor: isSelected ? 'var(--success)' : 'var(--accent)',
+                            color: '#ffffff',
+                          }}
+                        >
+                          <CheckCircle2 size={14} />
+                          {isSelected ? t('btn_runtime_enabled') : t('btn_runtime_enable')}
+                        </button>
+                        <button
+                          onClick={async () => {
+                            setActionError(null);
+                            const result = await uninstallRuntime(def.id);
+                            if (result.error) {
+                              setActionError(result.error);
+                            }
+                          }}
+                          disabled={isBusy}
+                          className="btn-interactive flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium disabled:opacity-40"
+                          style={{
+                            backgroundColor: 'var(--danger-subtle)',
+                            color: 'var(--danger-text)',
+                            border: '1px solid var(--danger-border)',
+                          }}
+                        >
+                          <Trash2 size={14} />
+                          {t('btn_runtime_uninstall')}
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={async () => {
+                          setActionError(null);
+                          const result = needsInitialize
+                            ? await initializeRuntime(def.id)
+                            : await installRuntime(def.id);
+                          if (result.error) {
+                            setActionError(result.error);
+                          }
+                        }}
+                        disabled={isBusy}
+                        className={`btn-interactive ${isBusy ? 'btn-shimmer' : 'btn-accent-glow'} flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium disabled:opacity-40`}
+                        style={{ backgroundColor: 'var(--accent)', color: '#ffffff' }}
+                      >
+                        <Download size={14} />
+                        {actionLabel}
+                      </button>
+                    )}
+                  </div>
                   {compatibilityEntries.length > 0 && (
                     <div className="mt-4 pt-4" style={{ borderTop: '1px solid var(--border-card)' }}>
                       <CompatibilitySummary

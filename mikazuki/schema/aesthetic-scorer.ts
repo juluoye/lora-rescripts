@@ -1,6 +1,6 @@
 Schema.intersect([
     Schema.object({
-        model_train_type: Schema.const("aesthetic-scorer").required().description("训练种类"),
+        model_train_type: Schema.string().default("aesthetic-scorer").disabled().description("训练种类"),
         output_name: Schema.string().default("aesthetic-scorer-best").description("模型保存名称"),
         output_dir: Schema.string().role("filepicker", { type: "folder" }).default("./output/aesthetic-scorer").description("模型输出目录"),
         save_model_as: Schema.union(["safetensors", "pt", "pth", "ckpt"]).default("safetensors").description("模型保存格式"),

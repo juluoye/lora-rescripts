@@ -13,7 +13,7 @@ import toml
 from mikazuki.log import log
 from mikazuki.utils.distributed import parse_boolish, safe_int
 from mikazuki.utils.resume_guard import resolve_local_path
-from mikazuki.utils.trainer_registry import resolve_trainer_file_for_training_type
+from mikazuki.utils.trainer_registry import get_trainer_file_for_training_type
 
 LEGACY_DEFAULT_SYNC_CONFIG_KEYS = (
     "train_batch_size,gradient_accumulation_steps,max_train_epochs,"
@@ -65,32 +65,6 @@ PROTECTED_SYNC_CONFIG_KEYS = {
     "clear_dataset_npz_before_train",
 }
 WORKER_OUTPUT_MARKER = "THIS_IS_WORKER_NODE_CHECK_MAIN_OUTPUTS"
-MODEL_TRAIN_TYPE_TO_TRAINER_FILE = {
-    "sd-lora": "./scripts/stable/train_network.py",
-    "sdxl-lora": "./scripts/stable/sdxl_train_network.py",
-    "yolo": "./scripts/stable/yolo_train.py",
-    "aesthetic-scorer": "./scripts/stable/aesthetic_scorer_train.py",
-    "sd-dreambooth": "./scripts/stable/train_db.py",
-    "sdxl-finetune": "./scripts/stable/sdxl_train.py",
-    "sd-controlnet": "./scripts/stable/train_control_net.py",
-    "sdxl-controlnet": "./scripts/stable/sdxl_train_control_net.py",
-    "sdxl-controlnet-lllite": "./scripts/stable/sdxl_train_control_net_lllite.py",
-    "flux-controlnet": "./scripts/stable/flux_train_control_net.py",
-    "sd-textual-inversion": "./scripts/stable/train_textual_inversion.py",
-    "sd-textual-inversion-xti": "./scripts/stable/train_textual_inversion_XTI.py",
-    "sdxl-textual-inversion": "./scripts/stable/sdxl_train_textual_inversion.py",
-    "sd3-lora": "./scripts/dev/sd3_train_network.py",
-    "sd3-finetune": "./scripts/stable/sd3_train.py",
-    "flux-lora": "./scripts/dev/flux_train_network.py",
-    "flux-finetune": "./scripts/dev/flux_train.py",
-    "lumina-lora": "./scripts/stable/lumina_train_network.py",
-    "lumina-finetune": "./scripts/stable/lumina_train.py",
-    "hunyuan-image-lora": "./scripts/stable/hunyuan_image_train_network.py",
-    "anima-lora": "./scripts/stable/anima_train_network.py",
-    "anima-finetune": "./scripts/stable/anima_train.py",
-}
-
-
 def parse_csv(value, default_csv: str) -> list[str]:
     raw = str(value if value is not None else default_csv)
     return [item.strip() for item in raw.split(",") if item.strip()]
@@ -122,8 +96,7 @@ def resolve_trainer_file_from_runtime_config(runtime_train_config: dict, fallbac
     if not model_train_type:
         return fallback_trainer_file
 
-    resolved = MODEL_TRAIN_TYPE_TO_TRAINER_FILE.get(model_train_type, fallback_trainer_file)
-    return resolve_trainer_file_for_training_type(model_train_type, resolved)
+    return str(get_trainer_file_for_training_type(model_train_type, fallback_trainer_file) or fallback_trainer_file)
 
 
 def count_dataset_files_without_npz(path: Path, *, missing_value: int, not_dir_value: int) -> int:

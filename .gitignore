@@ -1,51 +1,69 @@
-.vscode
-.idea
+# Editor / IDE
+.vscode/
+.idea/
 
-venv
-__pycache__
+# Python cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-output/*
-!output/.keep
+# Local virtualenvs / embedded runtimes
+/venv/
+/.venv/
+/env/
+/python/
+/python_*/
+/python-*/
+/py310/
+/python_blackwell/
 
-assets/config.json
+# Frontend dependencies
+**/node_modules/
 
-py310
-python_blackwell
-git
-wd14_tagger_model
-blackwell-wheels/
+# Build / packaging outputs
+/build/
+/dist/
+*.exe
+*.zip
+*.7z
+*.pyz
+
+# Local runtime outputs
+/output/*
+!/output/.keep
+/train/*
+/logs/*
+!/logs/.keep
+/tmp/
+
+# Local config and autosave
+/assets/config.json
+/toml/autosave/*
+/config/autosave/*
+/config/plugins/*
+!/config/plugins/.keep
+/config/presets/test*.toml
+/config/launcher*.json
+
+# Models / caches / local assets
+/sd-models/*
+!/sd-models/put stable diffusion model here.txt
+/huggingface/hub/models*
+/huggingface/hub/version_diffusers_cache.txt
+/git/
+/wd14_tagger_model/
+/blackwell-wheels/
+/flashattention-wheels/
+/backup/
+/models/
+/sucai/
+/BooruDatasetTagManager/
+/ui/
+/ref/
 lora-rescripts (*)/
 
-train/*
-logs/*
-sd-models/*
-toml/autosave/*
-config/autosave/*
-config/plugins/*
-!config/plugins/.keep
-config/presets/test*.toml
-
-!sd-models/put stable diffusion model here.txt
-!logs/.keep
-
-tests/
-
-huggingface/hub/models*
-huggingface/hub/version_diffusers_cache.txt
-/backup
-<<<<<<< Updated upstream
-/models
-/sucai
-=======
-/sucai
-/models
->>>>>>> Stashed changes
-*.zip
-/BooruDatasetTagManager
-/ui
+# Project-specific local launch helpers
+.claude/
 A启动新前端UI.bat
-/flashattention-wheels
-/ref
-/launcher/web/node_modules
-/tools
-*.7z

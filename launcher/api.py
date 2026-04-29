@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from typing import Any, Dict, List, Optional
 
 from launcher.config import (
@@ -48,6 +49,8 @@ class Api:
         self._settings = Settings(self._config_dir)
         self._window = None  # set by window.py after creation
         self._shutting_down = False
+        self._close_cleanup_started = False
+        self._close_cleanup_lock = threading.Lock()
         self._update_checker = UpdateChecker(self._repo_root)
         self._managed_catalog = ManagedCatalogService(
             repo_root=self._repo_root,
@@ -427,6 +430,10 @@ class Api:
         """Prepare a project-local portable Python runtime for the selected runtime ID."""
         return self._executor.initialize_runtime(runtime_id)
 
+    def uninstall_runtime(self, runtime_id: str) -> Dict[str, Any]:
+        """Remove the runtime environment directory for the selected runtime ID."""
+        return self._executor.uninstall_runtime(runtime_id)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -508,12 +515,7 @@ class Api:
         window_width: Optional[int] = None,
         window_height: Optional[int] = None,
     ) -> None:
-        """Perform non-blocking shutdown preparation for the native window."""
-
-        try:
-            self.flush_frontend_settings_on_close()
-        except Exception:
-            pass
+        """Perform shutdown preparation without blocking the window close event."""
 
         self._shutting_down = True
 
@@ -531,7 +533,23 @@ class Api:
         # Detach the JS bridge first so background threads stop trying to emit.
         self._window = None
 
+        self._start_close_cleanup()
+
+    def _start_close_cleanup(self) -> None:
+        with self._close_cleanup_lock:
+            if self._close_cleanup_started:
+                return
+            self._close_cleanup_started = True
+
+        thread = threading.Thread(
+            target=self._run_close_cleanup,
+            name="launcher-close-cleanup",
+            daemon=True,
+        )
+        thread.start()
+
+    def _run_close_cleanup(self) -> None:
         try:
-            self._executor._terminate_process(timeout=0.5)
+            self._executor._terminate_process(timeout=0.25)
         except Exception:
             pass

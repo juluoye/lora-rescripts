@@ -5,15 +5,7 @@ import shutil
 import subprocess
 from typing import Optional
 
-
-def parse_boolish(value) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    if isinstance(value, (int, float)):
-        return value != 0
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+from mikazuki.utils.train_utils import parse_boolish
 
 
 def safe_int(value, default: int = 0) -> int:

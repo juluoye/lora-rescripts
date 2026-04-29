@@ -45,9 +45,10 @@ def kill_proc_tree(pid, including_parent=True):
 
 class TaskStatus(Enum):
     CREATED = 0
-    RUNNING = 1
-    FINISHED = 2
-    TERMINATED = 3
+    STARTING = 1
+    RUNNING = 2
+    FINISHED = 3
+    TERMINATED = 4
 
 
 class Task:
@@ -70,6 +71,17 @@ class Task:
         self._last_console_progress_line = ""
         self._termination_requested = False
         self._terminate_thread = None
+
+    def get_status(self) -> TaskStatus:
+        with self._state_lock:
+            return self.status
+
+    def set_status(self, status: TaskStatus) -> None:
+        with self._state_lock:
+            self.status = status
+
+    def is_active(self) -> bool:
+        return self.get_status() in {TaskStatus.STARTING, TaskStatus.RUNNING}
 
     def _append_output_line(self, line: str, *, progress: bool = False):
         with self.lock:
@@ -219,8 +231,8 @@ class Task:
 
         self._join_output_thread()
         retcode = self.process.poll()
-        if self.status == TaskStatus.RUNNING:
-            self.status = TaskStatus.FINISHED
+        if self.get_status() == TaskStatus.RUNNING:
+            self.set_status(TaskStatus.FINISHED)
         stdout_lines, _ = self.get_output_snapshot()
         stdout = "\n".join(stdout_lines)
         return CompletedProcess(self.process.args, retcode, stdout, None)
@@ -230,8 +242,8 @@ class Task:
             return
         self.process.wait()
         self._join_output_thread()
-        if self.status == TaskStatus.RUNNING:
-            self.status = TaskStatus.FINISHED
+        if self.get_status() == TaskStatus.RUNNING:
+            self.set_status(TaskStatus.FINISHED)
 
     def is_termination_requested(self) -> bool:
         with self._state_lock:
@@ -244,13 +256,22 @@ class Task:
 
     def request_terminate(self) -> str:
         process = self.process
+        current_status = self.get_status()
         if process is None:
-            self.status = TaskStatus.TERMINATED
+            if current_status == TaskStatus.STARTING:
+                with self._state_lock:
+                    if self._termination_requested:
+                        return "already-requested"
+                    self._termination_requested = True
+                    self.status = TaskStatus.TERMINATED
+                self._append_output_line("[task-stop] Stop requested before process startup completed.")
+                return "requested"
+            self.set_status(TaskStatus.TERMINATED)
             return "already-stopped"
         if process.poll() is not None:
             self._join_output_thread()
-            if self.status == TaskStatus.RUNNING:
-                self.status = TaskStatus.FINISHED
+            if self.get_status() == TaskStatus.RUNNING:
+                self.set_status(TaskStatus.FINISHED)
             return "already-stopped"
 
         with self._state_lock:
@@ -268,7 +289,15 @@ class Task:
         terminate_thread.start()
         return "requested"
 
-    def execute(self):
+    def execute(self) -> bool:
+        if self.get_status() == TaskStatus.CREATED:
+            self.set_status(TaskStatus.STARTING)
+        if self.is_termination_requested() or self.get_status() == TaskStatus.TERMINATED:
+            self._append_output_line("[task-startup-cancelled] Startup cancelled before process launch.")
+            with self._state_lock:
+                self._termination_requested = False
+            return False
+
         popen_kwargs = {
             "args": self.command,
             "env": self.environ,
@@ -285,12 +314,13 @@ class Task:
         try:
             self.process = subprocess.Popen(**popen_kwargs)
         except Exception as exc:
-            self.status = TaskStatus.TERMINATED
+            self.set_status(TaskStatus.TERMINATED)
             self._append_output_line(f"[task-startup-error] {exc}")
             raise
-        self.status = TaskStatus.RUNNING
+        self.set_status(TaskStatus.RUNNING)
         self._output_thread = threading.Thread(target=self._read_output, daemon=True)
         self._output_thread.start()
+        return True
 
     def _try_graceful_terminate(self, timeout: float = 120.0) -> bool:
         if self.process is None:
@@ -337,7 +367,7 @@ class Task:
     def terminate(self):
         requested_stop = self.is_termination_requested()
         if self.process is None:
-            self.status = TaskStatus.TERMINATED
+            self.set_status(TaskStatus.TERMINATED)
             return
         try:
             if requested_stop:
@@ -358,60 +388,69 @@ class Task:
                 self._termination_requested = False
                 if self._terminate_thread is not None and self._terminate_thread is threading.current_thread():
                     self._terminate_thread = None
-            self.status = TaskStatus.TERMINATED
+            self.set_status(TaskStatus.TERMINATED)
 
 
 class TaskManager:
     def __init__(self, max_concurrent=1) -> None:
         self.max_concurrent = max_concurrent
         self.tasks: Dict[str, Task] = {}
+        self._tasks_lock = threading.Lock()
 
     def create_task(self, command: List[str], environ, cwd=None):
-        running_tasks = [t for _, t in self.tasks.items() if t.status == TaskStatus.RUNNING]
-        if len(running_tasks) >= self.max_concurrent:
-            log.error(
-                "Unable to create a task because there are already "
-                f"{len(running_tasks)} tasks running, reaching the maximum concurrent limit. / "
-                f"无法创建任务，因为已经有 {len(running_tasks)} 个任务正在运行，已达到最大并发限制。"
-            )
-            return None
-        task_id = str(uuid.uuid4())
-        task = Task(task_id=task_id, command=command, environ=environ, cwd=cwd)
-        self.tasks[task_id] = task
+        with self._tasks_lock:
+            active_tasks = [task for task in self.tasks.values() if task.is_active()]
+            if len(active_tasks) >= self.max_concurrent:
+                log.error(
+                    "Unable to create a task because there are already "
+                    f"{len(active_tasks)} active tasks, reaching the maximum concurrent limit. / "
+                    f"无法创建任务，因为已经有 {len(active_tasks)} 个任务正在启动或运行，已达到最大并发限制。"
+                )
+                return None
+            task_id = str(uuid.uuid4())
+            task = Task(task_id=task_id, command=command, environ=environ, cwd=cwd)
+            task.set_status(TaskStatus.STARTING)
+            self.tasks[task_id] = task
         log.info(f"Task {task_id} created")
         return task
 
     def add_task(self, task_id: str, task: Task):
-        self.tasks[task_id] = task
+        with self._tasks_lock:
+            self.tasks[task_id] = task
 
     def terminate_task(self, task_id: str):
-        if task_id in self.tasks:
-            task = self.tasks[task_id]
+        with self._tasks_lock:
+            task = self.tasks.get(task_id)
+        if task is not None:
             task.terminate()
 
     def request_terminate_task(self, task_id: str) -> str:
-        task = self.tasks.get(task_id)
+        with self._tasks_lock:
+            task = self.tasks.get(task_id)
         if task is None:
             return "not-found"
         return task.request_terminate()
 
     def wait_for_process(self, task_id: str):
-        if task_id in self.tasks:
-            task: Task = self.tasks[task_id]
+        with self._tasks_lock:
+            task = self.tasks.get(task_id)
+        if task is not None:
             task.wait()
 
     def dump(self) -> List[Dict]:
+        with self._tasks_lock:
+            tasks = list(self.tasks.values())
         return [
             {
                 "id": task.task_id,
-                "status": task.status.name,
+                "status": task.get_status().name,
                 "termination_requested": task.is_termination_requested(),
                 "termination_in_progress": task.is_termination_in_progress(),
                 "returncode": task.process.returncode
                 if hasattr(task, "process") and task.process and task.process.poll() is not None
                 else None,
             }
-            for task in self.tasks.values()
+            for task in tasks
         ]
 
 

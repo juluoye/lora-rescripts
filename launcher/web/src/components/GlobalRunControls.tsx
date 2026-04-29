@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Play, Square, OctagonAlert, AlertTriangle } from 'lucide-react';
+import { Play, Square, OctagonAlert, AlertTriangle, PauseCircle, CheckCircle2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { useTranslation } from '../hooks/useTranslation';
 
@@ -103,6 +103,31 @@ export function GlobalRunControls() {
     return language === 'zh' ? selectedRuntimeDef.name_zh : selectedRuntimeDef.name_en;
   })();
 
+  const statusMeta = isStoppingTask
+    ? {
+        label: language === 'zh' ? '停止中' : 'Stopping',
+        Icon: PauseCircle,
+        bg: 'var(--warning-subtle)',
+        text: 'var(--warning-text)',
+        border: 'var(--warning-border)',
+      }
+    : isRunning
+      ? {
+          label: t('status_running'),
+          Icon: Play,
+          bg: 'var(--success-subtle)',
+          text: 'var(--success-text)',
+          border: 'var(--success-border)',
+        }
+      : {
+          label: t('status_stopped'),
+          Icon: CheckCircle2,
+          bg: 'var(--bg-input)',
+          text: 'var(--text-secondary)',
+          border: 'var(--border-card)',
+        };
+  const StatusIcon = statusMeta.Icon;
+
   return (
     <div className="px-4 pb-4">
       <div
@@ -118,18 +143,17 @@ export function GlobalRunControls() {
               {helperText}
             </div>
           </div>
-          <span
-            className="px-2 py-1 rounded-full text-[10px] font-semibold"
+          <div
+            className="min-w-[88px] rounded-2xl px-3 py-2 flex items-center justify-center gap-1.5 text-[10px] font-semibold shadow-sm"
             style={{
-              backgroundColor: isStoppingTask ? 'var(--warning-subtle)' : isRunning ? 'var(--success-subtle)' : 'var(--bg-input)',
-              color: isStoppingTask ? 'var(--warning-text)' : isRunning ? 'var(--success-text)' : 'var(--text-secondary)',
-              border: `1px solid ${isStoppingTask ? 'var(--warning-border)' : isRunning ? 'var(--success-border)' : 'var(--border-card)'}`,
+              backgroundColor: statusMeta.bg,
+              color: statusMeta.text,
+              border: `1px solid ${statusMeta.border}`,
             }}
           >
-            {isStoppingTask
-              ? (language === 'zh' ? '停止中' : 'Stopping')
-              : isRunning ? t('status_running') : t('status_stopped')}
-          </span>
+            <StatusIcon size={12} />
+            <span>{statusMeta.label}</span>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 gap-2">

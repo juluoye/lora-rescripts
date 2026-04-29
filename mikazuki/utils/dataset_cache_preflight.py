@@ -8,6 +8,7 @@ from typing import Optional
 
 import numpy as np
 from mikazuki.utils.dataset_analysis import discover_dataset_folders, iter_image_files, read_image_size
+from mikazuki.utils.train_utils import parse_boolish
 
 
 @dataclass(frozen=True)
@@ -584,22 +585,6 @@ def get_image_size_cached(image_path: Path, cache: dict[Path, tuple[int, int]]) 
     size = (int(width), int(height))
     cache[resolved] = size
     return size
-
-
-def parse_boolish(value) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"", "0", "false", "no", "off", "none", "null"}:
-            return False
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-    return bool(value)
 
 
 def parse_resolution(value) -> Optional[tuple[int, int]]:

@@ -279,11 +279,21 @@ export interface ApiResult {
 export interface InstallDoneEvent {
   runtime_id: string;
   success: boolean;
-  action?: 'install' | 'initialize';
+  action?: 'install' | 'initialize' | 'uninstall';
   code?: string;
   result_code?: string;
   error?: string;
   details?: Record<string, unknown>;
+}
+
+export interface RuntimeInstallQueueState {
+  active: boolean;
+  current_runtime_id: string | null;
+  current_action: 'initialize' | 'install' | null;
+  pending_runtime_ids: string[];
+  completed_runtime_ids: string[];
+  failed_runtime_id: string | null;
+  requested_runtime_ids: string[];
 }
 
 export interface ProcessExitEvent {

@@ -761,6 +761,150 @@ class LauncherTaskExecutor:
         thread.start()
         return ok_result("runtime_install.started", runtime_id=runtime_id)
 
+    def uninstall_runtime(self, runtime_id: str) -> Dict[str, Any]:
+        lang = get_language()
+        self._begin_task(
+            "uninstall",
+            "runtime_uninstall.request_received",
+            "已收到卸载请求",
+            "Uninstall request received",
+            runtime_id=runtime_id,
+        )
+        if self._installing:
+            message = "已有安装、初始化或卸载任务正在进行中。" if lang == "zh" else "Another install, initialization, or uninstall task is already in progress."
+            self._finish_task(
+                success=False,
+                stage_code="runtime_uninstall.already_running",
+                stage_label_zh="已有运行时任务在运行",
+                stage_label_en="Another runtime task is already running",
+                code="runtime_uninstall.already_running",
+                error=message,
+                details={"runtime_id": runtime_id},
+            )
+            return error_result("runtime_uninstall.already_running", message)
+        if self._process is not None and self._process.poll() is None:
+            message = "请先停止当前训练进程，再卸载运行时。" if lang == "zh" else "Stop the running trainer process before uninstalling a runtime."
+            self._finish_task(
+                success=False,
+                stage_code="runtime_uninstall.trainer_running",
+                stage_label_zh="训练进程正在运行",
+                stage_label_en="Trainer process is running",
+                code="runtime_uninstall.trainer_running",
+                error=message,
+                details={"runtime_id": runtime_id},
+            )
+            return error_result("runtime_uninstall.trainer_running", message)
+        if runtime_id not in RUNTIME_MAP:
+            message = "未知的运行时。" if lang == "zh" else "Unknown runtime."
+            self._finish_task(
+                success=False,
+                stage_code="runtime.unknown",
+                stage_label_zh="未知运行时",
+                stage_label_en="Unknown runtime",
+                code="runtime.unknown",
+                error=message,
+                details={"runtime_id": runtime_id},
+            )
+            return error_result("runtime.unknown", message, details={"runtime_id": runtime_id})
+
+        prepared = self._runtime_coordinator.prepare_install(
+            runtime_id,
+            cn_mirror=bool(self._settings_provider().get("cn_mirror", False)),
+        )
+        if prepared is None:
+            message = "未知的运行时。" if lang == "zh" else "Unknown runtime."
+            self._finish_task(
+                success=False,
+                stage_code="runtime.unknown",
+                stage_label_zh="未知运行时",
+                stage_label_en="Unknown runtime",
+                code="runtime.unknown",
+                error=message,
+                details={"runtime_id": runtime_id},
+            )
+            return error_result("runtime.unknown", message, details={"runtime_id": runtime_id})
+
+        status = prepared.status
+        env_dir = status.env_dir
+        if env_dir is None or not env_dir.exists():
+            message = "没有检测到可卸载的运行时目录。" if lang == "zh" else "No runtime directory was found to uninstall."
+            self._finish_task(
+                success=True,
+                stage_code="runtime_uninstall.not_installed",
+                stage_label_zh="运行时未安装",
+                stage_label_en="Runtime is not installed",
+                result_code="runtime_uninstall.not_installed",
+                details={"runtime_id": runtime_id},
+            )
+            return ok_result("runtime_uninstall.not_installed", runtime_id=runtime_id, message=message)
+
+        self._installing = True
+
+        def _run():
+            success = False
+            final_code = "runtime_uninstall.failed"
+            error_message = None
+            try:
+                self._advance_task(
+                    "runtime_uninstall.removing_directory",
+                    "正在删除运行时目录",
+                    "Removing runtime directory",
+                    details={"runtime_id": runtime_id, "env_dir": str(env_dir)},
+                )
+                self._append_task_log_line(
+                    f"[Launcher] Removing runtime directory: {env_dir}",
+                    event_name="install_log",
+                )
+                shutil.rmtree(env_dir)
+                success = True
+                final_code = "runtime_uninstall.completed"
+                self._append_task_log_line(
+                    f"[Launcher] Runtime directory removed: {env_dir}",
+                    event_name="install_log",
+                )
+            except Exception as exc:
+                final_code = "runtime_uninstall.execution_failed"
+                error_message = str(exc)
+                self._append_task_log_line(
+                    f"[Launcher] Runtime uninstall failed: {exc}",
+                    event_name="install_log",
+                )
+            finally:
+                self._installing = False
+                payload: Dict[str, Any] = {
+                    "runtime_id": runtime_id,
+                    "success": success,
+                    "action": "uninstall",
+                }
+                if success:
+                    self._finish_task(
+                        success=True,
+                        stage_code="runtime_uninstall.completed",
+                        stage_label_zh="运行时已卸载",
+                        stage_label_en="Runtime uninstalled",
+                        result_code=final_code,
+                        details={"runtime_id": runtime_id, "env_dir": str(env_dir)},
+                    )
+                    payload["result_code"] = final_code
+                else:
+                    self._finish_task(
+                        success=False,
+                        stage_code=final_code,
+                        stage_label_zh="运行时卸载失败",
+                        stage_label_en="Runtime uninstall failed",
+                        code=final_code,
+                        error=error_message,
+                        details={"runtime_id": runtime_id, "env_dir": str(env_dir)},
+                    )
+                    payload["code"] = final_code
+                    if error_message:
+                        payload["error"] = error_message
+                self._emit("install_done", payload)
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        return ok_result("runtime_uninstall.started", runtime_id=runtime_id)
+
     def _emit_task_snapshot(self, include_stage_event: bool = True) -> None:
         self._emit("task_state", dict(self._task_state))
         if include_stage_event and self._task_state.get("task_type") != "idle":

@@ -150,6 +150,13 @@ def get_trainer_definition(training_type: str) -> TrainerDefinition | None:
     return replace(definition, trainer_file=resolved_trainer_file)
 
 
+def get_trainer_file_for_training_type(training_type: str, fallback_trainer_file: str | None = None) -> str | None:
+    definition = get_trainer_definition(training_type)
+    if definition is not None:
+        return definition.trainer_file
+    return fallback_trainer_file
+
+
 def get_trainer_definition_by_file(trainer_file: str) -> TrainerDefinition | None:
     trainer_name = Path(str(trainer_file or "")).name.lower()
     if not trainer_name:

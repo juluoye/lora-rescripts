@@ -27,6 +27,7 @@ import type {
   ManagedCatalog,
   ManagedConnectionResult,
   ManagedImportState,
+  RuntimeInstallQueueState,
 } from '../api/types';
 
 export type Theme = 'dark' | 'light';
@@ -62,6 +63,7 @@ interface AppState {
   isRefreshingManagedCatalog: boolean;
   isRunning: boolean;
   isInstalling: boolean;
+  installQueue: RuntimeInstallQueueState;
   lastInstallSummary: InstallSummary | null;
   consoleLines: string[];
   language: string;
@@ -73,7 +75,7 @@ interface AppState {
 
 interface AppContextValue extends AppState {
   setActivePage: (page: PageId) => void;
-  selectRuntime: (id: string) => void;
+  selectRuntime: (id: string) => Promise<ApiResult>;
   refreshRuntimes: () => void;
   refreshHealthReport: () => Promise<void>;
   updateSettings: (values: Partial<Settings>) => void;
@@ -82,6 +84,8 @@ interface AppContextValue extends AppState {
   kill: () => Promise<ApiResult>;
   initializeRuntime: (runtimeId: string) => Promise<ApiResult>;
   installRuntime: (runtimeId: string) => Promise<ApiResult>;
+  uninstallRuntime: (runtimeId: string) => Promise<ApiResult>;
+  installRuntimeBatch: (runtimeIds: string[]) => Promise<ApiResult>;
   refreshUpdateInfo: (force?: boolean) => Promise<void>;
   refreshManagedCatalog: (force?: boolean) => Promise<void>;
   testManagedConnection: () => Promise<ManagedConnectionResult>;
@@ -154,6 +158,16 @@ const defaultTaskState: TaskStateSnapshot = {
   details: {},
 };
 
+const defaultInstallQueueState: RuntimeInstallQueueState = {
+  active: false,
+  current_runtime_id: null,
+  current_action: null,
+  pending_runtime_ids: [],
+  completed_runtime_ids: [],
+  failed_runtime_id: null,
+  requested_runtime_ids: [],
+};
+
 const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -181,6 +195,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [isRefreshingManagedCatalog, setIsRefreshingManagedCatalog] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
+  const [installQueue, setInstallQueue] = useState<RuntimeInstallQueueState>(defaultInstallQueueState);
   const [lastInstallSummary, setLastInstallSummary] = useState<InstallSummary | null>(null);
   const [consoleLines, setConsoleLines] = useState<string[]>([]);
   const [language, setLanguage] = useState('zh');
@@ -404,6 +419,65 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     void (async () => {
       const action = data.action || (data.result_code?.startsWith('runtime_initialize.') ? 'initialize' : 'install');
       setIsInstalling(false);
+      setInstallQueue((prev) => {
+        if (!prev.active) {
+          return prev;
+        }
+        if (action === 'initialize') {
+          if (!data.success) {
+            return {
+              ...prev,
+              active: false,
+              current_runtime_id: null,
+              current_action: null,
+              failed_runtime_id: data.runtime_id,
+            };
+          }
+          return {
+            ...prev,
+            current_runtime_id: data.runtime_id,
+            current_action: 'install',
+          };
+        }
+        if (action !== 'install') {
+          return prev;
+        }
+        const completed = data.success && data.runtime_id
+          ? [...prev.completed_runtime_ids, data.runtime_id]
+          : prev.completed_runtime_ids;
+        const remaining = prev.pending_runtime_ids.filter((item) => item !== data.runtime_id);
+        if (!data.success) {
+          return {
+            ...prev,
+            active: false,
+            current_runtime_id: null,
+            current_action: null,
+            pending_runtime_ids: remaining,
+            completed_runtime_ids: completed,
+            failed_runtime_id: data.runtime_id,
+          };
+        }
+        if (remaining.length === 0) {
+          return {
+            ...prev,
+            active: false,
+            current_runtime_id: null,
+            current_action: null,
+            pending_runtime_ids: [],
+            completed_runtime_ids: completed,
+            failed_runtime_id: null,
+          };
+        }
+        return {
+          ...prev,
+          active: true,
+          current_runtime_id: null,
+          current_action: null,
+          pending_runtime_ids: remaining,
+          completed_runtime_ids: completed,
+          failed_runtime_id: null,
+        };
+      });
       if (action === 'install') {
         setLastInstallSummary({
           runtimeId: data.runtime_id,
@@ -419,10 +493,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         data.success
           ? action === 'initialize'
             ? `[Launcher] Runtime '${data.runtime_id}' initialization completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
-            : `[Launcher] Runtime '${data.runtime_id}' installation completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
+            : action === 'uninstall'
+              ? `[Launcher] Runtime '${data.runtime_id}' uninstall completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
+              : `[Launcher] Runtime '${data.runtime_id}' installation completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
           : action === 'initialize'
             ? `[Launcher] Runtime '${data.runtime_id}' initialization failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`
-            : `[Launcher] Runtime '${data.runtime_id}' installation failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`,
+            : action === 'uninstall'
+              ? `[Launcher] Runtime '${data.runtime_id}' uninstall failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`
+              : `[Launcher] Runtime '${data.runtime_id}' installation failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`,
       ]);
 
       await refreshRuntimes(data.success ? data.runtime_id : null);
@@ -469,28 +547,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setRuntimeRecommendation(recommendation);
       setHealthReport(health);
 
-      // Update selected runtime if current one became invalid
-      setSelectedRuntime((prev) => {
-        if (preferredRuntimeId && rt[preferredRuntimeId]?.installed) {
-          return preferredRuntimeId;
-        }
-        if (prev && rt[prev]?.installed) return prev;
-        if (recommendation.selected_runtime_id && rt[recommendation.selected_runtime_id]?.installed) {
-          return recommendation.selected_runtime_id;
-        }
-        if (best && rt[best]?.installed) return best;
-        return null;
-      });
-
+      let resolvedRuntimeId: string | null = null;
       if (preferredRuntimeId && rt[preferredRuntimeId]?.installed) {
+        resolvedRuntimeId = preferredRuntimeId;
+      } else if (selectedRuntime && rt[selectedRuntime]?.installed) {
+        resolvedRuntimeId = selectedRuntime;
+      } else if (settingsRef.current.last_runtime && rt[settingsRef.current.last_runtime]?.installed) {
+        resolvedRuntimeId = settingsRef.current.last_runtime;
+      } else if (recommendation.selected_runtime_id && rt[recommendation.selected_runtime_id]?.installed) {
+        resolvedRuntimeId = recommendation.selected_runtime_id;
+      } else if (best && rt[best]?.installed) {
+        resolvedRuntimeId = best;
+      }
+
+      setSelectedRuntime(resolvedRuntimeId);
+
+      if (resolvedRuntimeId && settingsRef.current.last_runtime !== resolvedRuntimeId) {
         setSettings((prev) => {
-          const next = { ...prev, last_runtime: preferredRuntimeId };
+          const next = { ...prev, last_runtime: resolvedRuntimeId };
           settingsRef.current = next;
           return next;
         });
-        pendingSettingsRef.current = { ...pendingSettingsRef.current, last_runtime: preferredRuntimeId };
+        pendingSettingsRef.current = { ...pendingSettingsRef.current, last_runtime: resolvedRuntimeId };
         try {
-          await api.selectRuntime(preferredRuntimeId);
+          await api.selectRuntime(resolvedRuntimeId);
         } catch {
           // ignore
         }
@@ -524,9 +604,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return next;
     });
     try {
-      await api.selectRuntime(id);
+      return await api.selectRuntime(id);
     } catch {
-      // ignore
+      return { error: 'Failed to select runtime.' };
     }
   }, []);
 
@@ -677,16 +757,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const installRuntimeAction = useCallback(async (runtimeId: string) => {
-    setConsoleLines([]);
-    setLastInstallSummary(null);
+  const startInstallRuntime = useCallback(async (
+    runtimeId: string,
+    options?: {
+      preserveConsole?: boolean;
+      preserveSummary?: boolean;
+    },
+  ) => {
+    if (!options?.preserveConsole) {
+      setConsoleLines([]);
+    }
+    if (!options?.preserveSummary) {
+      setLastInstallSummary(null);
+    }
+    setIsInstalling(true);
     try {
       const result = await api.installRuntime(runtimeId);
       applyResultNavigation(result);
       if (result.error) {
+        setIsInstalling(false);
         return result;
       }
-      setIsInstalling(true);
       return result;
     } catch (e: any) {
       setIsInstalling(false);
@@ -694,22 +785,103 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [applyResultNavigation]);
 
+  const installRuntimeAction = useCallback(async (runtimeId: string) => {
+    return startInstallRuntime(runtimeId);
+  }, [startInstallRuntime]);
+
   const initializeRuntimeAction = useCallback(async (runtimeId: string) => {
     setConsoleLines([]);
     setLastInstallSummary(null);
+    setIsInstalling(true);
     try {
       const result = await api.initializeRuntime(runtimeId);
       applyResultNavigation(result);
       if (result.error) {
+        setIsInstalling(false);
         return result;
       }
-      setIsInstalling(true);
       return result;
     } catch (e: any) {
       setIsInstalling(false);
       return { error: e.message };
     }
   }, [applyResultNavigation]);
+
+  const uninstallRuntimeAction = useCallback(async (runtimeId: string) => {
+    setConsoleLines([]);
+    setLastInstallSummary(null);
+    setIsInstalling(true);
+    try {
+      const result = await api.uninstallRuntime(runtimeId);
+      applyResultNavigation(result);
+      if (result.error) {
+        setIsInstalling(false);
+        return result;
+      }
+      return result;
+    } catch (e: any) {
+      setIsInstalling(false);
+      return { error: e.message };
+    }
+  }, [applyResultNavigation]);
+
+  const installRuntimeBatch = useCallback(async (runtimeIds: string[]) => {
+    const normalized = runtimeIds.filter((item, index, arr) => !!item && arr.indexOf(item) === index);
+    if (normalized.length === 0) {
+      return { error: language === 'zh' ? '没有可安装的运行时。' : 'No runtimes were selected for installation.' };
+    }
+    if (isInstalling || installQueue.active) {
+      return { error: language === 'zh' ? '已有安装任务正在进行中。' : 'Another installation task is already in progress.' };
+    }
+    setInstallQueue({
+      active: true,
+      current_runtime_id: null,
+      current_action: null,
+      pending_runtime_ids: normalized,
+      completed_runtime_ids: [],
+      failed_runtime_id: null,
+      requested_runtime_ids: normalized,
+    });
+    return { ok: true, result_code: 'runtime_install.batch_queued' };
+  }, [installQueue.active, isInstalling, language]);
+
+  useEffect(() => {
+    if (!installQueue.active) {
+      return;
+    }
+    if (isInstalling) {
+      return;
+    }
+    if (installQueue.current_runtime_id && installQueue.current_action) {
+      const runtimeId = installQueue.current_runtime_id;
+      const promise = installQueue.current_action === 'initialize'
+        ? initializeRuntimeAction(runtimeId)
+        : startInstallRuntime(runtimeId, {
+            preserveConsole: installQueue.completed_runtime_ids.length > 0,
+            preserveSummary: installQueue.completed_runtime_ids.length > 0,
+          });
+      void promise.then((result) => {
+        if (result.error) {
+          setInstallQueue((prev) => ({
+            ...prev,
+            active: false,
+            current_runtime_id: null,
+            current_action: null,
+            failed_runtime_id: runtimeId,
+          }));
+        }
+      });
+      return;
+    }
+    const remaining = installQueue.pending_runtime_ids.filter((item) => !installQueue.completed_runtime_ids.includes(item));
+    if (remaining.length === 0) {
+      return;
+    }
+    const nextRuntimeId = remaining[0];
+    const runtimeStatus = runtimes[nextRuntimeId];
+    const nextAction = runtimeStatus?.python_exists ? 'install' : 'initialize';
+    setInstallQueue((prev) => ({ ...prev, current_runtime_id: nextRuntimeId, current_action: nextAction }));
+  }, [initializeRuntimeAction, installQueue.active, installQueue.completed_runtime_ids.length, installQueue.current_action, installQueue.current_runtime_id, installQueue.pending_runtime_ids, isInstalling, runtimes, startInstallRuntime]);
 
   const runUpdater = useCallback(async () => {
     try {
@@ -861,6 +1033,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     isRefreshingManagedCatalog,
     isRunning,
     isInstalling,
+    installQueue,
     lastInstallSummary,
     consoleLines,
     language,
@@ -878,6 +1051,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     kill,
     initializeRuntime: initializeRuntimeAction,
     installRuntime: installRuntimeAction,
+    uninstallRuntime: uninstallRuntimeAction,
+    installRuntimeBatch,
     refreshUpdateInfo,
     refreshManagedCatalog,
     testManagedConnection,

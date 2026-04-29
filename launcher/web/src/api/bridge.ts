@@ -24,6 +24,7 @@ import type {
   ManagedCatalog,
   ManagedConnectionResult,
   ManagedImportState,
+  RuntimeInstallQueueState,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -118,6 +119,7 @@ interface PywebviewApi {
   kill: () => Promise<ApiResult>;
   initialize_runtime: (runtimeId: string) => Promise<ApiResult>;
   install_runtime: (runtimeId: string) => Promise<ApiResult>;
+  uninstall_runtime: (runtimeId: string) => Promise<ApiResult>;
 }
 
 function getApi(): PywebviewApi | null {
@@ -177,6 +179,7 @@ export const api = {
   kill: () => callApi<ApiResult>('kill'),
   initializeRuntime: (runtimeId: string) => callApi<ApiResult>('initialize_runtime', runtimeId),
   installRuntime: (runtimeId: string) => callApi<ApiResult>('install_runtime', runtimeId),
+  uninstallRuntime: (runtimeId: string) => callApi<ApiResult>('uninstall_runtime', runtimeId),
 };
 
 // Check if pywebview API is available

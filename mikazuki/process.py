@@ -509,7 +509,9 @@ def run_train(
                     log.info(f"[power-limit] applied whole-GPU power limit: {applied_summary}")
 
             run_started_at = time.time()
-            task.execute()
+            if not task.execute():
+                log.info("Training start cancelled before process launch / 训练在启动前已取消")
+                return
             result = task.communicate()
             completed_returncode = result.returncode
             completed_ok = result.returncode == 0

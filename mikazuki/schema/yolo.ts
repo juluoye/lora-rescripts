@@ -1,6 +1,6 @@
 Schema.intersect([
     Schema.object({
-        model_train_type: Schema.const("yolo").required().description("训练种类"),
+        model_train_type: Schema.string().default("yolo").disabled().description("训练种类"),
         pretrained_model_name_or_path: Schema.string().default("yolo11n.pt").description("YOLO 模型权重或模型 yaml。可填本地路径，或官方模型名如 `yolo11n.pt`"),
         resume: Schema.string().role("filepicker", { type: "model-file" }).description("从已有 YOLO 训练检查点继续训练。填写 `last.pt` 一类的检查点文件路径"),
     }).description("训练用模型"),

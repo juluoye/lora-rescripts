@@ -173,8 +173,8 @@ set "SLIM_INTEL_XPU="
 set /p "SLIM_INTEL_XPU=[7/9 Confirm] > "
 if not defined SLIM_INTEL_XPU set "SLIM_INTEL_XPU=Y"
 if /i "%SLIM_INTEL_XPU%"=="Y" (
-    call :slim_python_runtime "%INTEL_XPU_RUNTIME_DIR%" "Intel XPU" ".deps_installed"
-    call :slim_python_runtime "%INTEL_XPU_SAGE_RUNTIME_DIR%" "Intel XPU Sage" ".deps_installed"
+    call :slim_python_runtime "%INTEL_XPU_RUNTIME_DIR%" "Intel XPU" ".deps_installed" "intel_xpu"
+    call :slim_python_runtime "%INTEL_XPU_SAGE_RUNTIME_DIR%" "Intel XPU Sage" ".deps_installed" "intel_xpu"
 ) else (
     echo [Keep] Intel XPU Python packages
 )
@@ -223,6 +223,7 @@ echo - Always cleared: __pycache__, *.pyc, logs, config\autosave, tmp, frontend\
 echo - Always checked for caches in both root runtimes and env\ runtimes when detected
 echo - Optional: output, huggingface cache/config, main python deps, tag editor deps, Blackwell / FlashAttention deps, Intel XPU deps, AMD ROCm deps, SageAttention deps
 echo - Main/Blackwell/FlashAttention/Intel/AMD slimming removes most installed runtime payload and will require reinstall on next startup
+echo - Intel XPU slimming also removes leftover oneAPI / SYCL / MKL runtime folders such as Library, opt, env and related toolchain payload
 echo - SageAttention python slimming also covers SageAttention2 and the experimental SageBwd NVIDIA runtime, removes triton / sageattention-related payloads / YOLO extras / aesthetic scorer extras, and will require reinstall on next startup
 echo - Main remaining bulky folder should drop massively after choosing Y for main python slimming
 echo.
@@ -246,6 +247,7 @@ goto :eof
 set "RUNTIME_DIR=%~1"
 set "RUNTIME_LABEL=%~2"
 set "RUNTIME_MARKERS=%~3"
+set "RUNTIME_PROFILE=%~4"
 
 if "%RUNTIME_DIR%"=="" goto :eof
 if not exist "%~dp0%RUNTIME_DIR%\python.exe" (
@@ -293,7 +295,42 @@ if errorlevel 1 (
     exit /b 1
 )
 for %%M in (%RUNTIME_MARKERS%) do del /q "%RUNTIME_DIR%\%%~M" 2>nul
+if /i "%RUNTIME_PROFILE%"=="intel_xpu" call :slim_intel_xpu_runtime "%RUNTIME_DIR%" "%RUNTIME_LABEL%"
 echo [Done] %RUNTIME_LABEL% Python slimmed (%RUNTIME_DIR%)
+goto :eof
+
+:slim_intel_xpu_runtime
+set "INTEL_RUNTIME_DIR=%~1"
+set "INTEL_RUNTIME_LABEL=%~2"
+
+if "%INTEL_RUNTIME_DIR%"=="" goto :eof
+if not exist "%~dp0%INTEL_RUNTIME_DIR%\" goto :eof
+
+echo [%INTEL_RUNTIME_LABEL%] Removing Intel XPU extra runtime payload... (%INTEL_RUNTIME_DIR%)
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference='Stop';" ^
+  "$runtime = Join-Path (Get-Location) '%INTEL_RUNTIME_DIR%';" ^
+  "$paths = @(" ^
+  "  'Library'," ^
+  "  'env'," ^
+  "  'etc'," ^
+  "  'opt'," ^
+  "  'Include'," ^
+  "  'libs'," ^
+  "  'licensing'" ^
+  ");" ^
+  "$failed = New-Object System.Collections.Generic.List[string];" ^
+  "foreach($relative in $paths){" ^
+  "  $target = Join-Path $runtime $relative;" ^
+  "  if(Test-Path $target){" ^
+  "    try { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop } catch { $failed.Add($target) }" ^
+  "  }" ^
+  "};" ^
+  "if($failed.Count -gt 0){ Write-Host ('FAILED:' + ($failed -join '; ')); exit 1 }"
+if errorlevel 1 (
+    echo [Fail] %INTEL_RUNTIME_LABEL% extra runtime cleanup failed. Close any running processes using %INTEL_RUNTIME_DIR% and try again.
+    exit /b 1
+)
 goto :eof
 
 :runtime_is_in_use

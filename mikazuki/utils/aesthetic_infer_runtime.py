@@ -121,6 +121,8 @@ class AestheticInferManager:
         self.lock = threading.Lock()
         self.proc: subprocess.Popen[str] | None = None
         self.current_task: dict[str, Any] | None = None
+        self._starting = False
+        self._start_cancel_requested = False
         self.logs: list[dict[str, Any]] = []
         self.next_log_id = 1
         self.records_cache: dict[str, dict[str, Any]] = {}
@@ -177,7 +179,7 @@ class AestheticInferManager:
         report = self._dependency_report()
         with self.lock:
             task = dict(self.current_task) if self.current_task else None
-            running = self.proc is not None and self.proc.poll() is None
+            running = self._starting or (self.proc is not None and self.proc.poll() is None)
         return {
             "dependencies": report,
             "running": running,
@@ -263,72 +265,89 @@ class AestheticInferManager:
         if not ok or normalized is None:
             return False, message, None
 
-        with self.lock:
-            if self.proc is not None and self.proc.poll() is None:
-                return False, "当前已有美学推理任务正在运行。", None
-            self.logs = []
-            self.next_log_id = 1
-
-        script_path, env = self._build_script_env()
-        env["PYTHONUNBUFFERED"] = "1"
-        env["PYTHONWARNINGS"] = "ignore::FutureWarning,ignore::UserWarning"
-
-        command = [
-            sys.executable,
-            str(script_path),
-            "--checkpoint",
-            normalized["checkpoint"],
-            "--input_dir",
-            normalized["input_dir"],
-            "--output_dir",
-            normalized["output_dir"],
-            "--batch_size",
-            str(normalized["batch_size"]),
-            "--recursive",
-            "true" if normalized["recursive"] else "false",
-            "--special_threshold",
-            str(normalized["special_threshold"]),
-            "--save_jsonl",
-            "true" if normalized["save_jsonl"] else "false",
-            "--save_csv",
-            "true" if normalized["save_csv"] else "false",
-            "--jsonl_name",
-            normalized["jsonl_name"],
-            "--csv_name",
-            normalized["csv_name"],
-            "--organize_enabled",
-            "true" if normalized["organize_enabled"] else "false",
-            "--organize_root_dir",
-            normalized["organize_root_dir"],
-            "--organize_mode",
-            normalized["organize_mode"],
-            "--organize_include_special_group",
-            "true" if normalized["organize_include_special_group"] else "false",
-            "--organize_dimensions",
-            ",".join(normalized["organize_dimensions"]),
-            "--organize_bucket_strategy",
-            normalized["organize_bucket_strategy"],
-            "--image_extensions",
-            ",".join(normalized["image_extensions"]),
-        ]
-        if normalized["device"]:
-            command.extend(["--device", normalized["device"]])
-
         task_id = uuid.uuid4().hex[:12]
         task_payload = {
             "task_id": task_id,
-            "status": "running",
+            "status": "starting",
             "created_at": _now(),
-            "started_at": _now(),
+            "started_at": None,
             "finished_at": None,
             "return_code": None,
             "pid": None,
             "params": normalized,
             "summary": None,
             "summary_path": None,
+            "error": None,
         }
 
+        with self.lock:
+            if self._starting or (self.proc is not None and self.proc.poll() is None):
+                return False, "当前已有美学推理任务正在运行或启动中。", None
+            self.logs = []
+            self.next_log_id = 1
+            self.current_task = task_payload
+            self._starting = True
+            self._start_cancel_requested = False
+
         try:
+            script_path, env = self._build_script_env()
+            env["PYTHONUNBUFFERED"] = "1"
+            env["PYTHONWARNINGS"] = "ignore::FutureWarning,ignore::UserWarning"
+
+            command = [
+                sys.executable,
+                str(script_path),
+                "--checkpoint",
+                normalized["checkpoint"],
+                "--input_dir",
+                normalized["input_dir"],
+                "--output_dir",
+                normalized["output_dir"],
+                "--batch_size",
+                str(normalized["batch_size"]),
+                "--recursive",
+                "true" if normalized["recursive"] else "false",
+                "--special_threshold",
+                str(normalized["special_threshold"]),
+                "--save_jsonl",
+                "true" if normalized["save_jsonl"] else "false",
+                "--save_csv",
+                "true" if normalized["save_csv"] else "false",
+                "--jsonl_name",
+                normalized["jsonl_name"],
+                "--csv_name",
+                normalized["csv_name"],
+                "--organize_enabled",
+                "true" if normalized["organize_enabled"] else "false",
+                "--organize_root_dir",
+                normalized["organize_root_dir"],
+                "--organize_mode",
+                normalized["organize_mode"],
+                "--organize_include_special_group",
+                "true" if normalized["organize_include_special_group"] else "false",
+                "--organize_dimensions",
+                ",".join(normalized["organize_dimensions"]),
+                "--organize_bucket_strategy",
+                normalized["organize_bucket_strategy"],
+                "--image_extensions",
+                ",".join(normalized["image_extensions"]),
+            ]
+            if normalized["device"]:
+                command.extend(["--device", normalized["device"]])
+
+            cancelled_before_launch = False
+            with self.lock:
+                if self.current_task and self.current_task.get("task_id") == task_id and self._start_cancel_requested:
+                    self.current_task["status"] = "stopped"
+                    self.current_task["finished_at"] = _now()
+                    self.proc = None
+                    self._starting = False
+                    self._start_cancel_requested = False
+                    cancelled_before_launch = True
+            if cancelled_before_launch:
+                self._append_log("[aesthetic_infer] 启动阶段已取消，本次不会启动推理进程。")
+                return False, "美学推理任务在启动阶段已取消。", {"task_id": task_id, "params": normalized}
+
             proc = subprocess.Popen(
                 command,
                 cwd=str(self.repo_root),
@@ -341,18 +360,48 @@ class AestheticInferManager:
                 bufsize=1,
             )
         except Exception as exc:
+            with self.lock:
+                if self.current_task and self.current_task.get("task_id") == task_id:
+                    self.current_task["status"] = "failed"
+                    self.current_task["finished_at"] = _now()
+                    self.current_task["error"] = str(exc)
+                self.proc = None
+                self._starting = False
+                self._start_cancel_requested = False
+            self._append_log(f"[aesthetic_infer] 启动失败: {exc}")
             return False, f"启动美学推理失败: {exc}", None
 
+        cancel_requested = False
         with self.lock:
             self.proc = proc
             task_payload["pid"] = proc.pid
+            task_payload["started_at"] = _now()
+            cancel_requested = bool(self._start_cancel_requested)
+            task_payload["status"] = "stopping" if cancel_requested else "running"
             self.current_task = task_payload
+            self._starting = False
+            self._start_cancel_requested = False
 
         self._append_log(f"[aesthetic_infer] 启动推理: {normalized['checkpoint']}")
         self._append_log(f"[aesthetic_infer] 命令: {' '.join(command)}")
 
         threading.Thread(target=self._stream_output, args=(proc,), daemon=True).start()
         threading.Thread(target=self._wait_process, args=(proc, task_id), daemon=True).start()
+
+        if cancel_requested:
+            self._append_log("[aesthetic_infer] 启动阶段已收到停止请求，正在终止推理进程。")
+            try:
+                proc.terminate()
+            except Exception as exc:
+                with self.lock:
+                    if self.current_task and self.current_task.get("task_id") == task_id:
+                        self.current_task["status"] = "failed"
+                        self.current_task["finished_at"] = _now()
+                        self.current_task["error"] = str(exc)
+                    self.proc = None
+                self._append_log(f"[aesthetic_infer] 启动后立即停止失败: {exc}")
+                return False, f"美学推理任务在启动后取消失败: {exc}", {"task_id": task_id, "params": normalized}
+            return True, "美学推理任务已启动，并已收到停止请求。", {"task_id": task_id, "params": normalized}
 
         return True, "美学推理任务已启动。", {"task_id": task_id, "params": normalized}
 
@@ -386,22 +435,43 @@ class AestheticInferManager:
                 task["summary"] = summary
                 task["summary_path"] = summary_path
             self.proc = None
+            self._starting = False
 
     def stop(self) -> tuple[bool, str, dict[str, Any] | None]:
+        proc = None
+        task_id = None
+        cancelling_startup = False
         with self.lock:
-            if self.proc is None or self.proc.poll() is not None:
+            if self._starting:
+                cancelling_startup = True
+                self._start_cancel_requested = True
+                if self.current_task is not None:
+                    self.current_task["status"] = "stopping"
+                    task_id = self.current_task.get("task_id")
+                proc = self.proc if self.proc is not None and self.proc.poll() is None else None
+            elif self.proc is None or self.proc.poll() is not None:
                 return False, "当前没有运行中的美学推理任务。", None
-            proc = self.proc
-            if self.current_task is not None:
-                self.current_task["status"] = "stopping"
+            else:
+                proc = self.proc
+                if self.current_task is not None:
+                    self.current_task["status"] = "stopping"
+                    task_id = self.current_task.get("task_id")
+        if cancelling_startup and proc is None:
+            self._append_log("[aesthetic_infer] 收到停止请求，正在取消启动中的推理任务。")
+            return True, "已发送停止请求，正在取消启动。", {"task_id": task_id}
+        if proc is None:
+            return False, "当前没有运行中的美学推理任务。", None
         proc.terminate()
-        self._append_log("[aesthetic_infer] 收到停止请求，正在终止推理进程。")
-        return True, "已发送停止请求。", None
+        if cancelling_startup:
+            self._append_log("[aesthetic_infer] 收到停止请求，正在终止刚启动的推理进程。")
+        else:
+            self._append_log("[aesthetic_infer] 收到停止请求，正在终止推理进程。")
+        return True, "已发送停止请求。", {"task_id": task_id}
 
     def get_status(self) -> dict[str, Any]:
         with self.lock:
             task = dict(self.current_task) if self.current_task else None
-            running = self.proc is not None and self.proc.poll() is None
+            running = self._starting or (self.proc is not None and self.proc.poll() is None)
             last_log_id = self.logs[-1]["id"] if self.logs else 0
             log_count = len(self.logs)
         return {

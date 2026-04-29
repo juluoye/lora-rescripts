@@ -235,7 +235,7 @@ export function ConsolePage() {
                         </div>
                       </div>
                       <span className="text-[10px] px-2 py-1 rounded" style={{ backgroundColor: 'var(--bg-card)', color: 'var(--text-secondary)', border: '1px solid var(--border-card)' }}>
-                        {event.result_code || event.code || event.state}
+                        {formatTaskCodeText(event.result_code || event.code || event.state, t)}
                       </span>
                     </div>
                   </div>
@@ -348,7 +348,7 @@ export function ConsolePage() {
                   </div>
                   <TaskResultCodeBadge
                     state={task.state}
-                    text={formatTaskBadgeText(task, language)}
+                    text={formatTaskBadgeText(task, language, t)}
                     taskType={task.task_type}
                   />
                 </div>
@@ -593,7 +593,7 @@ export function ConsolePage() {
                               {event.timestamp}
                             </div>
                           </div>
-                          <TaskResultCodeBadge state={event.state} text={event.result_code || event.code || event.stage_code} />
+                          <TaskResultCodeBadge state={event.state} text={formatTaskCodeText(event.result_code || event.code || event.stage_code, t)} />
                         </div>
                         {event.error && (
                           <div className="text-[11px] mt-2 whitespace-pre-wrap break-words" style={{ color: 'var(--danger-text)' }}>
@@ -937,11 +937,16 @@ function buildLiveTaskRecord(
   };
 }
 
-function formatTaskBadgeText(task: TaskResultRecord, language: string): string {
+function formatTaskBadgeText(task: TaskResultRecord, language: string, t: (key: string) => string): string {
   if (isTaskStopping(task.task_type, task.state)) {
     return language === 'zh' ? '停止中' : 'Stopping';
   }
-  return task.result_code || task.code || task.state;
+  return formatTaskCodeText(task.result_code || task.code || task.state, t);
+}
+
+function formatTaskCodeText(code: string, t: (key: string) => string): string {
+  const translated = t(code);
+  return translated === code ? code : translated;
 }
 
 function formatDuration(durationMs: number | null | undefined): string {

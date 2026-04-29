@@ -1,0 +1,348 @@
+{
+  "schema_version": "stable-dev-drift-triage-v2",
+  "generated_at": "2026-04-29T00:00:00Z",
+  "source_root": "scripts/stable",
+  "target_root": "scripts/dev",
+  "action_descriptions": {
+    "keep_dev_owned": "The scripts/dev copy is still used by an active runtime path or dependency chain, so it should stay outside mirror auto-sync.",
+    "keep_stable_owned": "The scripts/stable copy is the launcher-facing owner for now; the drifted dev copy stays unmanaged until that feature area is retired or repointed.",
+    "restore_mirror_from_stable": "The drift looks low-risk to collapse later by re-aligning scripts/dev back to scripts/stable."
+  },
+  "entries": [
+    {
+      "path": "anima_train.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "Active launcher runtime maps anima-finetune to scripts/stable/anima_train.py, so the dev copy should stay outside mirror automation until the Anima tree is explicitly unified.",
+      "expected_owner": "stable",
+      "validation_mode": "trainer_registry",
+      "expected_training_types": [
+        "anima-finetune"
+      ]
+    },
+    {
+      "path": "anima_train_network.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "Active launcher runtime maps anima-lora to scripts/stable/anima_train_network.py, so the dev copy should stay outside mirror automation until the Anima tree is explicitly unified.",
+      "expected_owner": "stable",
+      "validation_mode": "trainer_registry",
+      "expected_training_types": [
+        "anima-lora"
+      ]
+    },
+    {
+      "path": "fine_tune.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "This legacy CLI entrypoint is documented but not launched by the current app runtime, so leave the drifted dev copy unmanaged until the fine-tune path gets a single owner.",
+      "expected_owner": "stable",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "flux_train.py",
+      "recommended_action": "keep_dev_owned",
+      "reason": "Active launcher runtime maps flux-finetune to scripts/dev/flux_train.py, so auto-syncing from stable would risk breaking the current Flux finetune path.",
+      "expected_owner": "dev",
+      "validation_mode": "trainer_registry",
+      "expected_training_types": [
+        "flux-finetune"
+      ]
+    },
+    {
+      "path": "flux_train_control_net.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "Active launcher runtime maps flux-controlnet to scripts/stable/flux_train_control_net.py, so the drifted dev copy should stay out of mirror automation for now.",
+      "expected_owner": "stable",
+      "validation_mode": "trainer_registry",
+      "expected_training_types": [
+        "flux-controlnet"
+      ]
+    },
+    {
+      "path": "flux_train_network.py",
+      "recommended_action": "keep_dev_owned",
+      "reason": "Active launcher runtime maps flux-lora to scripts/dev/flux_train_network.py, so auto-syncing from stable would risk breaking the current Flux LoRA path.",
+      "expected_owner": "dev",
+      "validation_mode": "trainer_registry",
+      "expected_training_types": [
+        "flux-lora"
+      ]
+    },
+    {
+      "path": "library/anima_models.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "This helper sits under the active stable Anima stack, so keep the drifted dev copy out of mirror automation until the Anima runtime policy is narrowed.",
+      "expected_owner": "stable",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "library/anima_train_utils.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "This helper sits under the active stable Anima stack, so keep the drifted dev copy out of mirror automation until the Anima runtime policy is narrowed.",
+      "expected_owner": "stable",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "library/anima_utils.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "This helper sits under the active stable Anima stack, so keep the drifted dev copy out of mirror automation until the Anima runtime policy is narrowed.",
+      "expected_owner": "stable",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "library/attention.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "This low-level helper is not part of the current active dev launcher path, so do not auto-sync it until shared ownership across manual model stacks is clarified.",
+      "expected_owner": "stable",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "library/config_util.py",
+      "recommended_action": "keep_dev_owned",
+      "reason": "The current dev runtime chain for Flux and SD3 reaches this shared config layer, so auto-syncing from stable would be risky.",
+      "expected_owner": "dev",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "library/lumina_models.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "This helper sits under the active stable Lumina stack, so keep the drifted dev copy out of mirror automation until Lumina ownership is narrowed.",
+      "expected_owner": "stable",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "library/sai_model_spec.py",
+      "recommended_action": "keep_dev_owned",
+      "reason": "The current dev runtime chain for Flux and SD3 reaches this shared model-spec layer, so auto-syncing from stable would be risky.",
+      "expected_owner": "dev",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "library/sdxl_original_unet.py",
+      "recommended_action": "keep_dev_owned",
+      "reason": "The active dev runtime chain still reaches this SDXL support module, so preserve the current dev divergence until those entrypoints move back to stable.",
+      "expected_owner": "dev",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "library/sdxl_train_util.py",
+      "recommended_action": "keep_dev_owned",
+      "reason": "The active dev runtime chain still reaches this SDXL training helper, so preserve the current dev divergence until those entrypoints move back to stable.",
+      "expected_owner": "dev",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "library/strategy_anima.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "This strategy layer is part of the active stable Anima stack, so the dev copy should stay outside mirror automation for now.",
+      "expected_owner": "stable",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "library/strategy_base.py",
+      "recommended_action": "keep_dev_owned",
+      "reason": "The current dev runtime chain for Flux and SD3 reaches this shared strategy base, so auto-syncing from stable would be risky.",
+      "expected_owner": "dev",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "library/strategy_flux.py",
+      "recommended_action": "keep_dev_owned",
+      "reason": "The current dev runtime chain for Flux reaches this strategy layer, so preserve the current dev divergence until the Flux entrypoints are repointed.",
+      "expected_owner": "dev",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "library/strategy_hunyuan_image.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "This strategy layer belongs to a stable-owned launcher feature area, so keep the drifted dev copy out of mirror automation for now.",
+      "expected_owner": "stable",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "library/strategy_lumina.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "This strategy layer belongs to the active stable Lumina path, so keep the drifted dev copy out of mirror automation for now.",
+      "expected_owner": "stable",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "library/strategy_sd.py",
+      "recommended_action": "keep_dev_owned",
+      "reason": "The current dev runtime chain still reaches this shared SD strategy layer, so preserve the current dev divergence until those entrypoints move back to stable.",
+      "expected_owner": "dev",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "library/strategy_sd3.py",
+      "recommended_action": "keep_dev_owned",
+      "reason": "The current dev runtime chain still reaches this SD3 strategy layer, so preserve the current dev divergence until the SD3 entrypoint moves back to stable.",
+      "expected_owner": "dev",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "library/strategy_sdxl.py",
+      "recommended_action": "keep_dev_owned",
+      "reason": "The current dev runtime chain still reaches this SDXL strategy layer, so preserve the current dev divergence until those entrypoints move back to stable.",
+      "expected_owner": "dev",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "library/train_util.py",
+      "recommended_action": "keep_dev_owned",
+      "reason": "The current dev runtime chain still reaches this shared training utility hub, so auto-syncing from stable would be risky.",
+      "expected_owner": "dev",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "lumina_train.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "Active launcher runtime maps lumina-finetune to scripts/stable/lumina_train.py, so the drifted dev copy should stay out of mirror automation for now.",
+      "expected_owner": "stable",
+      "validation_mode": "trainer_registry",
+      "expected_training_types": [
+        "lumina-finetune"
+      ]
+    },
+    {
+      "path": "networks/lora.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "Stable SD and SDXL schemas still default to this network module, so do not auto-sync the drifted dev copy until generic LoRA CLI ownership is clarified.",
+      "expected_owner": "stable",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "networks/lora_anima.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "Stable Anima schemas still default to this network module, so keep the drifted dev copy out of mirror automation until the Anima tree is unified.",
+      "expected_owner": "stable",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "networks/lora_fa.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "Stable SDXL schemas still expose this network module, so do not auto-sync the drifted dev copy until generic SDXL module ownership is clarified.",
+      "expected_owner": "stable",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "sd3_train.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "Active launcher runtime maps sd3-finetune to scripts/stable/sd3_train.py, so the drifted dev copy should stay out of mirror automation for now.",
+      "expected_owner": "stable",
+      "validation_mode": "trainer_registry",
+      "expected_training_types": [
+        "sd3-finetune"
+      ]
+    },
+    {
+      "path": "sdxl_train.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "Active launcher runtime maps sdxl-finetune to scripts/stable/sdxl_train.py, so the drifted dev copy should stay out of mirror automation for now.",
+      "expected_owner": "stable",
+      "validation_mode": "trainer_registry",
+      "expected_training_types": [
+        "sdxl-finetune"
+      ]
+    },
+    {
+      "path": "sdxl_train_control_net.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "Active launcher runtime maps sdxl-controlnet to scripts/stable/sdxl_train_control_net.py, so the drifted dev copy should stay out of mirror automation for now.",
+      "expected_owner": "stable",
+      "validation_mode": "trainer_registry",
+      "expected_training_types": [
+        "sdxl-controlnet"
+      ]
+    },
+    {
+      "path": "sdxl_train_control_net_lllite.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "Active launcher runtime maps sdxl-controlnet-lllite to scripts/stable/sdxl_train_control_net_lllite.py, so the drifted dev copy should stay out of mirror automation for now.",
+      "expected_owner": "stable",
+      "validation_mode": "trainer_registry",
+      "expected_training_types": [
+        "sdxl-controlnet-lllite"
+      ]
+    },
+    {
+      "path": "sdxl_train_control_net_lllite_old.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "This legacy SDXL controlnet entrypoint is stable-owned in this repo, so the dev copy should stay outside mirror automation until that legacy path is retired.",
+      "expected_owner": "stable",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "sdxl_train_network.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "Active launcher runtime maps sdxl-lora to scripts/stable/sdxl_train_network.py, so the drifted dev copy should stay out of mirror automation for now.",
+      "expected_owner": "stable",
+      "validation_mode": "trainer_registry",
+      "expected_training_types": [
+        "sdxl-lora"
+      ]
+    },
+    {
+      "path": "sdxl_train_textual_inversion.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "Active launcher runtime maps sdxl-textual-inversion to scripts/stable/sdxl_train_textual_inversion.py, so the drifted dev copy should stay out of mirror automation for now.",
+      "expected_owner": "stable",
+      "validation_mode": "trainer_registry",
+      "expected_training_types": [
+        "sdxl-textual-inversion"
+      ]
+    },
+    {
+      "path": "tools/cache_text_encoder_outputs.py",
+      "recommended_action": "restore_mirror_from_stable",
+      "reason": "This standalone cache helper is not part of the current launcher runtime path, so it is a low-risk candidate to collapse back to a single stable-owned mirror later.",
+      "expected_owner": "stable",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "train_control_net.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "Active launcher runtime maps sd-controlnet to scripts/stable/train_control_net.py, so the drifted dev copy should stay out of mirror automation for now.",
+      "expected_owner": "stable",
+      "validation_mode": "trainer_registry",
+      "expected_training_types": [
+        "sd-controlnet"
+      ]
+    },
+    {
+      "path": "train_db.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "Active launcher runtime maps sd-dreambooth to scripts/stable/train_db.py, so the drifted dev copy should stay out of mirror automation for now.",
+      "expected_owner": "stable",
+      "validation_mode": "trainer_registry",
+      "expected_training_types": [
+        "sd-dreambooth"
+      ]
+    },
+    {
+      "path": "train_network.py",
+      "recommended_action": "keep_dev_owned",
+      "reason": "Active dev runtime entrypoints such as flux_train_network.py still build on this shared trainer base, so auto-syncing from stable would be risky.",
+      "expected_owner": "dev",
+      "validation_mode": "manual"
+    },
+    {
+      "path": "train_textual_inversion.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "Active launcher runtime maps sd-textual-inversion to scripts/stable/train_textual_inversion.py, so the drifted dev copy should stay out of mirror automation for now.",
+      "expected_owner": "stable",
+      "validation_mode": "trainer_registry",
+      "expected_training_types": [
+        "sd-textual-inversion"
+      ]
+    },
+    {
+      "path": "train_textual_inversion_XTI.py",
+      "recommended_action": "keep_stable_owned",
+      "reason": "Active launcher runtime maps sd-textual-inversion-xti to scripts/stable/train_textual_inversion_XTI.py, so the drifted dev copy should stay out of mirror automation for now.",
+      "expected_owner": "stable",
+      "validation_mode": "trainer_registry",
+      "expected_training_types": [
+        "sd-textual-inversion-xti"
+      ]
+    }
+  ]
+}

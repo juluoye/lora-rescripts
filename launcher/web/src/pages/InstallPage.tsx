@@ -1,14 +1,15 @@
 import React, { useMemo, useState } from 'react';
-import { Download, AlertCircle, X } from 'lucide-react';
+import { Download, AlertCircle, X, CheckSquare, Square } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { useTranslation } from '../hooks/useTranslation';
 import { CATEGORY_ORDER } from '../api/types';
 
 export function InstallPage() {
-  const { runtimes, runtimeDefs, runtimeRecommendation, initializeRuntime, installRuntime, isInstalling, currentTaskState, settings, setActivePage, language, translations } = useApp();
+  const { runtimes, runtimeDefs, runtimeRecommendation, initializeRuntime, installRuntime, installRuntimeBatch, isInstalling, installQueue, currentTaskState, settings, setActivePage, language, translations } = useApp();
   const { t } = useTranslation(translations, language);
   const [actionError, setActionError] = useState<string | null>(null);
   const [showInstallHelp, setShowInstallHelp] = useState(true);
+  const [selectedRuntimeIds, setSelectedRuntimeIds] = useState<string[]>([]);
 
   const notInstalled = runtimeDefs.filter((d) => {
     const s = runtimes[d.id];
@@ -35,6 +36,10 @@ export function InstallPage() {
     label: t(`category_${cat}`),
     defs: notInstalled.filter((d) => d.category === cat),
   })).filter((g) => g.defs.length > 0);
+
+  const selectedSet = new Set(selectedRuntimeIds);
+  const selectableRuntimeIds = notInstalled.map((def) => def.id);
+  const allSelectableChecked = selectableRuntimeIds.length > 0 && selectableRuntimeIds.every((id) => selectedSet.has(id));
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -116,6 +121,54 @@ export function InstallPage() {
 
       <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>{t('install_prerequisites')}</p>
 
+      {selectableRuntimeIds.length > 0 && (
+        <div className="rounded-2xl p-4 space-y-3" style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-card)' }}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                {t('install_batch_title')}
+              </div>
+              <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                {installQueue.active
+                  ? t('install_batch_progress', {
+                      current: installQueue.current_runtime_id || '...',
+                      remaining: String(installQueue.pending_runtime_ids.length),
+                    })
+                  : t('install_batch_desc')}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => {
+                  setSelectedRuntimeIds(allSelectableChecked ? [] : selectableRuntimeIds);
+                }}
+                disabled={isInstalling || installQueue.active}
+                className="btn-interactive px-3 py-2 rounded-lg text-xs flex items-center gap-2 disabled:opacity-40"
+                style={{ backgroundColor: 'var(--bg-input)', border: '1px solid var(--border-card)', color: 'var(--text-secondary)' }}
+              >
+                {allSelectableChecked ? <CheckSquare size={14} /> : <Square size={14} />}
+                {allSelectableChecked ? t('install_batch_clear') : t('install_batch_select_all')}
+              </button>
+              <button
+                onClick={async () => {
+                  setActionError(null);
+                  const result = await installRuntimeBatch(selectedRuntimeIds);
+                  if (result.error) {
+                    setActionError(result.error);
+                  }
+                }}
+                disabled={isInstalling || installQueue.active || selectedRuntimeIds.length === 0}
+                className="btn-interactive btn-accent-glow px-3 py-2 rounded-lg text-xs flex items-center gap-2 disabled:opacity-40"
+                style={{ backgroundColor: 'var(--accent)', color: '#ffffff' }}
+              >
+                <Download size={14} />
+                {t('btn_install_selected')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {actionError && (
         <div className="rounded-xl p-3 text-sm flex items-start gap-2" style={{ backgroundColor: 'var(--danger-subtle)', border: '1px solid var(--danger-border)', color: 'var(--danger-text)' }}>
           <AlertCircle size={16} />
@@ -158,6 +211,8 @@ export function InstallPage() {
                 : isPartial
                   ? t('install_incomplete_runtime_hint', { dir: runtimePathHint })
                   : t('install_prepare_runtime_hint', { dir: runtimePathHint });
+              const canBatchInstall = true;
+              const isChecked = selectedSet.has(def.id);
 
               return (
                 <div
@@ -167,6 +222,24 @@ export function InstallPage() {
                 >
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
+                      {canBatchInstall && (
+                        <button
+                          onClick={() => {
+                            setSelectedRuntimeIds((prev) => (
+                              prev.includes(def.id)
+                                ? prev.filter((item) => item !== def.id)
+                                : [...prev, def.id]
+                            ));
+                          }}
+                          disabled={isInstalling || installQueue.active}
+                          className="btn-interactive w-7 h-7 rounded-lg flex items-center justify-center disabled:opacity-40"
+                          style={{ backgroundColor: 'var(--bg-input)', border: '1px solid var(--border-card)', color: 'var(--text-secondary)' }}
+                          aria-label={isChecked ? t('install_batch_unselect_runtime') : t('install_batch_select_runtime')}
+                          title={isChecked ? t('install_batch_unselect_runtime') : t('install_batch_select_runtime')}
+                        >
+                          {isChecked ? <CheckSquare size={14} /> : <Square size={14} />}
+                        </button>
+                      )}
                       <h4 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{name}</h4>
                       {def.experimental && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--warning-subtle)', color: 'var(--warning-text)', border: '1px solid var(--warning-border)' }}>

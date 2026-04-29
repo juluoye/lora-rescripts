@@ -5,6 +5,8 @@ import math
 import logging
 from typing import Any, Iterator
 
+from mikazuki.utils.train_utils import parse_boolish
+
 
 logger = logging.getLogger(__name__)
 
@@ -13,22 +15,6 @@ _DEFAULT_SAFE_PREVIEW_MAX_WIDTH = 512
 _DEFAULT_SAFE_PREVIEW_MAX_HEIGHT = 512
 _DEFAULT_SAFE_PREVIEW_MAX_STEPS = 20
 _DEFAULT_SAFE_PREVIEW_CFG_CAP = 6.0
-
-
-def parse_boolish(value) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"", "0", "false", "no", "off", "none", "null"}:
-            return False
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-    return bool(value)
 
 
 def _is_mapping_like(state: Any) -> bool:

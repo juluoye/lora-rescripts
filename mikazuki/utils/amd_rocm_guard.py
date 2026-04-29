@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 from mikazuki.utils.runtime_safe_preview import apply_runtime_safe_preview_policy
+from mikazuki.utils.train_utils import parse_boolish
 
 
 _SAFE_OPTIMIZER_NAMES = {
@@ -114,22 +115,6 @@ _AMD_ARCH_PROFILE_MODIFIERS = {
         "sdpa_slice_target_scale": 1.0,
     },
 }
-
-
-def parse_boolish(value) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"", "0", "false", "no", "off", "none", "null"}:
-            return False
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-    return bool(value)
 
 
 def is_amd_rocm_runtime_requested() -> bool:

@@ -11,6 +11,7 @@ import toml
 
 from mikazuki.utils.dataset_analysis import analyze_dataset
 from mikazuki.utils.batch_semantics import resolve_per_device_batch_from_global
+from mikazuki.utils.train_utils import parse_boolish
 
 
 MIXED_RESOLUTION_UI_KEYS = (
@@ -448,22 +449,6 @@ def strip_mixed_resolution_fields(config: dict) -> dict:
     for key in MIXED_RESOLUTION_UI_KEYS:
         payload.pop(key, None)
     return payload
-
-
-def parse_boolish(value) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"", "0", "false", "no", "off", "none", "null"}:
-            return False
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-    return bool(value)
 
 
 def parse_resolution(value) -> Optional[tuple[int, int]]:
