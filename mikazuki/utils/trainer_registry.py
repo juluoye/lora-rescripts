@@ -38,11 +38,23 @@ class TrainerDefinition:
     start_warning_builder: TrainerWarningBuilder | None = None
     preflight_builder: TrainerPreflightBuilder | None = None
     preflight_handles_resume: bool = False
+    allow_dataset_config_without_train_data_dir: bool = False
+    allow_dataset_class_without_train_data_dir: bool = False
 
 
 TRAINER_REGISTRY = {
-    "sd-lora": TrainerDefinition("sd-lora", "./scripts/stable/train_network.py"),
-    "sdxl-lora": TrainerDefinition("sdxl-lora", "./scripts/stable/sdxl_train_network.py"),
+    "sd-lora": TrainerDefinition(
+        "sd-lora",
+        "./scripts/stable/train_network.py",
+        allow_dataset_config_without_train_data_dir=True,
+        allow_dataset_class_without_train_data_dir=True,
+    ),
+    "sdxl-lora": TrainerDefinition(
+        "sdxl-lora",
+        "./scripts/stable/sdxl_train_network.py",
+        allow_dataset_config_without_train_data_dir=True,
+        allow_dataset_class_without_train_data_dir=True,
+    ),
     "yolo": TrainerDefinition(
         "yolo",
         "./scripts/stable/yolo_train.py",
@@ -77,25 +89,111 @@ TRAINER_REGISTRY = {
         start_warning_builder=build_newbie_start_warnings,
         preflight_handles_resume=True,
     ),
-    "sd-dreambooth": TrainerDefinition("sd-dreambooth", "./scripts/stable/train_db.py"),
-    "sdxl-finetune": TrainerDefinition("sdxl-finetune", "./scripts/stable/sdxl_train.py"),
-    "sd-controlnet": TrainerDefinition("sd-controlnet", "./scripts/stable/train_control_net.py"),
-    "sdxl-controlnet": TrainerDefinition("sdxl-controlnet", "./scripts/stable/sdxl_train_control_net.py"),
-    "sdxl-controlnet-lllite": TrainerDefinition("sdxl-controlnet-lllite", "./scripts/stable/sdxl_train_control_net_lllite.py"),
-    "flux-controlnet": TrainerDefinition("flux-controlnet", "./scripts/stable/flux_train_control_net.py"),
-    "sd-textual-inversion": TrainerDefinition("sd-textual-inversion", "./scripts/stable/train_textual_inversion.py"),
-    "sd-textual-inversion-xti": TrainerDefinition("sd-textual-inversion-xti", "./scripts/stable/train_textual_inversion_XTI.py"),
+    "sd-dreambooth": TrainerDefinition(
+        "sd-dreambooth",
+        "./scripts/stable/train_db.py",
+        allow_dataset_config_without_train_data_dir=True,
+        allow_dataset_class_without_train_data_dir=True,
+    ),
+    "sdxl-finetune": TrainerDefinition(
+        "sdxl-finetune",
+        "./scripts/stable/sdxl_train.py",
+        allow_dataset_config_without_train_data_dir=True,
+        allow_dataset_class_without_train_data_dir=True,
+    ),
+    "sd-controlnet": TrainerDefinition(
+        "sd-controlnet",
+        "./scripts/stable/train_control_net.py",
+        allow_dataset_config_without_train_data_dir=True,
+    ),
+    "sdxl-controlnet": TrainerDefinition(
+        "sdxl-controlnet",
+        "./scripts/stable/sdxl_train_control_net.py",
+        allow_dataset_config_without_train_data_dir=True,
+    ),
+    "sdxl-controlnet-lllite": TrainerDefinition(
+        "sdxl-controlnet-lllite",
+        "./scripts/stable/sdxl_train_control_net_lllite.py",
+        allow_dataset_config_without_train_data_dir=True,
+    ),
+    "flux-controlnet": TrainerDefinition(
+        "flux-controlnet",
+        "./scripts/stable/flux_train_control_net.py",
+        allow_dataset_config_without_train_data_dir=True,
+        allow_dataset_class_without_train_data_dir=True,
+    ),
+    "sd-textual-inversion": TrainerDefinition(
+        "sd-textual-inversion",
+        "./scripts/stable/train_textual_inversion.py",
+        allow_dataset_config_without_train_data_dir=True,
+        allow_dataset_class_without_train_data_dir=True,
+    ),
+    "sd-textual-inversion-xti": TrainerDefinition(
+        "sd-textual-inversion-xti",
+        "./scripts/stable/train_textual_inversion_XTI.py",
+        allow_dataset_config_without_train_data_dir=True,
+    ),
     "sdxl-textual-inversion": TrainerDefinition("sdxl-textual-inversion", "./scripts/stable/sdxl_train_textual_inversion.py"),
-    "sd3-lora": TrainerDefinition("sd3-lora", "./scripts/dev/sd3_train_network.py"),
-    "sd3-finetune": TrainerDefinition("sd3-finetune", "./scripts/stable/sd3_train.py"),
-    "flux-lora": TrainerDefinition("flux-lora", "./scripts/dev/flux_train_network.py"),
-    "flux-finetune": TrainerDefinition("flux-finetune", "./scripts/dev/flux_train.py"),
-    "lumina-lora": TrainerDefinition("lumina-lora", "./scripts/stable/lumina_train_network.py"),
-    "lumina2-lora": TrainerDefinition("lumina2-lora", "./scripts/stable/lumina_train_network.py"),
-    "lumina-finetune": TrainerDefinition("lumina-finetune", "./scripts/stable/lumina_train.py"),
-    "hunyuan-image-lora": TrainerDefinition("hunyuan-image-lora", "./scripts/stable/hunyuan_image_train_network.py"),
-    "anima-lora": TrainerDefinition("anima-lora", "./scripts/stable/anima_train_network.py"),
-    "anima-finetune": TrainerDefinition("anima-finetune", "./scripts/stable/anima_train.py"),
+    "sd3-lora": TrainerDefinition(
+        "sd3-lora",
+        "./scripts/dev/sd3_train_network.py",
+        allow_dataset_config_without_train_data_dir=True,
+        allow_dataset_class_without_train_data_dir=True,
+    ),
+    "sd3-finetune": TrainerDefinition(
+        "sd3-finetune",
+        "./scripts/stable/sd3_train.py",
+        allow_dataset_config_without_train_data_dir=True,
+        allow_dataset_class_without_train_data_dir=True,
+    ),
+    "flux-lora": TrainerDefinition(
+        "flux-lora",
+        "./scripts/dev/flux_train_network.py",
+        allow_dataset_config_without_train_data_dir=True,
+        allow_dataset_class_without_train_data_dir=True,
+    ),
+    "flux-finetune": TrainerDefinition(
+        "flux-finetune",
+        "./scripts/dev/flux_train.py",
+        allow_dataset_config_without_train_data_dir=True,
+        allow_dataset_class_without_train_data_dir=True,
+    ),
+    "lumina-lora": TrainerDefinition(
+        "lumina-lora",
+        "./scripts/stable/lumina_train_network.py",
+        allow_dataset_config_without_train_data_dir=True,
+        allow_dataset_class_without_train_data_dir=True,
+    ),
+    "lumina2-lora": TrainerDefinition(
+        "lumina2-lora",
+        "./scripts/stable/lumina_train_network.py",
+        allow_dataset_config_without_train_data_dir=True,
+        allow_dataset_class_without_train_data_dir=True,
+    ),
+    "lumina-finetune": TrainerDefinition(
+        "lumina-finetune",
+        "./scripts/stable/lumina_train.py",
+        allow_dataset_config_without_train_data_dir=True,
+        allow_dataset_class_without_train_data_dir=True,
+    ),
+    "hunyuan-image-lora": TrainerDefinition(
+        "hunyuan-image-lora",
+        "./scripts/stable/hunyuan_image_train_network.py",
+        allow_dataset_config_without_train_data_dir=True,
+        allow_dataset_class_without_train_data_dir=True,
+    ),
+    "anima-lora": TrainerDefinition(
+        "anima-lora",
+        "./scripts/stable/anima_train_network.py",
+        allow_dataset_config_without_train_data_dir=True,
+        allow_dataset_class_without_train_data_dir=True,
+    ),
+    "anima-finetune": TrainerDefinition(
+        "anima-finetune",
+        "./scripts/stable/anima_train.py",
+        allow_dataset_config_without_train_data_dir=True,
+        allow_dataset_class_without_train_data_dir=True,
+    ),
 }
 
 

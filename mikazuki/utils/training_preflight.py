@@ -100,10 +100,52 @@ def build_sageattention_experimental_warning(payload: dict, training_type: str) 
 
 
 def train_data_dir_can_be_omitted(payload: dict, training_type: str) -> bool:
-    normalized_type = str(training_type or "").strip().lower()
-    if normalized_type != "sdxl-finetune":
+    trainer_definition = get_trainer_definition(training_type)
+    if trainer_definition is None:
         return False
-    return any(str(payload.get(key, "") or "").strip() for key in ("dataset_config", "dataset_class"))
+
+    dataset_config_path = resolve_dataset_config_path(payload)
+    if trainer_definition.allow_dataset_config_without_train_data_dir and dataset_config_path is not None:
+        return True
+
+    dataset_class = str(payload.get("dataset_class", "") or "").strip()
+    if trainer_definition.allow_dataset_class_without_train_data_dir and dataset_class:
+        return True
+
+    return False
+
+
+def resolve_dataset_config_path(payload: dict, *, root_dir: str | Path | None = None) -> Optional[Path]:
+    raw_value = str(payload.get("dataset_config", "") or "").strip()
+    if not raw_value:
+        return None
+
+    dataset_config_path = Path(raw_value).expanduser()
+    if not dataset_config_path.is_absolute():
+        resolved_root = Path(root_dir) if root_dir is not None else Path(base_dir_path())
+        dataset_config_path = resolved_root / dataset_config_path
+
+    return dataset_config_path
+
+
+def validate_dataset_config_reference(
+    payload: dict,
+    *,
+    training_type: str | None = None,
+    root_dir: str | Path | None = None,
+) -> Optional[str]:
+    dataset_config_path = resolve_dataset_config_path(payload, root_dir=root_dir)
+    if dataset_config_path is None:
+        return None
+    if training_type is not None:
+        trainer_definition = get_trainer_definition(training_type)
+        if trainer_definition is None or not trainer_definition.allow_dataset_config_without_train_data_dir:
+            return None
+    if not dataset_config_path.exists():
+        return f"dataset_config does not exist: {dataset_config_path}"
+    if not dataset_config_path.is_file():
+        return f"dataset_config must point to a file: {dataset_config_path}"
+    return None
 
 
 def add_anima_preflight_guidance(payload: dict, training_type: str, errors: list[str], warnings: list[str], notes: list[str]) -> None:
@@ -372,6 +414,10 @@ def analyze_training_preflight(
     gpu_ids = [str(item) for item in raw_gpu_ids] if isinstance(raw_gpu_ids, list) else []
     distributed_runtime = None
     worker_sync_runtime = None
+
+    dataset_config_error = validate_dataset_config_reference(payload, training_type=training_type, root_dir=root_dir)
+    if dataset_config_error:
+        errors.append(dataset_config_error)
 
     if not trainer_supported:
         errors.append(f"Unsupported trainer type: {training_type}")

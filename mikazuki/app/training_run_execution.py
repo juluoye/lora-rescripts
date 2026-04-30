@@ -31,6 +31,7 @@ from mikazuki.utils.runtime_dependencies import analyze_training_runtime_depende
 from mikazuki.utils.training_preflight import (
     build_sageattention_experimental_warning,
     train_data_dir_can_be_omitted,
+    validate_dataset_config_reference,
 )
 from mikazuki.utils.training_sample_prompt_runtime import prepare_training_sample_prompt_config
 from mikazuki.utils.training_start_warnings import (
@@ -79,6 +80,10 @@ def _validate_training_inputs(context: TrainingRunContext) -> APIResponseFail | 
 
     if trainer_definition.start_warning_builder is not None:
         context.start_warnings.extend(trainer_definition.start_warning_builder(config))
+
+    dataset_config_error = validate_dataset_config_reference(config, training_type=context.model_train_type)
+    if dataset_config_error:
+        return APIResponseFail(message=dataset_config_error)
 
     if not context.direct_python_training and not train_data_dir_can_be_omitted(config, context.model_train_type):
         if not train_utils.validate_data_dir(config["train_data_dir"]):

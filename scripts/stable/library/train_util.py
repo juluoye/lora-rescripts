@@ -363,6 +363,17 @@ _TRAIN_UTIL_COMPAT_EXPORTS = _reexport_public_api(
 )
 
 
+def load_tokenizer(args):
+    from library.strategy_sd import SdTokenizeStrategy
+
+    tokenize_strategy = SdTokenizeStrategy(
+        bool(getattr(args, "v2", False)),
+        getattr(args, "max_token_length", None),
+        tokenizer_cache_dir=getattr(args, "tokenizer_cache_dir", None),
+    )
+    return tokenize_strategy.tokenizer
+
+
 def append_lr_to_logs(logs, lr_scheduler, optimizer_type, including_unet=True):
     optimizer_scheduler_util.append_lr_to_logs(logs, lr_scheduler, optimizer_type, including_unet=including_unet)
 
@@ -380,6 +391,7 @@ _TRAIN_UTIL_COMPAT_EXPORTS += _reexport_public_api(
 __all__ = list(
     dict.fromkeys(
         [
+            "load_tokenizer",
             "append_lr_to_logs",
             "append_lr_to_logs_with_names",
             *_TRAIN_UTIL_COMPAT_EXPORTS,

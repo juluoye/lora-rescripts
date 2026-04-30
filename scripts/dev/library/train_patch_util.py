@@ -241,6 +241,14 @@ def replace_unet_modules(unet: UNet2DConditionModel, mem_eff_attn, xformers, sdp
         unet.set_use_sdpa(True)
 
 
+def maybe_apply_channels_last_to_tensor(args, tensor: Optional[torch.Tensor]):
+    if not getattr(args, "opt_channels_last", False):
+        return tensor
+    if tensor is None or not isinstance(tensor, torch.Tensor) or tensor.ndim != 4:
+        return tensor
+    return tensor.contiguous(memory_format=torch.channels_last)
+
+
 """
 def replace_vae_modules(vae: diffusers.models.AutoencoderKL, mem_eff_attn, xformers):
     # vae is not used currently, but it is here for future use
@@ -307,4 +315,5 @@ __all__ = [
     'addnet_hash_safetensors',
     'get_git_revision_hash',
     'replace_unet_modules',
+    'maybe_apply_channels_last_to_tensor',
 ]
