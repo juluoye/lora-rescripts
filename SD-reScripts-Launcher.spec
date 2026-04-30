@@ -35,5 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['H:\\lora-rescripts\\launcher\\assets\\favicon.ico'],
+    icon=['H:\\lora-rescripts\\launcher\\assets\\favicon-launcher.ico'],
 )

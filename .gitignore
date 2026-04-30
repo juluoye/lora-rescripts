@@ -25,7 +25,6 @@ __pycache__/
 # Build / packaging outputs
 /build/
 /dist/
-*.exe
 *.zip
 *.7z
 *.pyz

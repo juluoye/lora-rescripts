@@ -29,7 +29,7 @@ def create_window() -> None:
         url = str(base / "web" / "dist" / "index.html")
 
     # Try to load icon
-    icon_path = Path(__file__).parent / "assets" / "icon.ico"
+    icon_path = Path(__file__).parent / "assets" / "favicon-launcher.ico"
     if not icon_path.exists():
         fallback_icon = Path(__file__).parent / "assets" / "favicon.ico"
         if fallback_icon.exists():

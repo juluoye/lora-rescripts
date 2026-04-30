@@ -39,6 +39,7 @@ from library.strategy_base import (
     TextEncodingStrategy,
     configure_latents_cache_runtime,
 )
+from library.train_util import resolve_cache_latents_runtime_kwargs
 from library.latents_disk_cache import normalize_latents_disk_cache_format
 from mikazuki.utils.runtime_sageattention import load_runtime_sageattention_symbols
 from mikazuki.utils.runtime_mode import infer_attention_runtime_mode, is_amd_rocm_runtime, is_intel_xpu_runtime

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from launcher.config import RUNTIMES, RuntimeDef, get_repo_root
+from launcher.core.runtime_integrity import assess_runtime_integrity
 
 
 @dataclass
@@ -18,12 +19,19 @@ class RuntimeStatus:
     installed: bool  # True if python.exe exists AND .deps_installed marker present
     python_path: Optional[Path] = None
     env_dir: Optional[Path] = None
+    integrity_ok: bool = False
+    bootstrap_ready: bool = False
+    integrity_issue_code: Optional[str] = None
+    integrity_message_zh: Optional[str] = None
+    integrity_message_en: Optional[str] = None
 
     @property
     def status_text(self) -> str:
-        """One of: 'installed', 'initialized', 'partial', 'missing'."""
+        """One of: 'installed', 'initialized', 'broken', 'partial', 'missing'."""
         if self.installed:
             return "installed"
+        if self.python_exists and not self.integrity_ok:
+            return "broken"
         if self.python_exists:
             return "initialized"
         if self.env_dir is not None:
@@ -46,13 +54,19 @@ def detect_runtime(repo_root: Path, runtime_def: RuntimeDef) -> RuntimeStatus:
             python_path = candidate_dir / runtime_def.python_rel_path
             if python_path.exists():
                 deps_marker = candidate_dir / ".deps_installed"
+                integrity = assess_runtime_integrity(candidate_dir, python_path)
                 return RuntimeStatus(
                     runtime_id=runtime_def.id,
                     python_exists=True,
                     deps_installed=deps_marker.exists(),
-                    installed=deps_marker.exists(),
+                    installed=deps_marker.exists() and integrity.integrity_ok,
                     python_path=python_path,
                     env_dir=candidate_dir,
+                    integrity_ok=integrity.integrity_ok,
+                    bootstrap_ready=integrity.bootstrap_ready,
+                    integrity_issue_code=integrity.issue_code,
+                    integrity_message_zh=integrity.message_zh,
+                    integrity_message_en=integrity.message_en,
                 )
 
     # Pass 2: directory exists but no python.exe (partially extracted)

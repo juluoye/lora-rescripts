@@ -16,6 +16,8 @@ from launcher.config import (
     RuntimeDef,
     get_repo_root,
 )
+from launcher.core.dependency_cache import get_dependency_cache_root, get_runtime_dependency_cache_dir
+from launcher.core.proxy_utils import normalize_proxy_settings
 from launcher.core.subprocess_utils import hidden_subprocess_kwargs
 
 
@@ -35,6 +37,10 @@ class LaunchOptions:
     disable_auto_mirror: bool = False
     dev_mode: bool = False
     localization: str = ""
+    apply_proxy_to_trainer: bool = False
+    http_proxy: str = ""
+    https_proxy: str = ""
+    all_proxy: str = ""
 
 
 def build_launch_env(
@@ -82,6 +88,28 @@ def build_launch_env(
         env["MIKAZUKI_CN_MIRROR"] = "1"
     else:
         env.pop("MIKAZUKI_CN_MIRROR", None)
+
+    normalized_proxy = normalize_proxy_settings(
+        {
+            "http_proxy": options.http_proxy,
+            "https_proxy": options.https_proxy,
+            "all_proxy": options.all_proxy,
+        }
+    )
+    for env_key in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"):
+        env.pop(env_key, None)
+    if options.apply_proxy_to_trainer:
+        if normalized_proxy.get("http_proxy"):
+            env["HTTP_PROXY"] = normalized_proxy["http_proxy"]
+            env["http_proxy"] = normalized_proxy["http_proxy"]
+        if normalized_proxy.get("https_proxy"):
+            env["HTTPS_PROXY"] = normalized_proxy["https_proxy"]
+            env["https_proxy"] = normalized_proxy["https_proxy"]
+        if normalized_proxy.get("all_proxy"):
+            env["ALL_PROXY"] = normalized_proxy["all_proxy"]
+            env["all_proxy"] = normalized_proxy["all_proxy"]
+        env["NO_PROXY"] = "127.0.0.1,localhost"
+        env["no_proxy"] = "127.0.0.1,localhost"
 
     return env
 
@@ -146,7 +174,11 @@ def spawn_launch_process(
     )
 
 
-def build_install_env(cn_mirror: bool = False) -> Dict[str, str]:
+def build_install_env(
+    runtime_id: Optional[str] = None,
+    cn_mirror: bool = False,
+    proxy_settings: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
     """Build environment for runtime install scripts."""
 
     env = os.environ.copy()
@@ -154,6 +186,25 @@ def build_install_env(cn_mirror: bool = False) -> Dict[str, str]:
         env["MIKAZUKI_CN_MIRROR"] = "1"
     else:
         env.pop("MIKAZUKI_CN_MIRROR", None)
+    cache_root = get_dependency_cache_root()
+    env["MIKAZUKI_DEPENDENCY_CACHE_ROOT"] = str(cache_root)
+    if runtime_id:
+        env["MIKAZUKI_DEPENDENCY_CACHE_DIR"] = str(get_runtime_dependency_cache_dir(runtime_id))
+    else:
+        env.pop("MIKAZUKI_DEPENDENCY_CACHE_DIR", None)
+    proxy_settings = proxy_settings or {}
+    for source_key, env_keys in (
+        ("http_proxy", ("HTTP_PROXY", "http_proxy")),
+        ("https_proxy", ("HTTPS_PROXY", "https_proxy")),
+        ("all_proxy", ("ALL_PROXY", "all_proxy")),
+    ):
+        value = str(proxy_settings.get(source_key) or "").strip()
+        if value:
+            for env_key in env_keys:
+                env[env_key] = value
+        else:
+            for env_key in env_keys:
+                env.pop(env_key, None)
     return env
 
 

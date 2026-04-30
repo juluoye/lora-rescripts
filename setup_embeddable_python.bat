@@ -4,6 +4,7 @@ setlocal enabledelayedexpansion
 set "AUTO_MODE=0"
 set "TARGET_DIR=python"
 set "REQUESTED_TARGET=%~1"
+for %%I in ("%~dp0.") do set "REPO_ROOT=%%~fI"
 
 if /i "%REQUESTED_TARGET%"=="--auto" (
     set "AUTO_MODE=1"
@@ -12,7 +13,15 @@ if /i "%REQUESTED_TARGET%"=="--auto" (
 
 if not defined REQUESTED_TARGET set "REQUESTED_TARGET=python"
 
-for /f "usebackq delims=" %%I in (`"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\runtime\resolve_runtime_dir.ps1" -RepoRoot "%~dp0" -RequestedTarget "%REQUESTED_TARGET%"`) do set "TARGET_DIR=%%~I"
+set "RESOLVED_TARGET_DIR="
+set "RESOLVE_TMP=%TEMP%\mikazuki_runtime_dir_%RANDOM%_%RANDOM%.txt"
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\runtime\resolve_runtime_dir.ps1" -RepoRoot "!REPO_ROOT!" -RequestedTarget "%REQUESTED_TARGET%" > "!RESOLVE_TMP!" 2>nul
+if not errorlevel 1 if exist "!RESOLVE_TMP!" (
+    set /p "RESOLVED_TARGET_DIR="<"!RESOLVE_TMP!"
+)
+if exist "!RESOLVE_TMP!" del /q "!RESOLVE_TMP!" >nul 2>nul
+if defined RESOLVED_TARGET_DIR set "TARGET_DIR=%RESOLVED_TARGET_DIR%"
+if not defined RESOLVED_TARGET_DIR set "TARGET_DIR=%REQUESTED_TARGET%"
 
 echo ========================================
 echo Setup Portable Python

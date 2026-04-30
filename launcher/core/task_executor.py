@@ -12,6 +12,10 @@ from typing import Any, Callable, Dict, Optional
 
 from launcher.config import RUNTIME_MAP
 from launcher.core.api_result import error_result, ok_result
+from launcher.core.dependency_cache import (
+    clear_runtime_dependency_cache,
+    prefetch_runtime_dependencies,
+)
 from launcher.core.runtime_initializer import initialize_runtime_environment
 from launcher.core.task_history_store import TaskHistoryStore, TaskStateStore
 from launcher.core.runtime_coordinator import RuntimeCoordinator
@@ -145,6 +149,7 @@ class LauncherTaskExecutor:
         result = run_updater(
             self._repo_root,
             use_cn_mirror=bool(self._settings_provider().get("cn_mirror", False)),
+            proxy_settings=self._settings_provider(),
         )
         if not result.get("ok"):
             self._finish_task(
@@ -665,6 +670,32 @@ class LauncherTaskExecutor:
                 message,
                 details=details,
             )
+        if not status.integrity_ok:
+            message = (
+                (
+                    f"检测到 {runtime_id} 的 Python 目录存在，但环境骨架不完整，当前不能直接安装依赖。"
+                    f"{status.integrity_message_zh or ''}"
+                )
+                if lang == "zh"
+                else (
+                    f"The {runtime_id} Python directory exists, but the runtime skeleton is incomplete and dependencies cannot be installed yet. "
+                    f"{status.integrity_message_en or ''}"
+                )
+            ).strip()
+            self._finish_task(
+                success=False,
+                stage_code="runtime_install.runtime_broken",
+                stage_label_zh="运行时环境损坏",
+                stage_label_en="Runtime environment is broken",
+                code="runtime_install.runtime_broken",
+                error=message,
+                details={"runtime_id": runtime_id, "issue_code": status.integrity_issue_code},
+            )
+            return error_result(
+                "runtime_install.runtime_broken",
+                message,
+                details={"runtime_id": runtime_id, "issue_code": status.integrity_issue_code},
+            )
 
         self._installing = True
 
@@ -760,6 +791,229 @@ class LauncherTaskExecutor:
         thread = threading.Thread(target=_run, daemon=True)
         thread.start()
         return ok_result("runtime_install.started", runtime_id=runtime_id)
+
+    def prefetch_runtime_dependencies(self, runtime_id: str) -> Dict[str, Any]:
+        lang = get_language()
+        self._begin_task(
+            "dependency_cache",
+            "dependency_cache.request_received",
+            "已收到依赖缓存请求",
+            "Dependency cache request received",
+            runtime_id=runtime_id,
+        )
+        if self._installing:
+            message = "已有运行时任务正在进行中。" if lang == "zh" else "Another runtime task is already in progress."
+            self._finish_task(
+                success=False,
+                stage_code="dependency_cache.already_running",
+                stage_label_zh="已有运行时任务在运行",
+                stage_label_en="Another runtime task is already running",
+                code="dependency_cache.already_running",
+                error=message,
+                details={"runtime_id": runtime_id},
+            )
+            return error_result("dependency_cache.already_running", message)
+        if runtime_id not in RUNTIME_MAP:
+            message = "未知的运行时。" if lang == "zh" else "Unknown runtime."
+            self._finish_task(
+                success=False,
+                stage_code="runtime.unknown",
+                stage_label_zh="未知运行时",
+                stage_label_en="Unknown runtime",
+                code="runtime.unknown",
+                error=message,
+                details={"runtime_id": runtime_id},
+            )
+            return error_result("runtime.unknown", message, details={"runtime_id": runtime_id})
+
+        prepared = self._runtime_coordinator.prepare_install(
+            runtime_id,
+            cn_mirror=bool(self._settings_provider().get("cn_mirror", False)),
+        )
+        if prepared is None:
+            message = "未知的运行时。" if lang == "zh" else "Unknown runtime."
+            self._finish_task(
+                success=False,
+                stage_code="runtime.unknown",
+                stage_label_zh="未知运行时",
+                stage_label_en="Unknown runtime",
+                code="runtime.unknown",
+                error=message,
+                details={"runtime_id": runtime_id},
+            )
+            return error_result("runtime.unknown", message, details={"runtime_id": runtime_id})
+
+        status = prepared.status
+        if not status.python_exists or not status.python_path:
+            message = (
+                "请先初始化该运行时的本地 Python 环境，再开始缓存依赖。"
+                if lang == "zh"
+                else "Initialize this runtime's local Python environment before prefetching dependencies."
+            )
+            self._finish_task(
+                success=False,
+                stage_code="dependency_cache.python_missing",
+                stage_label_zh="缺少运行时 Python 环境",
+                stage_label_en="Runtime Python environment missing",
+                code="dependency_cache.python_missing",
+                error=message,
+                details={"runtime_id": runtime_id},
+            )
+            return error_result("dependency_cache.python_missing", message, details={"runtime_id": runtime_id})
+        if not status.integrity_ok or not status.bootstrap_ready:
+            message = (
+                "当前运行时环境还不完整，请先完成初始化或修复损坏的 Python 骨架。"
+                if lang == "zh"
+                else "This runtime is not ready yet. Finish initialization or repair the broken Python skeleton first."
+            )
+            self._finish_task(
+                success=False,
+                stage_code="dependency_cache.runtime_not_ready",
+                stage_label_zh="运行时尚未就绪",
+                stage_label_en="Runtime is not ready",
+                code="dependency_cache.runtime_not_ready",
+                error=message,
+                details={"runtime_id": runtime_id, "issue_code": status.integrity_issue_code},
+            )
+            return error_result("dependency_cache.runtime_not_ready", message, details={"runtime_id": runtime_id})
+
+        self._installing = True
+
+        def _run() -> None:
+            success = False
+            final_code = "dependency_cache.failed"
+            error_message = None
+            final_details: Dict[str, Any] = {"runtime_id": runtime_id}
+            try:
+                self._advance_task(
+                    "dependency_cache.preparing",
+                    "正在准备依赖缓存目录",
+                    "Preparing dependency cache directory",
+                    details={"runtime_id": runtime_id},
+                )
+                final_state = prefetch_runtime_dependencies(
+                    self._repo_root,
+                    runtime_id,
+                    status.python_path,
+                    cn_mirror=prepared.cn_mirror,
+                    proxy_settings=prepared.proxy_settings,
+                    log_callback=lambda line: self._append_task_log_line(line, event_name="install_log"),
+                    progress_callback=lambda payload: self._advance_task(
+                        "dependency_cache.downloading",
+                        f"正在缓存依赖 {payload.get('completed_items', 0) + (0 if payload.get('state') == 'succeeded' else 1)}/{payload.get('total_items', 0)}",
+                        f"Caching dependencies {payload.get('completed_items', 0) + (0 if payload.get('state') == 'succeeded' else 1)}/{payload.get('total_items', 0)}",
+                        details=payload,
+                    ),
+                )
+                success = True
+                final_code = "dependency_cache.completed"
+                final_details = {
+                    "runtime_id": runtime_id,
+                    "cache_dir": final_state.get("cache_dir"),
+                    "cached_items": final_state.get("cached_items"),
+                    "total_items": final_state.get("total_items"),
+                    "total_bytes": final_state.get("total_bytes"),
+                }
+            except Exception as exc:
+                final_code = "dependency_cache.execution_failed"
+                error_message = str(exc)
+                self._append_task_log_line(f"[Launcher] Dependency cache failed: {exc}", event_name="install_log")
+            finally:
+                self._installing = False
+                payload: Dict[str, Any] = {
+                    "runtime_id": runtime_id,
+                    "success": success,
+                    "action": "cache",
+                    "details": final_details,
+                }
+                if success:
+                    self._finish_task(
+                        success=True,
+                        stage_code="dependency_cache.completed",
+                        stage_label_zh="依赖缓存完成",
+                        stage_label_en="Dependency cache completed",
+                        result_code=final_code,
+                        details=final_details,
+                    )
+                    payload["result_code"] = final_code
+                else:
+                    self._finish_task(
+                        success=False,
+                        stage_code=final_code,
+                        stage_label_zh="依赖缓存失败",
+                        stage_label_en="Dependency cache failed",
+                        code=final_code,
+                        error=error_message,
+                        details=final_details,
+                    )
+                    payload["code"] = final_code
+                    if error_message:
+                        payload["error"] = error_message
+                self._emit("install_done", payload)
+
+        threading.Thread(target=_run, daemon=True).start()
+        return ok_result("dependency_cache.started", runtime_id=runtime_id)
+
+    def clear_runtime_dependency_cache(self, runtime_id: str) -> Dict[str, Any]:
+        lang = get_language()
+        self._begin_task(
+            "dependency_cache_clear",
+            "dependency_cache_clear.request_received",
+            "已收到清理依赖缓存请求",
+            "Dependency cache clear request received",
+            runtime_id=runtime_id,
+        )
+        if self._installing:
+            message = "已有运行时任务正在进行中。" if lang == "zh" else "Another runtime task is already in progress."
+            self._finish_task(
+                success=False,
+                stage_code="dependency_cache_clear.already_running",
+                stage_label_zh="已有运行时任务在运行",
+                stage_label_en="Another runtime task is already running",
+                code="dependency_cache_clear.already_running",
+                error=message,
+                details={"runtime_id": runtime_id},
+            )
+            return error_result("dependency_cache_clear.already_running", message)
+        if runtime_id not in RUNTIME_MAP:
+            message = "未知的运行时。" if lang == "zh" else "Unknown runtime."
+            self._finish_task(
+                success=False,
+                stage_code="runtime.unknown",
+                stage_label_zh="未知运行时",
+                stage_label_en="Unknown runtime",
+                code="runtime.unknown",
+                error=message,
+                details={"runtime_id": runtime_id},
+            )
+            return error_result("runtime.unknown", message, details={"runtime_id": runtime_id})
+
+        try:
+            state = clear_runtime_dependency_cache(self._repo_root, runtime_id)
+            self._finish_task(
+                success=True,
+                stage_code="dependency_cache_clear.completed",
+                stage_label_zh="依赖缓存已清理",
+                stage_label_en="Dependency cache cleared",
+                result_code="dependency_cache_clear.completed",
+                details={"runtime_id": runtime_id, "cache_dir": state.get("cache_dir")},
+            )
+            return ok_result(
+                "dependency_cache_clear.completed",
+                runtime_id=runtime_id,
+                cache_state=state,
+            )
+        except Exception as exc:
+            self._finish_task(
+                success=False,
+                stage_code="dependency_cache_clear.failed",
+                stage_label_zh="依赖缓存清理失败",
+                stage_label_en="Dependency cache clear failed",
+                code="dependency_cache_clear.failed",
+                error=str(exc),
+                details={"runtime_id": runtime_id},
+            )
+            return error_result("dependency_cache_clear.failed", str(exc), details={"runtime_id": runtime_id})
 
     def uninstall_runtime(self, runtime_id: str) -> Dict[str, Any]:
         lang = get_language()

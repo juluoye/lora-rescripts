@@ -1,6 +1,6 @@
 import type { ApiResult, PageId } from '../api/types';
 
-const PAGE_IDS: PageId[] = ['launch', 'runtime', 'advanced', 'install', 'extensions', 'console', 'about'];
+const PAGE_IDS: PageId[] = ['launch', 'runtime', 'advanced', 'install', 'dependencies', 'extensions', 'console', 'about'];
 
 function isPageId(value: unknown): value is PageId {
   return typeof value === 'string' && PAGE_IDS.includes(value as PageId);
@@ -27,6 +27,7 @@ export function getTargetPageForApiResult(result: ApiResult): PageId | null {
     'trainer.already_running': 'console',
     'runtime_initialize.started': 'console',
     'runtime_install.started': 'console',
+    'dependency_cache.started': 'console',
     'updater.started': 'about',
     'runtime.unknown': 'runtime',
     'runtime.not_installed': 'runtime',
@@ -35,6 +36,8 @@ export function getTargetPageForApiResult(result: ApiResult): PageId | null {
     'runtime_install.powershell_missing': 'install',
     'runtime_install.scripts_missing': 'install',
     'runtime_install.python_missing': 'install',
+    'dependency_cache.python_missing': 'dependencies',
+    'dependency_cache.runtime_not_ready': 'dependencies',
     'updater.blocked_trainer_running': 'about',
     'updater.blocked_install_running': 'about',
     'updater.script_missing': 'about',
@@ -55,6 +58,10 @@ export function getTargetPageForApiResult(result: ApiResult): PageId | null {
 
   if (code.startsWith('runtime_initialize.')) {
     return result.ok ? 'console' : 'install';
+  }
+
+  if (code.startsWith('dependency_cache.')) {
+    return result.ok ? 'console' : 'dependencies';
   }
 
   if (code.startsWith('updater.')) {

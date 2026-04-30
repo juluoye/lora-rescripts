@@ -25,6 +25,7 @@ import type {
   ManagedConnectionResult,
   ManagedImportState,
   RuntimeInstallQueueState,
+  RuntimeDependencyCacheState,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -80,6 +81,7 @@ export function on(event: string, handler: EventHandler): () => void {
 interface PywebviewApi {
   get_runtimes: () => Promise<Record<string, RuntimeStatus>>;
   get_runtime_defs: () => Promise<RuntimeDef[]>;
+  get_dependency_cache_states: () => Promise<Record<string, RuntimeDependencyCacheState>>;
   get_best_runtime: () => Promise<string | null>;
   select_runtime: (id: string) => Promise<ApiResult>;
   get_settings: () => Promise<Settings>;
@@ -120,6 +122,9 @@ interface PywebviewApi {
   initialize_runtime: (runtimeId: string) => Promise<ApiResult>;
   install_runtime: (runtimeId: string) => Promise<ApiResult>;
   uninstall_runtime: (runtimeId: string) => Promise<ApiResult>;
+  prefetch_runtime_dependencies: (runtimeId: string) => Promise<ApiResult>;
+  clear_runtime_dependency_cache: (runtimeId: string) => Promise<ApiResult>;
+  open_path: (path: string) => Promise<ApiResult>;
 }
 
 function getApi(): PywebviewApi | null {
@@ -137,6 +142,7 @@ async function callApi<T>(method: string, ...args: any[]): Promise<T> {
 export const api = {
   getRuntimes: () => callApi<Record<string, RuntimeStatus>>('get_runtimes'),
   getRuntimeDefs: () => callApi<RuntimeDef[]>('get_runtime_defs'),
+  getDependencyCacheStates: () => callApi<Record<string, RuntimeDependencyCacheState>>('get_dependency_cache_states'),
   getBestRuntime: () => callApi<string | null>('get_best_runtime'),
   selectRuntime: (id: string) => callApi<ApiResult>('select_runtime', id),
   getSettings: () => callApi<Settings>('get_settings'),
@@ -180,6 +186,9 @@ export const api = {
   initializeRuntime: (runtimeId: string) => callApi<ApiResult>('initialize_runtime', runtimeId),
   installRuntime: (runtimeId: string) => callApi<ApiResult>('install_runtime', runtimeId),
   uninstallRuntime: (runtimeId: string) => callApi<ApiResult>('uninstall_runtime', runtimeId),
+  prefetchRuntimeDependencies: (runtimeId: string) => callApi<ApiResult>('prefetch_runtime_dependencies', runtimeId),
+  clearRuntimeDependencyCache: (runtimeId: string) => callApi<ApiResult>('clear_runtime_dependency_cache', runtimeId),
+  openPath: (path: string) => callApi<ApiResult>('open_path', path),
 };
 
 // Check if pywebview API is available

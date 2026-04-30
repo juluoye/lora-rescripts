@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import threading
 from typing import Any, Dict, List, Optional
 
@@ -14,6 +16,7 @@ from launcher.config import (
 )
 from launcher.core.api_result import ok_result
 from launcher.core.compatibility import build_runtime_compatibility_matrix
+from launcher.core.dependency_cache import get_all_dependency_cache_states
 from launcher.core.runtime_catalog import build_runtime_catalog
 from launcher.core.runtime_coordinator import RuntimeCoordinator
 from launcher.core.gpu import get_gpu_stats
@@ -51,7 +54,7 @@ class Api:
         self._shutting_down = False
         self._close_cleanup_started = False
         self._close_cleanup_lock = threading.Lock()
-        self._update_checker = UpdateChecker(self._repo_root)
+        self._update_checker = UpdateChecker(self._repo_root, settings_provider=self.get_settings)
         self._managed_catalog = ManagedCatalogService(
             repo_root=self._repo_root,
             config_dir=self._config_dir,
@@ -61,6 +64,7 @@ class Api:
         # Initialize language from settings or system
         lang = self._settings.get("language") or detect_system_language()
         set_language(lang)
+        self._sync_proxy_env()
         app_config.load_config()
         self._runtime_coordinator = RuntimeCoordinator(
             repo_root=self._repo_root,
@@ -86,6 +90,10 @@ class Api:
         """Return runtime definitions from the centralized runtime catalog."""
         return build_runtime_catalog(self._repo_root)
 
+    def get_dependency_cache_states(self) -> Dict[str, Dict[str, Any]]:
+        """Return dependency cache status for each runtime."""
+        return get_all_dependency_cache_states(self._repo_root)
+
     def get_best_runtime(self) -> Optional[str]:
         """Auto-select the best available runtime ID."""
         return self._runtime_coordinator.get_best_runtime_id()
@@ -106,6 +114,10 @@ class Api:
             "attention_policy": self._settings.get("attention_policy", "default"),
             "safe_mode": self._settings.get("safe_mode", False),
             "cn_mirror": self._settings.get("cn_mirror", False),
+            "http_proxy": self._settings.get("http_proxy", ""),
+            "https_proxy": self._settings.get("https_proxy", ""),
+            "all_proxy": self._settings.get("all_proxy", ""),
+            "apply_proxy_to_trainer": self._settings.get("apply_proxy_to_trainer", False),
             "host": self._settings.get("host", DEFAULT_HOST),
             "port": self._settings.get("port", DEFAULT_PORT),
             "listen": self._settings.get("listen", False),
@@ -147,6 +159,7 @@ class Api:
                 except (TypeError, ValueError):
                     payload.pop(dimension_key, None)
         self._settings.update_many(payload)
+        self._sync_proxy_env()
         return ok_result("settings.updated", updated_keys=sorted(payload.keys()))
 
     # ------------------------------------------------------------------
@@ -434,6 +447,25 @@ class Api:
         """Remove the runtime environment directory for the selected runtime ID."""
         return self._executor.uninstall_runtime(runtime_id)
 
+    def prefetch_runtime_dependencies(self, runtime_id: str) -> Dict[str, Any]:
+        """Prefetch and cache runtime dependencies for offline or more reliable installation."""
+        return self._executor.prefetch_runtime_dependencies(runtime_id)
+
+    def clear_runtime_dependency_cache(self, runtime_id: str) -> Dict[str, Any]:
+        """Clear the cached dependencies for a runtime."""
+        return self._executor.clear_runtime_dependency_cache(runtime_id)
+
+    def open_path(self, path: str) -> Dict[str, Any]:
+        """Open a local folder path in the system file explorer."""
+        normalized = str(path or "").strip()
+        if not normalized:
+            return {"error": "path is required", "code": "path.required"}
+        try:
+            subprocess.Popen(["explorer.exe", normalized])
+            return ok_result("path.opened", path=normalized)
+        except Exception as exc:
+            return {"error": str(exc), "code": "path.open_failed"}
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -454,6 +486,21 @@ class Api:
             self._window.evaluate_js(js_code)
         except Exception:
             pass
+
+    def _sync_proxy_env(self) -> None:
+        mapping = (
+            ("http_proxy", ("HTTP_PROXY", "http_proxy")),
+            ("https_proxy", ("HTTPS_PROXY", "https_proxy")),
+            ("all_proxy", ("ALL_PROXY", "all_proxy")),
+        )
+        for setting_key, env_keys in mapping:
+            value = str(self._settings.get(setting_key, "") or "").strip()
+            if value:
+                for env_key in env_keys:
+                    os.environ[env_key] = value
+            else:
+                for env_key in env_keys:
+                    os.environ.pop(env_key, None)
 
     def flush_frontend_settings_on_close(self) -> None:
         """Pull the latest frontend settings snapshot before the window closes."""

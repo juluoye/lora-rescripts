@@ -455,6 +455,7 @@ if (-not (Test-PipReady -PythonExe $blackwellPython)) {
 
 Set-Location $repoRoot
 $blackwellExpectedPackages = Get-BlackwellExpectedPackageVersions -Profile $TorchChannel
+$blackwellCacheWheelDir = Join-Path (Get-MikazukiRuntimeDependencyCacheDir -RepoRoot $repoRoot -RuntimeId "blackwell") "blackwell_xformers"
 
 $torchInstallArgs = @()
 $optionalTorchaudioArgs = $null
@@ -491,6 +492,10 @@ else {
         "--extra-index-url", "https://download.pytorch.org/whl/cu128"
     )
 }
+$torchInstallArgs = @($torchInstallArgs[0..4]) + @(Add-MikazukiRuntimeCacheArgs -Args $torchInstallArgs[5..($torchInstallArgs.Count - 1)] -RepoRoot $repoRoot -RuntimeId "blackwell" -ItemIds @("torch_stack"))
+if ($optionalTorchaudioArgs) {
+    $optionalTorchaudioArgs = @($optionalTorchaudioArgs[0..5]) + @(Add-MikazukiRuntimeCacheArgs -Args $optionalTorchaudioArgs[6..($optionalTorchaudioArgs.Count - 1)] -RepoRoot $repoRoot -RuntimeId "blackwell" -ItemIds @("torch_stack"))
+}
 
 Invoke-Step "Upgrading pip tooling for Blackwell environment..." {
     & $blackwellPython -m pip install --upgrade --no-warn-script-location pip "setuptools<81" wheel
@@ -507,7 +512,15 @@ if ($optionalTorchaudioArgs) {
 }
 
 Invoke-Step "Installing project dependencies into $blackwellRuntimeDirName..." {
-    & $blackwellPython -m pip install --upgrade --no-warn-script-location --prefer-binary -r requirements.txt
+    $requirementArgs = @(
+        "--upgrade",
+        "--no-warn-script-location",
+        "--prefer-binary",
+        "-r",
+        "requirements.txt"
+    )
+    $requirementArgs = Add-MikazukiRuntimeCacheArgs -Args $requirementArgs -RepoRoot $repoRoot -RuntimeId "blackwell" -ItemIds @("requirements")
+    & $blackwellPython -m pip install @requirementArgs
 }
 
 Invoke-Step "Re-enabling pkg_resources compatibility for TensorBoard in $blackwellRuntimeDirName..." {
@@ -520,6 +533,12 @@ if (-not (Test-ModulesReady -PythonExe $blackwellPython -Modules $mainRequiredMo
 
 if (-not $SkipXformers) {
     $resolvedWheel = Resolve-XformersWheel -RequestedWheel $XformersWheel -Profile $TorchChannel
+    if ((-not $resolvedWheel) -and (Test-Path $blackwellCacheWheelDir)) {
+        $cachedXformersWheel = Get-ChildItem -LiteralPath $blackwellCacheWheelDir -Filter *.whl -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($cachedXformersWheel) {
+            $resolvedWheel = $cachedXformersWheel.FullName
+        }
+    }
     Invoke-OptionalStep "Removing any existing xformers package..." {
         & $blackwellPython -m pip uninstall -y xformers
     } "Existing xformers cleanup reported a warning. Continuing with fresh install."
@@ -539,7 +558,17 @@ if (-not $SkipXformers) {
     }
     elseif ($AllowOfficialXformersFallback) {
         Invoke-OptionalStep "Installing official xformers wheel as fallback..." {
-            & $blackwellPython -m pip install --upgrade --no-warn-script-location --only-binary xformers --index-url https://download.pytorch.org/whl/cu128 "xformers>=0.0.34"
+            $xformersArgs = @(
+                "--upgrade",
+                "--no-warn-script-location",
+                "--only-binary",
+                "xformers",
+                "--index-url",
+                "https://download.pytorch.org/whl/cu128",
+                "xformers>=0.0.34"
+            )
+            $xformersArgs = Add-MikazukiRuntimeCacheArgs -Args $xformersArgs -RepoRoot $repoRoot -RuntimeId "blackwell" -ItemIds @("blackwell_xformers")
+            & $blackwellPython -m pip install @xformersArgs
         } "Official xformers installation failed. Blackwell users can still use SDPA or install a community cp312 wheel later."
     }
     else {

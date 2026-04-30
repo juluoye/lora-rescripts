@@ -12,7 +12,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener, urlopen
+
+from launcher.core.proxy_utils import build_urllib_proxy_handler
 
 
 def _now_utc() -> datetime:
@@ -308,8 +310,9 @@ class ManagedCatalogService:
             api_key=api_key,
         )
         request = Request(url, headers=headers, method="GET")
+        opener = build_opener(ProxyHandler(build_urllib_proxy_handler(self._settings_provider() or {})))
         try:
-            with urlopen(request, timeout=12) as response:
+            with opener.open(request, timeout=12) as response:
                 body = response.read().decode("utf-8", errors="replace")
                 if not body.strip():
                     return {}
@@ -370,8 +373,9 @@ class ManagedCatalogService:
             api_key=api_key if self._is_same_origin(server_url, remote_url) else "",
         )
         request = Request(remote_url, headers=headers, method="GET")
+        opener = build_opener(ProxyHandler(build_urllib_proxy_handler(self._settings_provider() or {})))
         try:
-            with urlopen(request, timeout=12) as response:
+            with opener.open(request, timeout=12) as response:
                 content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
                 body = response.read()
         except Exception:

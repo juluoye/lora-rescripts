@@ -102,6 +102,57 @@ def resolve_model_source(repo_root: Path, raw_value: str) -> str:
     raise FileNotFoundError(f"YOLO model file not found: {value}")
 
 
+def ensure_resume_does_not_match_model_source(model_source: str, resume_path: str) -> None:
+    if not model_source or not resume_path:
+        return
+
+    model_candidate = Path(model_source).expanduser()
+    resume_candidate = Path(resume_path).expanduser()
+    if not model_candidate.exists() or not resume_candidate.exists():
+        return
+
+    try:
+        if model_candidate.resolve().samefile(resume_candidate.resolve()):
+            raise ValueError(
+                "YOLO resume path must point to a training checkpoint such as last.pt, "
+                "not the same file used as pretrained_model_name_or_path."
+            )
+    except FileNotFoundError:
+        return
+
+
+def ensure_resume_checkpoint_is_resumable(resume_path: str) -> None:
+    if not resume_path:
+        return
+
+    checkpoint = torch.load(resume_path, map_location="cpu")
+    if not isinstance(checkpoint, dict):
+        raise ValueError(
+            "YOLO resume path does not contain resumable training checkpoint metadata. "
+            "Use a training checkpoint such as last.pt instead of a regular exported weight file."
+        )
+
+    epoch = checkpoint.get("epoch")
+    if not isinstance(epoch, int) or epoch < 0:
+        raise ValueError(
+            "YOLO resume path is missing a valid epoch marker. "
+            "Use a training checkpoint such as last.pt instead of a regular exported weight file."
+        )
+
+    train_args = checkpoint.get("train_args")
+    if isinstance(train_args, dict):
+        planned_epochs = train_args.get("epochs")
+        try:
+            planned_epochs = int(planned_epochs)
+        except (TypeError, ValueError):
+            planned_epochs = None
+        if planned_epochs is not None and planned_epochs > 0 and epoch + 1 >= planned_epochs:
+            raise ValueError(
+                f"YOLO resume checkpoint already completed its planned training ({epoch + 1}/{planned_epochs} epochs). "
+                "Clear resume for a new run, or pick an unfinished last.pt checkpoint."
+            )
+
+
 def build_generated_data_yaml(config: dict, config_path: Path, repo_root: Path) -> str:
     train_dir = resolve_path(repo_root, config.get("train_data_dir", ""), must_exist=True, dir_only=True)
 
@@ -295,6 +346,8 @@ def main():
     resume_path = str(config.get("resume", "") or "").strip()
     if resume_path:
         resume_path = resolve_path(repo_root, resume_path, must_exist=True, file_only=True).as_posix()
+        ensure_resume_does_not_match_model_source(model_source, resume_path)
+        ensure_resume_checkpoint_is_resumable(resume_path)
 
     train_args = {
         "data": data_config,

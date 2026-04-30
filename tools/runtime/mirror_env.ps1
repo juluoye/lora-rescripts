@@ -280,6 +280,55 @@ function Test-MikazukiChinaMirrorShouldSkipTorchProbe {
     )
 }
 
+function Add-MikazukiPipResilienceArgs {
+    param(
+        [string[]]$Args
+    )
+
+    $result = @($Args | ForEach-Object { [string]$_ })
+    $joined = " " + (($result -join " ").ToLowerInvariant()) + " "
+
+    if (-not $joined.Contains(" --progress-bar ")) {
+        $result += @("--progress-bar", "off")
+    }
+    if (-not $joined.Contains(" --retries ")) {
+        $result += @("--retries", "8")
+    }
+    if (-not $joined.Contains(" --resume-retries ")) {
+        $result += @("--resume-retries", "8")
+    }
+    if (-not $joined.Contains(" --timeout ")) {
+        $result += @("--timeout", "1000")
+    }
+
+    return ,$result
+}
+
+function Invoke-MikazukiRetryablePipInstall {
+    param(
+        [string]$PythonExe,
+        [string[]]$Args,
+        [string]$Label = "pip install",
+        [int]$MaxAttempts = 3
+    )
+
+    $resolvedArgs = Add-MikazukiPipResilienceArgs -Args $Args
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        if ($attempt -gt 1) {
+            Write-Host -ForegroundColor Yellow "$Label retry $attempt/$MaxAttempts..."
+            Start-Sleep -Seconds ([Math]::Min(10, 2 * $attempt))
+        }
+
+        & $PythonExe -m pip install @resolvedArgs
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -eq 0) {
+            return 0
+        }
+    }
+
+    return $exitCode
+}
+
 function Invoke-MirrorAwarePipInstall {
     param(
         [string]$PythonExe,
@@ -291,8 +340,7 @@ function Invoke-MirrorAwarePipInstall {
     )
 
     if (-not (Test-MikazukiChinaMirrorMode)) {
-        & $PythonExe -m pip install @FallbackArgs
-        return $LASTEXITCODE
+        return Invoke-MikazukiRetryablePipInstall -PythonExe $PythonExe -Args $FallbackArgs -Label $FallbackLabel
     }
 
     if (Test-MikazukiChinaMirrorShouldSkipTorchProbe -FallbackArgs $FallbackArgs) {
@@ -300,18 +348,92 @@ function Invoke-MirrorAwarePipInstall {
             "$MirrorLabel does not currently mirror the requested PyTorch CUDA/nightly wheel channel. " +
             "Skipping the mirror probe and using $FallbackLabel directly while keeping the selected PyPI mirror for other packages."
         )
-        & $PythonExe -m pip install @FallbackArgs
-        return $LASTEXITCODE
+        return Invoke-MikazukiRetryablePipInstall -PythonExe $PythonExe -Args $FallbackArgs -Label $FallbackLabel
     }
 
     Write-Host -ForegroundColor Yellow "Trying $MirrorLabel first..."
-    & $PythonExe -m pip install @MirrorArgs
-    $mirrorExitCode = $LASTEXITCODE
+    $mirrorExitCode = Invoke-MikazukiRetryablePipInstall -PythonExe $PythonExe -Args $MirrorArgs -Label $MirrorLabel
     if ($mirrorExitCode -eq 0 -or $NoFallback) {
         return $mirrorExitCode
     }
 
     Write-Host -ForegroundColor Yellow "$MirrorLabel did not complete successfully. Retrying via $FallbackLabel..."
-    & $PythonExe -m pip install @FallbackArgs
-    return $LASTEXITCODE
+    return Invoke-MikazukiRetryablePipInstall -PythonExe $PythonExe -Args $FallbackArgs -Label $FallbackLabel
+}
+
+function Get-MikazukiDependencyCacheRoot {
+    param(
+        [string]$RepoRoot
+    )
+
+    if ($Env:MIKAZUKI_DEPENDENCY_CACHE_ROOT) {
+        return $Env:MIKAZUKI_DEPENDENCY_CACHE_ROOT
+    }
+
+    return Join-Path $RepoRoot "cache\dependencies"
+}
+
+function Get-MikazukiRuntimeDependencyCacheDir {
+    param(
+        [string]$RepoRoot,
+        [string]$RuntimeId
+    )
+
+    if ($Env:MIKAZUKI_DEPENDENCY_CACHE_DIR) {
+        return $Env:MIKAZUKI_DEPENDENCY_CACHE_DIR
+    }
+
+    return Join-Path (Get-MikazukiDependencyCacheRoot -RepoRoot $RepoRoot) $RuntimeId
+}
+
+function Add-MikazukiCacheFindLinksArgs {
+    param(
+        [string[]]$Args,
+        [string[]]$CacheDirs
+    )
+
+    $result = @($Args | ForEach-Object { [string]$_ })
+    foreach ($cacheDir in $CacheDirs) {
+        if ([string]::IsNullOrWhiteSpace($cacheDir) -or -not (Test-Path $cacheDir)) {
+            continue
+        }
+        $normalized = [System.IO.Path]::GetFullPath($cacheDir)
+        $alreadyPresent = $false
+        for ($i = 0; $i -lt ($result.Count - 1); $i++) {
+            if ($result[$i] -eq "--find-links" -and $result[$i + 1] -eq $normalized) {
+                $alreadyPresent = $true
+                break
+            }
+        }
+        if (-not $alreadyPresent) {
+            $result += @("--find-links", $normalized)
+        }
+    }
+    return ,$result
+}
+
+function Add-MikazukiRuntimeCacheArgs {
+    param(
+        [string[]]$Args,
+        [string]$RepoRoot,
+        [string]$RuntimeId,
+        [string[]]$ItemIds = @()
+    )
+
+    $cacheDirs = New-Object System.Collections.Generic.List[string]
+    $runtimeCacheRoot = Get-MikazukiRuntimeDependencyCacheDir -RepoRoot $RepoRoot -RuntimeId $RuntimeId
+    if ([string]::IsNullOrWhiteSpace($runtimeCacheRoot)) {
+        return ,$Args
+    }
+
+    if ($ItemIds -and $ItemIds.Count -gt 0) {
+        foreach ($itemId in $ItemIds) {
+            $cacheDirs.Add((Join-Path $runtimeCacheRoot $itemId)) | Out-Null
+        }
+    }
+    else {
+        $cacheDirs.Add($runtimeCacheRoot) | Out-Null
+    }
+
+    return Add-MikazukiCacheFindLinksArgs -Args $Args -CacheDirs $cacheDirs.ToArray()
 }

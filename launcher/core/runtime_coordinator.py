@@ -45,11 +45,13 @@ class PreparedInstall:
     statuses: Dict[str, RuntimeStatus]
     status: RuntimeStatus
     cn_mirror: bool
+    proxy_settings: Dict[str, str]
 
     def build_plan(self):
         return build_install_plan(
             runtime_def=self.runtime_def,
             cn_mirror=self.cn_mirror,
+            proxy_settings=self.proxy_settings,
             repo_root=self.repo_root,
         )
 
@@ -75,6 +77,11 @@ class RuntimeCoordinator:
                 "installed": status.installed,
                 "python_path": str(status.python_path) if status.python_path else None,
                 "env_dir": str(status.env_dir) if status.env_dir else None,
+                "integrity_ok": status.integrity_ok,
+                "bootstrap_ready": status.bootstrap_ready,
+                "integrity_issue_code": status.integrity_issue_code,
+                "integrity_message_zh": status.integrity_message_zh,
+                "integrity_message_en": status.integrity_message_en,
                 "status_text": status.status_text,
             }
         return result
@@ -106,6 +113,10 @@ class RuntimeCoordinator:
             runtime_id=runtime_id,
             safe_mode=settings.get("safe_mode", False),
             cn_mirror=settings.get("cn_mirror", False),
+            apply_proxy_to_trainer=settings.get("apply_proxy_to_trainer", False),
+            http_proxy=str(settings.get("http_proxy", "") or ""),
+            https_proxy=str(settings.get("https_proxy", "") or ""),
+            all_proxy=str(settings.get("all_proxy", "") or ""),
             attention_policy=settings.get("attention_policy", "default"),
             host=settings.get("host", DEFAULT_HOST),
             port=settings.get("port", DEFAULT_PORT),
@@ -168,4 +179,9 @@ class RuntimeCoordinator:
             statuses=statuses,
             status=status,
             cn_mirror=resolved_cn_mirror,
+            proxy_settings={
+                "http_proxy": str(self.merge_settings().get("http_proxy", "") or ""),
+                "https_proxy": str(self.merge_settings().get("https_proxy", "") or ""),
+                "all_proxy": str(self.merge_settings().get("all_proxy", "") or ""),
+            },
         )

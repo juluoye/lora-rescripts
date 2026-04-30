@@ -13,6 +13,7 @@ function StatusBadge({ status }: { status: RuntimeStatus }) {
   const statusConfig = {
     installed: { label: t('status_installed'), Icon: CheckCircle2 as React.FC<{ size?: number }> },
     initialized: { label: t('status_initialized'), Icon: AlertCircle as React.FC<{ size?: number }> },
+    broken: { label: t('status_broken'), Icon: XCircle as React.FC<{ size?: number }> },
     partial: { label: t('status_partial'), Icon: AlertCircle as React.FC<{ size?: number }> },
     missing: { label: t('status_missing'), Icon: XCircle as React.FC<{ size?: number }> },
   }[status.status_text] ?? { label: status.status_text, Icon: XCircle as React.FC<{ size?: number }> };
@@ -20,6 +21,7 @@ function StatusBadge({ status }: { status: RuntimeStatus }) {
   const colorMap: Record<string, { bg: string; text: string }> = {
     installed: { bg: 'var(--success-subtle)', text: 'var(--success-text)' },
     initialized: { bg: 'var(--warning-subtle)', text: 'var(--warning-text)' },
+    broken: { bg: 'var(--danger-subtle)', text: 'var(--danger-text)' },
     partial: { bg: 'var(--warning-subtle)', text: 'var(--warning-text)' },
     missing: { bg: 'var(--bg-card)', text: 'var(--text-muted)' },
   };
@@ -100,6 +102,9 @@ export function RuntimePage() {
   const selectedRuntimeName = selectedDef
     ? (language === 'zh' ? selectedDef.name_zh : selectedDef.name_en)
     : null;
+  const selectedIntegrityMessage = selectedStatus
+    ? (language === 'zh' ? selectedStatus.integrity_message_zh : selectedStatus.integrity_message_en)
+    : null;
 
   return (
     <div className="space-y-6 animate-fade-in animate-slide-in-right">
@@ -151,9 +156,21 @@ export function RuntimePage() {
               <div className="text-sm font-medium mt-1" style={{ color: 'var(--text-primary)' }}>{t(`status_${selectedStatus.status_text}`)}</div>
             </div>
             <div className="rounded-xl p-3" style={{ backgroundColor: 'var(--bg-input)', border: '1px solid var(--border-card)' }}>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{t('runtime_integrity_label')}</div>
+              <div className="text-sm font-medium mt-1" style={{ color: selectedStatus.integrity_ok ? 'var(--success-text)' : 'var(--danger-text)' }}>
+                {selectedStatus.integrity_ok ? t('runtime_integrity_ok') : t('runtime_integrity_problem')}
+              </div>
+            </div>
+            <div className="rounded-xl p-3" style={{ backgroundColor: 'var(--bg-input)', border: '1px solid var(--border-card)' }}>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{t('runtime_expected_dirs')}</div>
               <div className="text-xs font-mono mt-1 break-all" style={{ color: 'var(--text-primary)' }}>
                 {selectedDef.env_dir_names.map((name) => `.\\env\\${name}`).join(', ')}
+              </div>
+            </div>
+            <div className="rounded-xl p-3" style={{ backgroundColor: 'var(--bg-input)', border: '1px solid var(--border-card)' }}>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{t('runtime_bootstrap_label')}</div>
+              <div className="text-sm font-medium mt-1" style={{ color: selectedStatus.bootstrap_ready ? 'var(--success-text)' : 'var(--warning-text)' }}>
+                {selectedStatus.bootstrap_ready ? t('runtime_bootstrap_ready') : t('runtime_bootstrap_missing')}
               </div>
             </div>
             <div className="rounded-xl p-3" style={{ backgroundColor: 'var(--bg-input)', border: '1px solid var(--border-card)' }}>
@@ -206,6 +223,16 @@ export function RuntimePage() {
                 <CapabilityTagList tags={selectedDef.capability_tags || []} language={language} />
               </div>
             )}
+            {selectedIntegrityMessage && (
+              <div className="rounded-xl p-3 col-span-2" style={{ backgroundColor: selectedStatus.integrity_ok ? 'var(--bg-input)' : 'var(--danger-subtle)', border: `1px solid ${selectedStatus.integrity_ok ? 'var(--border-card)' : 'var(--danger-border)'}` }}>
+                <div className="text-[11px] mb-2" style={{ color: 'var(--text-muted)' }}>
+                  {t('runtime_integrity_message')}
+                </div>
+                <div className="text-xs leading-relaxed" style={{ color: selectedStatus.integrity_ok ? 'var(--text-secondary)' : 'var(--danger-text)' }}>
+                  {selectedIntegrityMessage}
+                </div>
+              </div>
+            )}
             {(language === 'zh' ? selectedDef.notes_zh : selectedDef.notes_en) && (
               <div className="rounded-xl p-3 col-span-2" style={{ backgroundColor: 'var(--bg-input)', border: '1px solid var(--border-card)' }}>
                 <div className="text-[11px] mb-2" style={{ color: 'var(--text-muted)' }}>
@@ -235,11 +262,13 @@ export function RuntimePage() {
               const capabilityTags = def.capability_tags || [];
               const runtimePathHint = def.env_dir_names.length > 0 ? `.\\env\\${def.env_dir_names[0]}` : '.\\env';
               const isInitialized = status?.status_text === 'initialized';
-              const needsInitialize = !status?.python_exists;
+              const needsInitialize = !status?.python_exists || !status?.integrity_ok || !status?.bootstrap_ready;
               const isInstalled = Boolean(status?.installed);
               const isBusy = isInstalling;
               const installHint = status?.installed
                 ? null
+                : status?.status_text === 'broken'
+                  ? t('install_broken_runtime_hint', { dir: runtimePathHint })
                 : isInitialized
                   ? t('install_ready_runtime_hint')
                   : status?.status_text === 'partial'

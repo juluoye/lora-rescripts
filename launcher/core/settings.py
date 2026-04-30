@@ -16,6 +16,10 @@ _DEFAULTS: Dict[str, Any] = {
     "last_runtime": "standard",
     "safe_mode": False,
     "cn_mirror": False,
+    "http_proxy": "",
+    "https_proxy": "",
+    "all_proxy": "",
+    "apply_proxy_to_trainer": False,
     "attention_policy": "default",  # "default", "prefer_sage", "prefer_flash", "force_sdpa"
     "host": DEFAULT_HOST,
     "port": DEFAULT_PORT,

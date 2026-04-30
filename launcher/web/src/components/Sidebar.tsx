@@ -5,11 +5,11 @@ import {
   Cloud,
   Settings,
   Download,
+  Package,
   Puzzle,
   Terminal,
   Info,
   Globe,
-  HardDrive,
   Sun,
   Moon,
 } from 'lucide-react';
@@ -17,6 +17,7 @@ import { useApp } from '../context/AppContext';
 import { useTranslation } from '../hooks/useTranslation';
 import type { PageId } from '../api/types';
 import { GlobalRunControls } from './GlobalRunControls';
+import launcherLogo from '../../../assets/favicon-launcher.png';
 
 const navItems: { id: PageId; icon: React.ElementType; labelKey: string }[] = [
   { id: 'launch', icon: Play, labelKey: 'launch' },
@@ -24,6 +25,7 @@ const navItems: { id: PageId; icon: React.ElementType; labelKey: string }[] = [
   { id: 'managed', icon: Cloud, labelKey: 'managed' },
   { id: 'advanced', icon: Settings, labelKey: 'advanced' },
   { id: 'install', icon: Download, labelKey: 'install' },
+  { id: 'dependencies', icon: Package, labelKey: 'dependencies' },
   { id: 'extensions', icon: Puzzle, labelKey: 'extension' },
   { id: 'console', icon: Terminal, labelKey: 'console' },
   { id: 'about', icon: Info, labelKey: 'about' },
@@ -58,8 +60,12 @@ export function Sidebar() {
         {/* Logo */}
         <div className="p-8">
           <div className="flex items-center gap-3 mb-2">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center shadow-lg" style={{ background: `linear-gradient(135deg, var(--accent), var(--secondary))`, boxShadow: `0 4px 12px var(--accent-shadow)` }}>
-              <HardDrive size={18} className="text-white" />
+            <div className="w-8 h-8 rounded-lg overflow-hidden shadow-lg" style={{ boxShadow: `0 4px 12px var(--accent-shadow)` }}>
+              <img
+                src={launcherLogo}
+                alt="Launcher"
+                className="w-full h-full object-cover"
+              />
             </div>
             <h1 className="text-lg font-black tracking-tighter" style={{ color: 'var(--text-primary)' }}>SD-reScripts</h1>
           </div>

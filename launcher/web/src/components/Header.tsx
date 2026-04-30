@@ -10,6 +10,7 @@ const pageLabelKeys: Record<PageId, string> = {
   managed: 'managed',
   advanced: 'advanced',
   install: 'install',
+  dependencies: 'dependencies',
   extensions: 'extension',
   console: 'console',
   about: 'about',

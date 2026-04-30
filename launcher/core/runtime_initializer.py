@@ -165,6 +165,13 @@ def initialize_runtime_environment(
         )
         _copy_portable_tree(source_dir, target_dir)
         _clear_install_marker(target_dir)
+    elif current_status and current_status.python_exists and not current_status.integrity_ok:
+        detail = current_status.integrity_message_zh or "运行时骨架不完整。"
+        expected_locations = ", ".join(f".\\env\\{name}" for name in runtime_def.env_dir_names)
+        raise RuntimeError(
+            f"检测到 {runtime_def.name_zh} 目录里已经有 Python，但它本身不完整，无法直接初始化。"
+            f"{detail} 请先用完整的 embeddable Python 覆盖 {expected_locations}，再重新初始化。"
+        )
 
     if not python_path.exists():
         raise RuntimeError(f"初始化后仍未找到 portable Python：{python_path}")

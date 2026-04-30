@@ -28,6 +28,8 @@ import type {
   ManagedConnectionResult,
   ManagedImportState,
   RuntimeInstallQueueState,
+  RuntimeDependencyCacheState,
+  RuntimeDependencyCacheQueueState,
 } from '../api/types';
 
 export type Theme = 'dark' | 'light';
@@ -64,6 +66,8 @@ interface AppState {
   isRunning: boolean;
   isInstalling: boolean;
   installQueue: RuntimeInstallQueueState;
+  dependencyCacheQueue: RuntimeDependencyCacheQueueState;
+  dependencyCacheStates: Record<string, RuntimeDependencyCacheState>;
   lastInstallSummary: InstallSummary | null;
   consoleLines: string[];
   language: string;
@@ -85,6 +89,10 @@ interface AppContextValue extends AppState {
   initializeRuntime: (runtimeId: string) => Promise<ApiResult>;
   installRuntime: (runtimeId: string) => Promise<ApiResult>;
   uninstallRuntime: (runtimeId: string) => Promise<ApiResult>;
+  prefetchRuntimeDependencies: (runtimeId: string) => Promise<ApiResult>;
+  prefetchRuntimeDependenciesBatch: (runtimeIds: string[]) => Promise<ApiResult>;
+  clearRuntimeDependencyCache: (runtimeId: string) => Promise<ApiResult>;
+  refreshDependencyCacheStates: () => Promise<void>;
   installRuntimeBatch: (runtimeIds: string[]) => Promise<ApiResult>;
   refreshUpdateInfo: (force?: boolean) => Promise<void>;
   refreshManagedCatalog: (force?: boolean) => Promise<void>;
@@ -108,6 +116,10 @@ const defaultSettings: Settings = {
   attention_policy: 'default',
   safe_mode: false,
   cn_mirror: false,
+  http_proxy: '',
+  https_proxy: '',
+  all_proxy: '',
+  apply_proxy_to_trainer: false,
   host: '127.0.0.1',
   port: 28000,
   listen: false,
@@ -168,6 +180,16 @@ const defaultInstallQueueState: RuntimeInstallQueueState = {
   requested_runtime_ids: [],
 };
 
+const defaultDependencyCacheStates: Record<string, RuntimeDependencyCacheState> = {};
+const defaultDependencyCacheQueueState: RuntimeDependencyCacheQueueState = {
+  active: false,
+  current_runtime_id: null,
+  pending_runtime_ids: [],
+  completed_runtime_ids: [],
+  failed_runtime_id: null,
+  requested_runtime_ids: [],
+};
+
 const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -196,6 +218,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [isRunning, setIsRunning] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
   const [installQueue, setInstallQueue] = useState<RuntimeInstallQueueState>(defaultInstallQueueState);
+  const [dependencyCacheQueue, setDependencyCacheQueue] = useState<RuntimeDependencyCacheQueueState>(defaultDependencyCacheQueueState);
+  const [dependencyCacheStates, setDependencyCacheStates] = useState<Record<string, RuntimeDependencyCacheState>>(defaultDependencyCacheStates);
   const [lastInstallSummary, setLastInstallSummary] = useState<InstallSummary | null>(null);
   const [consoleLines, setConsoleLines] = useState<string[]>([]);
   const [language, setLanguage] = useState('zh');
@@ -245,9 +269,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const load = async () => {
       try {
-        const [rt, defs, best, st, lang, trans, ver, plug, uiProfileState, recommendation, compatibility, detectedProjectVersion, taskState, history, managed, managedState] = await Promise.all([
+        const [rt, defs, dependencyCaches, best, st, lang, trans, ver, plug, uiProfileState, recommendation, compatibility, detectedProjectVersion, taskState, history, managed, managedState] = await Promise.all([
           api.getRuntimes(),
           api.getRuntimeDefs(),
+          api.getDependencyCacheStates(),
           api.getBestRuntime(),
           api.getSettings(),
           api.getLanguage(),
@@ -270,6 +295,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         setRuntimes(rt);
         setRuntimeDefs(defs);
+        setDependencyCacheStates(dependencyCaches);
         setSettings(normalizedSettings);
         settingsRef.current = normalizedSettings;
         setTheme(effectiveTheme);
@@ -478,7 +504,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           failed_runtime_id: null,
         };
       });
-      if (action === 'install') {
+      if (action === 'install' || action === 'cache') {
         setLastInstallSummary({
           runtimeId: data.runtime_id,
           success: data.success,
@@ -495,15 +521,60 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             ? `[Launcher] Runtime '${data.runtime_id}' initialization completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
             : action === 'uninstall'
               ? `[Launcher] Runtime '${data.runtime_id}' uninstall completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
+              : action === 'cache'
+                ? `[Launcher] Runtime '${data.runtime_id}' dependency cache completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
               : `[Launcher] Runtime '${data.runtime_id}' installation completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
           : action === 'initialize'
             ? `[Launcher] Runtime '${data.runtime_id}' initialization failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`
             : action === 'uninstall'
               ? `[Launcher] Runtime '${data.runtime_id}' uninstall failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`
+              : action === 'cache'
+                ? `[Launcher] Runtime '${data.runtime_id}' dependency cache failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`
               : `[Launcher] Runtime '${data.runtime_id}' installation failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`,
       ]);
 
+      if (action === 'cache') {
+        setDependencyCacheQueue((prev) => {
+          if (!prev.active) {
+            return prev;
+          }
+          const completed = data.success && data.runtime_id
+            ? [...prev.completed_runtime_ids, data.runtime_id]
+            : prev.completed_runtime_ids;
+          const remaining = prev.pending_runtime_ids.filter((item) => item !== data.runtime_id);
+          if (!data.success) {
+            return {
+              ...prev,
+              active: false,
+              current_runtime_id: null,
+              pending_runtime_ids: remaining,
+              completed_runtime_ids: completed,
+              failed_runtime_id: data.runtime_id,
+            };
+          }
+          if (remaining.length === 0) {
+            return {
+              ...prev,
+              active: false,
+              current_runtime_id: null,
+              pending_runtime_ids: [],
+              completed_runtime_ids: completed,
+              failed_runtime_id: null,
+            };
+          }
+          return {
+            ...prev,
+            active: true,
+            current_runtime_id: null,
+            pending_runtime_ids: remaining,
+            completed_runtime_ids: completed,
+            failed_runtime_id: null,
+          };
+        });
+      }
+
       await refreshRuntimes(data.success ? data.runtime_id : null);
+      await refreshDependencyCacheStates();
     })();
   });
 
@@ -579,6 +650,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // ignore
     }
   }, [selectedRuntime]);
+
+  const refreshDependencyCacheStates = useCallback(async () => {
+    try {
+      const states = await api.getDependencyCacheStates();
+      setDependencyCacheStates(states);
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const applyResultNavigation = useCallback((result: ApiResult) => {
     const targetPage = getTargetPageForApiResult(result);
@@ -825,6 +905,54 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [applyResultNavigation]);
 
+  const prefetchRuntimeDependenciesAction = useCallback(async (runtimeId: string) => {
+    setConsoleLines([]);
+    setLastInstallSummary(null);
+    setIsInstalling(true);
+    try {
+      const result = await api.prefetchRuntimeDependencies(runtimeId);
+      applyResultNavigation(result);
+      if (result.error) {
+        setIsInstalling(false);
+        return result;
+      }
+      return result;
+    } catch (e: any) {
+      setIsInstalling(false);
+      return { error: e.message };
+    }
+  }, [applyResultNavigation]);
+
+  const prefetchRuntimeDependenciesBatch = useCallback(async (runtimeIds: string[]) => {
+    const normalized = runtimeIds.filter((item, index, arr) => !!item && arr.indexOf(item) === index);
+    if (normalized.length === 0) {
+      return { error: language === 'zh' ? '没有可缓存的运行时。' : 'No runtimes were selected for dependency caching.' };
+    }
+    if (isInstalling || dependencyCacheQueue.active) {
+      return { error: language === 'zh' ? '已有缓存或安装任务正在进行中。' : 'Another cache or install task is already in progress.' };
+    }
+    setDependencyCacheQueue({
+      active: true,
+      current_runtime_id: null,
+      pending_runtime_ids: normalized,
+      completed_runtime_ids: [],
+      failed_runtime_id: null,
+      requested_runtime_ids: normalized,
+    });
+    return { ok: true, result_code: 'dependency_cache.batch_queued' };
+  }, [dependencyCacheQueue.active, isInstalling, language]);
+
+  const clearRuntimeDependencyCacheAction = useCallback(async (runtimeId: string) => {
+    try {
+      const result = await api.clearRuntimeDependencyCache(runtimeId);
+      applyResultNavigation(result);
+      await refreshDependencyCacheStates();
+      return result;
+    } catch (e: any) {
+      return { error: e.message };
+    }
+  }, [applyResultNavigation, refreshDependencyCacheStates]);
+
   const installRuntimeBatch = useCallback(async (runtimeIds: string[]) => {
     const normalized = runtimeIds.filter((item, index, arr) => !!item && arr.indexOf(item) === index);
     if (normalized.length === 0) {
@@ -879,9 +1007,38 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     const nextRuntimeId = remaining[0];
     const runtimeStatus = runtimes[nextRuntimeId];
-    const nextAction = runtimeStatus?.python_exists ? 'install' : 'initialize';
+    const nextAction = runtimeStatus?.python_exists && runtimeStatus.bootstrap_ready && runtimeStatus.integrity_ok ? 'install' : 'initialize';
     setInstallQueue((prev) => ({ ...prev, current_runtime_id: nextRuntimeId, current_action: nextAction }));
   }, [initializeRuntimeAction, installQueue.active, installQueue.completed_runtime_ids.length, installQueue.current_action, installQueue.current_runtime_id, installQueue.pending_runtime_ids, isInstalling, runtimes, startInstallRuntime]);
+
+  useEffect(() => {
+    if (!dependencyCacheQueue.active) {
+      return;
+    }
+    if (isInstalling) {
+      return;
+    }
+    if (dependencyCacheQueue.current_runtime_id) {
+      const runtimeId = dependencyCacheQueue.current_runtime_id;
+      void prefetchRuntimeDependenciesAction(runtimeId).then((result) => {
+        if (result.error) {
+          setDependencyCacheQueue((prev) => ({
+            ...prev,
+            active: false,
+            current_runtime_id: null,
+            failed_runtime_id: runtimeId,
+          }));
+        }
+      });
+      return;
+    }
+    const remaining = dependencyCacheQueue.pending_runtime_ids.filter((item) => !dependencyCacheQueue.completed_runtime_ids.includes(item));
+    if (remaining.length === 0) {
+      return;
+    }
+    const nextRuntimeId = remaining[0];
+    setDependencyCacheQueue((prev) => ({ ...prev, current_runtime_id: nextRuntimeId }));
+  }, [dependencyCacheQueue.active, dependencyCacheQueue.completed_runtime_ids.length, dependencyCacheQueue.current_runtime_id, dependencyCacheQueue.pending_runtime_ids, isInstalling, prefetchRuntimeDependenciesAction]);
 
   const runUpdater = useCallback(async () => {
     try {
@@ -1034,6 +1191,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     isRunning,
     isInstalling,
     installQueue,
+    dependencyCacheQueue,
+    dependencyCacheStates,
     lastInstallSummary,
     consoleLines,
     language,
@@ -1052,6 +1211,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     initializeRuntime: initializeRuntimeAction,
     installRuntime: installRuntimeAction,
     uninstallRuntime: uninstallRuntimeAction,
+    prefetchRuntimeDependencies: prefetchRuntimeDependenciesAction,
+    prefetchRuntimeDependenciesBatch,
+    clearRuntimeDependencyCache: clearRuntimeDependencyCacheAction,
+    refreshDependencyCacheStates,
     installRuntimeBatch,
     refreshUpdateInfo,
     refreshManagedCatalog,

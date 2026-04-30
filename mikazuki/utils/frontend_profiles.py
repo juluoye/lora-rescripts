@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -233,6 +234,15 @@ def parse_github_repo_url(repo_url: str) -> dict | None:
 
 
 def _http_get_json(url: str) -> dict:
+    proxy_mapping = {}
+    if os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy"):
+        proxy_mapping["http"] = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
+    if os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy"):
+        proxy_mapping["https"] = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    if os.environ.get("ALL_PROXY") or os.environ.get("all_proxy"):
+        proxy_mapping.setdefault("http", os.environ.get("ALL_PROXY") or os.environ.get("all_proxy"))
+        proxy_mapping.setdefault("https", os.environ.get("ALL_PROXY") or os.environ.get("all_proxy"))
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxy_mapping))
     request = urllib.request.Request(
         url,
         headers={
@@ -240,13 +250,22 @@ def _http_get_json(url: str) -> dict:
             "Accept": "application/vnd.github+json",
         },
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
+    with opener.open(request, timeout=30) as response:
         payload = response.read().decode("utf-8")
     data = json.loads(payload)
     return data if isinstance(data, dict) else {}
 
 
 def _download_file(url: str, destination: Path) -> None:
+    proxy_mapping = {}
+    if os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy"):
+        proxy_mapping["http"] = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
+    if os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy"):
+        proxy_mapping["https"] = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    if os.environ.get("ALL_PROXY") or os.environ.get("all_proxy"):
+        proxy_mapping.setdefault("http", os.environ.get("ALL_PROXY") or os.environ.get("all_proxy"))
+        proxy_mapping.setdefault("https", os.environ.get("ALL_PROXY") or os.environ.get("all_proxy"))
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxy_mapping))
     request = urllib.request.Request(
         url,
         headers={
@@ -254,7 +273,7 @@ def _download_file(url: str, destination: Path) -> None:
             "Accept": "application/octet-stream",
         },
     )
-    with urllib.request.urlopen(request, timeout=60) as response, open(destination, "wb") as handle:
+    with opener.open(request, timeout=60) as response, open(destination, "wb") as handle:
         shutil.copyfileobj(response, handle)
 
 

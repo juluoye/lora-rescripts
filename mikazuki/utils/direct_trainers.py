@@ -58,6 +58,46 @@ def _module_available(module_name: str) -> bool:
         return False
 
 
+def _inspect_yolo_resume_checkpoint(resolved_resume: Path) -> Optional[str]:
+    try:
+        import torch
+    except Exception:
+        return None
+
+    try:
+        checkpoint = torch.load(resolved_resume, map_location="cpu")
+    except Exception:
+        return None
+
+    if not isinstance(checkpoint, dict):
+        return (
+            "YOLO resume 路径指向的不是可恢复训练的检查点。"
+            "请填写训练输出目录里的 last.pt，而不是普通导出的模型权重。"
+        )
+
+    epoch = checkpoint.get("epoch")
+    if not isinstance(epoch, int) or epoch < 0:
+        return (
+            "YOLO resume 路径缺少有效的训练进度元数据。"
+            "请填写训练输出目录里的 last.pt，而不是普通导出的模型权重。"
+        )
+
+    train_args = checkpoint.get("train_args")
+    if isinstance(train_args, dict):
+        planned_epochs = train_args.get("epochs")
+        try:
+            planned_epochs = int(planned_epochs)
+        except (TypeError, ValueError):
+            planned_epochs = None
+        if planned_epochs is not None and planned_epochs > 0 and epoch + 1 >= planned_epochs:
+            return (
+                f"YOLO resume 检查点显示该训练已跑完计划轮次（epoch={epoch + 1} / {planned_epochs}）。"
+                "如果要继续新训练，请清空 resume；如果要续训，请改用尚未完成训练的 last.pt。"
+            )
+
+    return None
+
+
 def validate_yolo_runtime_config(config: dict) -> Optional[str]:
     if parse_boolish(config.get("enable_distributed_training")):
         return "当前 YOLO 接入暂不走 Mikazuki 分布式启动。多卡训练请直接使用 GPU 选择或 device 参数交给 Ultralytics 处理。"
@@ -66,6 +106,7 @@ def validate_yolo_runtime_config(config: dict) -> Optional[str]:
         return f"未找到内置 Ultralytics 仓库目录: {YOLO_LOCAL_REPO}"
 
     resume_path = str(config.get("resume", "") or "").strip()
+    model_path = str(config.get("pretrained_model_name_or_path", "") or "").strip()
     if resume_path:
         resolved_resume = Path(resume_path).expanduser()
         if not resolved_resume.is_absolute():
@@ -79,6 +120,25 @@ def validate_yolo_runtime_config(config: dict) -> Optional[str]:
             return f"YOLO resume 路径必须是 .pt / .pth 文件: {resolved_resume}"
         if resolved_resume.suffix.lower() not in {".pt", ".pth"}:
             return f"YOLO resume 路径必须是 .pt / .pth 文件: {resolved_resume}"
+
+        if model_path:
+            try:
+                resolved_model = _resolve_project_path(model_path)
+            except Exception:
+                resolved_model = None
+            if resolved_model is not None and resolved_model.exists():
+                try:
+                    if resolved_model.samefile(resolved_resume):
+                        return (
+                            "YOLO 的 resume 不能和 pretrained_model_name_or_path 指向同一个模型文件。"
+                            "resume 应该填写上一次训练生成的 last.pt 一类检查点，而不是底模或导出的成品权重。"
+                        )
+                except Exception:
+                    pass
+
+        resume_checkpoint_error = _inspect_yolo_resume_checkpoint(resolved_resume)
+        if resume_checkpoint_error:
+            return resume_checkpoint_error
 
     yolo_data_config_path = get_yolo_data_config_path(config)
     if yolo_data_config_path:
@@ -302,6 +362,7 @@ def build_yolo_preflight_summary(
         notes.append(f"YOLO device 参数: {device}")
 
     resume_path = str(payload.get("resume", "") or "").strip()
+    model_path = str(payload.get("pretrained_model_name_or_path", "") or "").strip()
     if resume_path:
         resolved_resume = _resolve_project_path(resume_path)
         if not resolved_resume.exists():
@@ -312,6 +373,23 @@ def build_yolo_preflight_summary(
             errors.append(f"YOLO resume 路径必须是 .pt / .pth 文件: {resolved_resume}")
         else:
             notes.append(f"YOLO resume 检查点: {resolved_resume}")
+            if model_path:
+                try:
+                    resolved_model = _resolve_project_path(model_path)
+                except Exception:
+                    resolved_model = None
+                if resolved_model is not None and resolved_model.exists():
+                    try:
+                        if resolved_model.samefile(resolved_resume):
+                            errors.append(
+                                "YOLO 的 resume 不能和 pretrained_model_name_or_path 指向同一个模型文件。"
+                                "resume 应该填写上一次训练生成的 last.pt 一类检查点，而不是底模或导出的成品权重。"
+                            )
+                    except Exception:
+                        pass
+            resume_checkpoint_error = _inspect_yolo_resume_checkpoint(resolved_resume)
+            if resume_checkpoint_error:
+                errors.append(resume_checkpoint_error)
 
     yolo_data_config_path = get_yolo_data_config_path(payload)
     if yolo_data_config_path:

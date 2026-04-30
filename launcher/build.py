@@ -30,9 +30,9 @@ EXCLUDED_MODULES = [
 
 def build():
     print(f"[Launcher Build] Python: {sys.executable}")
-    icon_path = LAUNCHER_DIR / "assets" / "icon.ico"
+    icon_path = LAUNCHER_DIR / "assets" / "favicon-launcher.ico"
     if not icon_path.exists():
-        fallback_icon = LAUNCHER_DIR / "assets" / "favicon.ico"
+        fallback_icon = LAUNCHER_DIR / "assets" / "favicon-old.ico"
         if fallback_icon.exists():
             icon_path = fallback_icon
     icon_args = [f"--icon={icon_path}"] if icon_path.exists() else []

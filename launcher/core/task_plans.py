@@ -14,6 +14,7 @@ from launcher.config import (
     get_repo_root,
 )
 from launcher.core.runtime_catalog import describe_runtime
+from launcher.core.dependency_cache import get_dependency_cache_root, get_runtime_dependency_cache_dir
 from launcher.core.runtime_tasks import (
     LaunchOptions,
     build_install_commands,
@@ -176,13 +177,56 @@ def _collect_launch_env_changes(runtime_def: RuntimeDef, options: LaunchOptions)
     else:
         changes.append(_clear_change("MIKAZUKI_CN_MIRROR", "未启用国内镜像", "CN mirror disabled"))
 
+    if options.apply_proxy_to_trainer:
+        if options.http_proxy:
+            changes.append(_set_change("HTTP_PROXY", options.http_proxy, "训练器网络代理", "Trainer proxy"))
+            changes.append(_set_change("http_proxy", options.http_proxy, "训练器网络代理", "Trainer proxy"))
+        if options.https_proxy:
+            changes.append(_set_change("HTTPS_PROXY", options.https_proxy, "训练器网络代理", "Trainer proxy"))
+            changes.append(_set_change("https_proxy", options.https_proxy, "训练器网络代理", "Trainer proxy"))
+        if options.all_proxy:
+            changes.append(_set_change("ALL_PROXY", options.all_proxy, "训练器网络代理", "Trainer proxy"))
+            changes.append(_set_change("all_proxy", options.all_proxy, "训练器网络代理", "Trainer proxy"))
+        changes.append(_set_change("NO_PROXY", "127.0.0.1,localhost", "训练器本地直连白名单", "Trainer local bypass"))
+        changes.append(_set_change("no_proxy", "127.0.0.1,localhost", "训练器本地直连白名单", "Trainer local bypass"))
+
     return changes
 
 
-def _collect_install_env_changes(cn_mirror: bool) -> List[Dict[str, Any]]:
+def _collect_install_env_changes(
+    runtime_id: str,
+    cn_mirror: bool,
+    proxy_settings: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    changes: List[Dict[str, Any]] = [
+        _set_change(
+            "MIKAZUKI_DEPENDENCY_CACHE_ROOT",
+            str(get_dependency_cache_root()),
+            "依赖缓存根目录",
+            "Dependency cache root",
+        ),
+        _set_change(
+            "MIKAZUKI_DEPENDENCY_CACHE_DIR",
+            str(get_runtime_dependency_cache_dir(runtime_id)),
+            "运行时依赖缓存目录",
+            "Runtime dependency cache directory",
+        ),
+    ]
+    proxy_settings = proxy_settings or {}
+    for source_key, label_zh, label_en, env_keys in (
+        ("http_proxy", "HTTP 代理", "HTTP proxy", ("HTTP_PROXY", "http_proxy")),
+        ("https_proxy", "HTTPS 代理", "HTTPS proxy", ("HTTPS_PROXY", "https_proxy")),
+        ("all_proxy", "全局代理", "Global proxy", ("ALL_PROXY", "all_proxy")),
+    ):
+        value = str(proxy_settings.get(source_key) or "").strip()
+        if value:
+            for env_key in env_keys:
+                changes.append(_set_change(env_key, value, label_zh, label_en))
     if cn_mirror:
-        return [_set_change("MIKAZUKI_CN_MIRROR", "1", "国内镜像", "CN mirror")]
-    return [_clear_change("MIKAZUKI_CN_MIRROR", "未启用国内镜像", "CN mirror disabled")]
+        changes.append(_set_change("MIKAZUKI_CN_MIRROR", "1", "国内镜像", "CN mirror"))
+    else:
+        changes.append(_clear_change("MIKAZUKI_CN_MIRROR", "未启用国内镜像", "CN mirror disabled"))
+    return changes
 
 
 def build_launch_plan(
@@ -264,6 +308,7 @@ def build_launch_plan(
 def build_install_plan(
     runtime_def: RuntimeDef,
     cn_mirror: bool = False,
+    proxy_settings: Optional[Dict[str, str]] = None,
     repo_root: Optional[Path] = None,
 ) -> TaskPlan:
     """Build a structured install plan for the selected runtime."""
@@ -272,7 +317,7 @@ def build_install_plan(
         repo_root = get_repo_root()
 
     catalog_entry = describe_runtime(runtime_def, repo_root=repo_root)
-    env = build_install_env(cn_mirror)
+    env = build_install_env(runtime_def.id, cn_mirror, proxy_settings)
     raw_commands = build_install_commands(runtime_def, repo_root=repo_root)
 
     commands = [
@@ -323,8 +368,8 @@ def build_install_plan(
                 "id": "apply_install_env",
                 "label_zh": "拼装安装环境变量",
                 "label_en": "Compose install environment",
-                "detail_zh": f"{len(_collect_install_env_changes(cn_mirror))} 项变更",
-                "detail_en": f"{len(_collect_install_env_changes(cn_mirror))} changes",
+                "detail_zh": f"{len(_collect_install_env_changes(runtime_def.id, cn_mirror, proxy_settings))} 项变更",
+                "detail_en": f"{len(_collect_install_env_changes(runtime_def.id, cn_mirror, proxy_settings))} changes",
             },
             {
                 "id": "run_install_scripts",
@@ -335,7 +380,7 @@ def build_install_plan(
             },
         ],
         commands=commands,
-        env_changes=_collect_install_env_changes(cn_mirror),
+        env_changes=_collect_install_env_changes(runtime_def.id, cn_mirror, proxy_settings),
         notes=notes,
         metadata={
             "runtime_name_zh": runtime_def.name_zh,

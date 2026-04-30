@@ -741,6 +741,8 @@ Invoke-Step "Provisioning Python dev files required by Triton..." {
 Set-Location $repoRoot
 $expectedPackages = Get-SageAttentionExpectedPackageVersions -SelectedProfile $Profile
 $resolvedSageAttentionPackage = Resolve-SageAttentionPackage -RequestedPackage $SageAttentionPackage
+$runtimeCacheId = if ($isSageAttention2Runtime) { "sageattention2" } else { "sageattention" }
+$sageAttentionCachePackageDir = Join-Path (Get-MikazukiRuntimeDependencyCacheDir -RepoRoot $repoRoot -RuntimeId $runtimeCacheId) "sageattention"
 $packageSnapshot = Get-SageAttentionInstalledPackageSnapshot -PythonExe $sageAttentionPython
 $mainModulesInstalled = Test-ModulesReady -PythonExe $sageAttentionPython -Modules $mainRequiredModules
 $torchPackagesReady = $packageSnapshot -and
@@ -767,10 +769,12 @@ else {
         )
         if ($Profile -eq "triton-v2") {
             $mirrorArgs = $mirrorArgs + @("torch==2.6.0+cu124", "torchvision==0.21.0+cu124")
+            $mirrorArgs = Add-MikazukiRuntimeCacheArgs -Args $mirrorArgs -RepoRoot $repoRoot -RuntimeId $runtimeCacheId -ItemIds @("torch_stack")
             $fallbackArgs = $mirrorArgs + @("--index-url", "https://download.pytorch.org/whl/cu124")
         }
         else {
             $mirrorArgs = $mirrorArgs + @("torch==2.10.0+cu128", "torchvision==0.25.0+cu128")
+            $mirrorArgs = Add-MikazukiRuntimeCacheArgs -Args $mirrorArgs -RepoRoot $repoRoot -RuntimeId $runtimeCacheId -ItemIds @("torch_stack")
             $fallbackArgs = $mirrorArgs + @("--extra-index-url", "https://download.pytorch.org/whl/cu128")
         }
         Invoke-MirrorAwarePipInstall `
@@ -787,7 +791,15 @@ if ($mainModulesInstalled) {
 }
 else {
     Invoke-Step "Installing project dependencies into $sageAttentionRuntimeDirName..." {
-        & $sageAttentionPython -m pip install --upgrade --no-warn-script-location --prefer-binary -r requirements.txt
+        $requirementArgs = @(
+            "--upgrade",
+            "--no-warn-script-location",
+            "--prefer-binary",
+            "-r",
+            "requirements.txt"
+        )
+        $requirementArgs = Add-MikazukiRuntimeCacheArgs -Args $requirementArgs -RepoRoot $repoRoot -RuntimeId $runtimeCacheId -ItemIds @("requirements")
+        & $sageAttentionPython -m pip install @requirementArgs
     }
 }
 
@@ -804,7 +816,14 @@ if ($tritonPackageReady) {
 }
 else {
     Invoke-Step "Installing Triton runtime for SageAttention..." {
-        & $sageAttentionPython -m pip install --upgrade --no-warn-script-location --prefer-binary $TritonPackage
+        $tritonArgs = @(
+            "--upgrade",
+            "--no-warn-script-location",
+            "--prefer-binary",
+            $TritonPackage
+        )
+        $tritonArgs = Add-MikazukiRuntimeCacheArgs -Args $tritonArgs -RepoRoot $repoRoot -RuntimeId $runtimeCacheId -ItemIds @("triton_runtime")
+        & $sageAttentionPython -m pip install @tritonArgs
     }
 }
 
@@ -815,6 +834,16 @@ else {
     Invoke-OptionalStep "Removing any existing SageAttention package..." {
         & $sageAttentionPython -m pip uninstall -y sageattention
     } "Existing SageAttention cleanup reported a warning. Continuing with fresh install."
+
+    if (($resolvedSageAttentionPackage.Kind -ne "file") -and (Test-Path $sageAttentionCachePackageDir)) {
+        $cachedSageWheel = Get-ChildItem -LiteralPath $sageAttentionCachePackageDir -Filter *.whl -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($cachedSageWheel) {
+            $resolvedSageAttentionPackage = [pscustomobject]@{
+                Kind = "file"
+                Value = $cachedSageWheel.FullName
+            }
+        }
+    }
 
     if ($resolvedSageAttentionPackage.Kind -eq "file") {
         Write-Host -ForegroundColor Yellow "Using SageAttention package file: $($resolvedSageAttentionPackage.Value)"

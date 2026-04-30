@@ -5,6 +5,7 @@ import { RuntimePage } from '../pages/RuntimePage';
 import { ManagedPage } from '../pages/ManagedPage';
 import { AdvancedPage } from '../pages/AdvancedPage';
 import { InstallPage } from '../pages/InstallPage';
+import { DependenciesPage } from '../pages/DependenciesPage';
 import { ExtensionsPage } from '../pages/ExtensionsPage';
 import { ConsolePage } from '../pages/ConsolePage';
 import { AboutPage } from '../pages/AboutPage';
@@ -16,6 +17,7 @@ const pages: Record<PageId, React.ComponentType> = {
   managed: ManagedPage,
   advanced: AdvancedPage,
   install: InstallPage,
+  dependencies: DependenciesPage,
   extensions: ExtensionsPage,
   console: ConsolePage,
   about: AboutPage,

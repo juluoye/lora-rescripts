@@ -22,7 +22,19 @@ if ($requested -like "env\*") {
 
 $requestedKey = $requested.ToLowerInvariant()
 $aliasMap = @{
+    "portable" = @{ Preferred = "python"; Names = @("python") }
+    "flashattention" = @{ Preferred = "python-flashattention"; Names = @("python-flashattention", "python_flashattention") }
+    "blackwell" = @{ Preferred = "python_blackwell"; Names = @("python_blackwell") }
+    "intel-xpu" = @{ Preferred = "python_xpu_intel"; Names = @("python_xpu_intel") }
+    "intel-xpu-sage" = @{ Preferred = "python_xpu_intel_sage"; Names = @("python_xpu_intel_sage") }
+    "rocm-amd" = @{ Preferred = "python_rocm_amd"; Names = @("python_rocm_amd") }
+    "sageattention" = @{ Preferred = "python-sageattention"; Names = @("python-sageattention", "python_sageattention") }
+    "sageattention2" = @{ Preferred = "python-sageattention2"; Names = @("python-sageattention2", "python_sageattention2") }
+    "sagebwd-nvidia" = @{ Preferred = "python_sagebwd_nvidia"; Names = @("python_sagebwd_nvidia", "python-sagebwd-nvidia") }
+    "tageditor" = @{ Preferred = "python_tageditor"; Names = @("python_tageditor") }
     "python" = @{ Preferred = "python"; Names = @("python") }
+    "python-flashattention" = @{ Preferred = "python-flashattention"; Names = @("python-flashattention", "python_flashattention") }
+    "python_flashattention" = @{ Preferred = "python-flashattention"; Names = @("python-flashattention", "python_flashattention") }
     "python_tageditor" = @{ Preferred = "python_tageditor"; Names = @("python_tageditor") }
     "python_blackwell" = @{ Preferred = "python_blackwell"; Names = @("python_blackwell") }
     "python_xpu_intel" = @{ Preferred = "python_xpu_intel"; Names = @("python_xpu_intel") }

@@ -151,6 +151,8 @@ Recommended fix:
 
 Set-Location $repoRoot
 
+$runtimeCacheRoot = Get-MikazukiRuntimeDependencyCacheDir -RepoRoot $repoRoot -RuntimeId "standard"
+
 Invoke-Step "Upgrading pip tooling..." {
     & $pythonExe -m pip install --upgrade --no-warn-script-location pip "setuptools<81" wheel
 }
@@ -163,6 +165,7 @@ Invoke-Step "Installing PyTorch and torchvision (CUDA 12.8 channel)..." {
         "torch==2.10.0+cu128",
         "torchvision==0.25.0+cu128"
     )
+    $mirrorArgs = Add-MikazukiRuntimeCacheArgs -Args $mirrorArgs -RepoRoot $repoRoot -RuntimeId "standard" -ItemIds @("torch_stack")
     $fallbackArgs = $mirrorArgs + @("--extra-index-url", "https://download.pytorch.org/whl/cu128")
     Invoke-MirrorAwarePipInstall `
         -PythonExe $pythonExe `
@@ -180,6 +183,7 @@ Invoke-OptionalStep "Installing xformers (optional)..." {
         "xformers",
         "xformers>=0.0.34"
     )
+    $mirrorArgs = Add-MikazukiRuntimeCacheArgs -Args $mirrorArgs -RepoRoot $repoRoot -RuntimeId "standard" -ItemIds @("xformers")
     $fallbackArgs = $mirrorArgs + @("--index-url", "https://download.pytorch.org/whl/cu128")
     Invoke-MirrorAwarePipInstall `
         -PythonExe $pythonExe `
@@ -190,7 +194,15 @@ Invoke-OptionalStep "Installing xformers (optional)..." {
 } "Optional xformers installation failed. The GUI will still work and training can fall back to SDPA."
 
 Invoke-Step "Installing project dependencies..." {
-    & $pythonExe -m pip install --upgrade --no-warn-script-location --prefer-binary -r requirements.txt
+    $requirementArgs = @(
+        "--upgrade",
+        "--no-warn-script-location",
+        "--prefer-binary",
+        "-r",
+        "requirements.txt"
+    )
+    $requirementArgs = Add-MikazukiRuntimeCacheArgs -Args $requirementArgs -RepoRoot $repoRoot -RuntimeId "standard" -ItemIds @("requirements")
+    & $pythonExe -m pip install @requirementArgs
 }
 
 Invoke-Step "Re-enabling pkg_resources compatibility for TensorBoard..." {

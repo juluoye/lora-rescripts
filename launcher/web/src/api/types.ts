@@ -7,7 +7,12 @@ export interface RuntimeStatus {
   installed: boolean;
   python_path: string | null;
   env_dir: string | null;
-  status_text: 'installed' | 'initialized' | 'partial' | 'missing';
+  integrity_ok: boolean;
+  bootstrap_ready: boolean;
+  integrity_issue_code: string | null;
+  integrity_message_zh: string | null;
+  integrity_message_en: string | null;
+  status_text: 'installed' | 'initialized' | 'broken' | 'partial' | 'missing';
 }
 
 export interface RuntimeDef {
@@ -64,6 +69,10 @@ export interface Settings {
   attention_policy: string;
   safe_mode: boolean;
   cn_mirror: boolean;
+  http_proxy?: string;
+  https_proxy?: string;
+  all_proxy?: string;
+  apply_proxy_to_trainer?: boolean;
   host: string;
   port: number;
   listen: boolean;
@@ -279,17 +288,51 @@ export interface ApiResult {
 export interface InstallDoneEvent {
   runtime_id: string;
   success: boolean;
-  action?: 'install' | 'initialize' | 'uninstall';
+  action?: 'install' | 'initialize' | 'uninstall' | 'cache';
   code?: string;
   result_code?: string;
   error?: string;
   details?: Record<string, unknown>;
 }
 
+export interface DependencyCacheItemState {
+  item_id: string;
+  label_zh: string;
+  label_en: string;
+  kind: 'pip' | 'url';
+  note_zh: string;
+  note_en: string;
+  cached: boolean;
+  file_count: number;
+  bytes: number;
+  updated_at: string | null;
+  cache_dir: string;
+}
+
+export interface RuntimeDependencyCacheState {
+  runtime_id: string;
+  cache_dir: string;
+  cache_exists: boolean;
+  ready: boolean;
+  total_items: number;
+  cached_items: number;
+  total_bytes: number;
+  items: DependencyCacheItemState[];
+}
+
 export interface RuntimeInstallQueueState {
   active: boolean;
   current_runtime_id: string | null;
   current_action: 'initialize' | 'install' | null;
+  pending_runtime_ids: string[];
+  completed_runtime_ids: string[];
+  failed_runtime_id: string | null;
+  requested_runtime_ids: string[];
+}
+
+export interface RuntimeDependencyCacheQueueState {
+  active: boolean;
+  current_runtime_id: string | null;
   pending_runtime_ids: string[];
   completed_runtime_ids: string[];
   failed_runtime_id: string | null;
@@ -445,4 +488,4 @@ export const CATEGORY_ORDER = ['nvidia', 'intel', 'amd'] as const;
 export type RuntimeCategory = (typeof CATEGORY_ORDER)[number];
 
 // Navigation page IDs
-export type PageId = 'launch' | 'runtime' | 'managed' | 'advanced' | 'install' | 'extensions' | 'console' | 'about';
+export type PageId = 'launch' | 'runtime' | 'managed' | 'advanced' | 'install' | 'dependencies' | 'extensions' | 'console' | 'about';

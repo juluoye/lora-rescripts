@@ -85,7 +85,19 @@ def collect_launch_preflight(
         )
     else:
         status = statuses.get(runtime_id)
-        if not status or not status.installed or not status.python_path:
+        if status and status.python_exists and not status.integrity_ok:
+            issues.append(
+                _issue(
+                    "runtime_integrity_broken",
+                    "error",
+                    "运行时环境不完整",
+                    "Runtime Environment Is Incomplete",
+                    f"当前选择的运行时 {runtime_id} 检测到 Python 目录，但骨架不完整：{status.integrity_message_zh or '请先修复环境。'}",
+                    f"The selected runtime {runtime_id} has a Python directory, but its runtime skeleton is incomplete: {status.integrity_message_en or 'Repair the environment first.'}",
+                    action_page="runtime",
+                )
+            )
+        elif not status or not status.installed or not status.python_path:
             issues.append(
                 _issue(
                     "runtime_not_ready",

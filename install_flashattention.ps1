@@ -636,6 +636,7 @@ Ensure-EmbeddedRuntimeRepoBootstrap -RuntimeDir $flashAttentionRuntimeDir
 Set-Location $repoRoot
 $flashAttentionExpectedPackages = Get-FlashAttentionExpectedPackageVersions
 $resolvedWheel = Resolve-FlashAttentionWheel -RequestedWheel $FlashAttentionWheel -PythonExe $flashAttentionPython
+$flashAttentionCacheWheelDir = Join-Path (Get-MikazukiRuntimeDependencyCacheDir -RepoRoot $repoRoot -RuntimeId "flashattention") "flashattention_wheel"
 
 Invoke-Step "Upgrading pip tooling for FlashAttention environment..." {
     & $flashAttentionPython -m pip install --upgrade --no-warn-script-location pip "setuptools<81" wheel
@@ -650,6 +651,7 @@ Invoke-Step "Installing PyTorch and torchvision for FlashAttention environment..
         "torch==2.10.0+cu128",
         "torchvision==0.25.0+cu128"
     )
+    $mirrorArgs = Add-MikazukiRuntimeCacheArgs -Args $mirrorArgs -RepoRoot $repoRoot -RuntimeId "flashattention" -ItemIds @("torch_stack")
     $fallbackArgs = $mirrorArgs + @("--extra-index-url", "https://download.pytorch.org/whl/cu128")
     Invoke-MirrorAwarePipInstall `
         -PythonExe $flashAttentionPython `
@@ -660,7 +662,15 @@ Invoke-Step "Installing PyTorch and torchvision for FlashAttention environment..
 }
 
 Invoke-Step "Installing project dependencies into $flashAttentionRuntimeDirName..." {
-    & $flashAttentionPython -m pip install --upgrade --no-warn-script-location --prefer-binary -r requirements.txt
+    $requirementArgs = @(
+        "--upgrade",
+        "--no-warn-script-location",
+        "--prefer-binary",
+        "-r",
+        "requirements.txt"
+    )
+    $requirementArgs = Add-MikazukiRuntimeCacheArgs -Args $requirementArgs -RepoRoot $repoRoot -RuntimeId "flashattention" -ItemIds @("requirements")
+    & $flashAttentionPython -m pip install @requirementArgs
 }
 
 Invoke-Step "Re-enabling pkg_resources compatibility for TensorBoard in $flashAttentionRuntimeDirName..." {
@@ -674,6 +684,16 @@ if (-not (Test-ModulesReady -PythonExe $flashAttentionPython -Modules @("acceler
 Invoke-OptionalStep "Removing any existing flash-attn package..." {
     & $flashAttentionPython -m pip uninstall -y flash-attn flash_attn
 } "Existing flash-attn cleanup reported a warning. Continuing with fresh install."
+
+if ($resolvedWheel -match '^https?://') {
+    if (Test-Path $flashAttentionCacheWheelDir) {
+        $cachedWheel = Get-ChildItem -LiteralPath $flashAttentionCacheWheelDir -Filter *.whl -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($cachedWheel) {
+            Write-Host -ForegroundColor Yellow "Using cached FlashAttention wheel: $($cachedWheel.FullName)"
+            $resolvedWheel = $cachedWheel.FullName
+        }
+    }
+}
 
 if ($resolvedWheel -match '^https?://') {
     Write-Host -ForegroundColor Yellow "Using FlashAttention wheel URL: $resolvedWheel"

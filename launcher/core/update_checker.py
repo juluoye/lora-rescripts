@@ -12,6 +12,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from launcher.core.proxy_utils import build_urllib_proxy_handler, normalize_proxy_settings
 from launcher.core.versioning import compare_versions, detect_project_version, parse_version_text
 
 
@@ -40,7 +41,7 @@ def _iter_feed_urls() -> Iterable[str]:
     yield DEFAULT_RELEASE_FEED
 
 
-def _fetch_json(url: str, timeout: float = 6.0) -> Any:
+def _fetch_json(url: str, timeout: float = 6.0, proxy_settings: Optional[Dict[str, Any]] = None) -> Any:
     request = urllib.request.Request(
         url,
         headers={
@@ -48,7 +49,8 @@ def _fetch_json(url: str, timeout: float = 6.0) -> Any:
             "Accept": "application/vnd.github+json, application/json",
         },
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler(build_urllib_proxy_handler(proxy_settings)))
+    with opener.open(request, timeout=timeout) as response:
         charset = response.headers.get_content_charset() or "utf-8"
         payload = response.read().decode(charset, errors="replace")
     return json.loads(payload)
@@ -181,7 +183,7 @@ def _pick_latest_release(channel: str, releases: List[Dict[str, Any]]) -> Option
     }
 
 
-def run_updater(repo_root: Path, use_cn_mirror: bool = False) -> Dict[str, Any]:
+def run_updater(repo_root: Path, use_cn_mirror: bool = False, proxy_settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Start the project's existing updater script in a detached process."""
 
     script_name = "update_cn.bat" if use_cn_mirror else "update.bat"
@@ -195,6 +197,20 @@ def run_updater(repo_root: Path, use_cn_mirror: bool = False) -> Dict[str, Any]:
         }
 
     try:
+        env = os.environ.copy()
+        normalized_proxy = normalize_proxy_settings(proxy_settings)
+        for source_key, env_keys in (
+            ("http_proxy", ("HTTP_PROXY", "http_proxy")),
+            ("https_proxy", ("HTTPS_PROXY", "https_proxy")),
+            ("all_proxy", ("ALL_PROXY", "all_proxy")),
+        ):
+            value = normalized_proxy.get(source_key, "")
+            if value:
+                for env_key in env_keys:
+                    env[env_key] = value
+            else:
+                for env_key in env_keys:
+                    env.pop(env_key, None)
         if sys.platform == "win32":
             creationflags = (
                 getattr(subprocess, "DETACHED_PROCESS", 0)
@@ -205,9 +221,10 @@ def run_updater(repo_root: Path, use_cn_mirror: bool = False) -> Dict[str, Any]:
                 cwd=str(repo_root),
                 shell=True,
                 creationflags=creationflags,
+                env=env,
             )
         else:
-            subprocess.Popen([str(script_path)], cwd=str(repo_root), start_new_session=True)
+            subprocess.Popen([str(script_path)], cwd=str(repo_root), start_new_session=True, env=env)
     except Exception as exc:
         return {
             "ok": False,
@@ -229,10 +246,11 @@ def run_updater(repo_root: Path, use_cn_mirror: bool = False) -> Dict[str, Any]:
 class UpdateChecker:
     """Small cached update checker for the launcher process."""
 
-    def __init__(self, repo_root: Path, ttl_seconds: int = 900) -> None:
+    def __init__(self, repo_root: Path, ttl_seconds: int = 900, settings_provider: Optional[callable] = None) -> None:
         self._repo_root = repo_root
         self._ttl_seconds = ttl_seconds
         self._cache: Dict[str, Dict[str, Any]] = {}
+        self._settings_provider = settings_provider
 
     def check(self, channel: str = "stable", force: bool = False) -> Dict[str, Any]:
         channel_name = channel if channel in UPDATE_CHANNELS else "stable"
@@ -260,9 +278,10 @@ class UpdateChecker:
 
         feed_error: Optional[str] = None
         manifest_error: Optional[str] = None
+        proxy_settings = self._settings_provider() if self._settings_provider else None
         for url in _iter_manifest_urls():
             try:
-                payload = _fetch_json(url)
+                payload = _fetch_json(url, proxy_settings=proxy_settings)
                 latest = _pick_latest_from_manifest(channel_name, payload)
                 if latest is None:
                     continue
@@ -294,7 +313,7 @@ class UpdateChecker:
         if result["latest"] is None:
             for url in _iter_feed_urls():
                 try:
-                    payload = _fetch_json(url)
+                    payload = _fetch_json(url, proxy_settings=proxy_settings)
                     releases = _normalize_release_feed(payload)
                     latest = _pick_latest_release(channel_name, releases)
                     result["checked_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
-APP_VERSION = "v1.5.5"
+APP_VERSION = "v1.5.6"
 
 
 def get_repo_root() -> Path:

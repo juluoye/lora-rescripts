@@ -63,6 +63,11 @@ def collect_health_report(
     recommendation = recommend_runtime(statuses, repo_root=repo_root)
     installed_runtime_count = sum(1 for status in statuses.values() if status.installed)
     prepared_runtime_count = sum(1 for status in statuses.values() if status.python_exists)
+    broken_runtime_ids = [
+        runtime_id
+        for runtime_id, status in statuses.items()
+        if status.python_exists and not status.integrity_ok
+    ]
     findings: List[Dict[str, str | None]] = []
 
     gui_path = repo_root / "gui.py"
@@ -206,6 +211,42 @@ def collect_health_report(
                 "把准备好的嵌入式 / 本地 Python 运行时放到对应的 env 目录后再安装。",
                 "Place a prepared embedded/local Python runtime in the expected env folder before installation.",
                 "runtime",
+            )
+        )
+
+    if broken_runtime_ids:
+        checks.append(
+            _check(
+                "runtime_integrity",
+                "fail",
+                "检测到损坏的运行时环境",
+                "Broken runtime environments detected",
+                f"以下运行时目录存在，但骨架不完整：{', '.join(broken_runtime_ids)}",
+                f"The following runtime directories exist, but their runtime skeletons are incomplete: {', '.join(broken_runtime_ids)}",
+            )
+        )
+        findings.append(
+            _finding(
+                "broken_runtime_environment",
+                "critical",
+                "检测到损坏的运行时环境",
+                "Broken runtime environments detected",
+                f"以下运行时目录当前不完整，继续安装或启动很容易直接失败：{', '.join(broken_runtime_ids)}",
+                f"The following runtime directories are incomplete right now, so installation or launch is likely to fail: {', '.join(broken_runtime_ids)}",
+                "用完整的 embeddable Python 重新覆盖对应 env 目录，再重新初始化。",
+                "Replace the affected env directory with a complete embeddable Python runtime, then initialize it again.",
+                "runtime",
+            )
+        )
+    else:
+        checks.append(
+            _check(
+                "runtime_integrity",
+                "pass",
+                "运行时骨架检查通过",
+                "Runtime skeleton check passed",
+                "当前没有检测到损坏的运行时骨架。",
+                "No broken runtime skeletons were detected.",
             )
         )
 

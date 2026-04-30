@@ -197,8 +197,9 @@ export function InstallPage() {
               const status = runtimes[def.id];
               const isInitialized = status?.status_text === 'initialized';
               const isPartial = status?.status_text === 'partial';
+              const isBroken = status?.status_text === 'broken';
               const runtimePathHint = def.env_dir_names.length > 0 ? `.\\env\\${def.env_dir_names[0]}` : '.\\env';
-              const needsInitialize = !status?.python_exists;
+              const needsInitialize = !status?.python_exists || !status?.integrity_ok || !status?.bootstrap_ready;
               const actionLabel = isInstalling
                 ? isInitializingTask
                   ? t('btn_initializing')
@@ -206,7 +207,9 @@ export function InstallPage() {
                 : needsInitialize
                   ? t('btn_initialize')
                   : t('btn_install');
-              const installHint = isInitialized
+              const installHint = isBroken
+                ? t('install_broken_runtime_hint', { dir: runtimePathHint })
+                : isInitialized
                 ? t('install_ready_runtime_hint')
                 : isPartial
                   ? t('install_incomplete_runtime_hint', { dir: runtimePathHint })
@@ -246,7 +249,7 @@ export function InstallPage() {
                           {t('experimental_badge')}
                         </span>
                       )}
-                      {(isInitialized || isPartial) && (
+                      {(isInitialized || isPartial || isBroken) && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--warning-subtle)', color: 'var(--warning-text)', border: '1px solid var(--warning-border)' }}>
                           {t(`status_${status?.status_text || 'partial'}`)}
                         </span>

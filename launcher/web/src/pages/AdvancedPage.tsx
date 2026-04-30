@@ -119,6 +119,37 @@ export function AdvancedPage() {
           />
         </div>
       </div>
+
+      <div className="card-interactive rounded-2xl p-4 space-y-4" style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-card)' }}>
+        <div>
+          <div className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{language === 'zh' ? '代理设置' : 'Proxy Settings'}</div>
+          <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>{t('proxy_desc')}</div>
+        </div>
+
+        <ProxyInput
+          label={t('http_proxy')}
+          value={settings.http_proxy || ''}
+          onChange={(value) => updateSettings({ http_proxy: value })}
+          placeholder="http://127.0.0.1:7890"
+        />
+        <ProxyInput
+          label={t('https_proxy')}
+          value={settings.https_proxy || ''}
+          onChange={(value) => updateSettings({ https_proxy: value })}
+          placeholder="http://127.0.0.1:7890"
+        />
+        <ProxyInput
+          label={t('all_proxy')}
+          value={settings.all_proxy || ''}
+          onChange={(value) => updateSettings({ all_proxy: value })}
+          placeholder="socks5://127.0.0.1:7890"
+        />
+        <ToggleRow
+          label={t('apply_proxy_to_trainer')}
+          checked={!!settings.apply_proxy_to_trainer}
+          onChange={(v) => updateSettings({ apply_proxy_to_trainer: v })}
+        />
+      </div>
     </div>
   );
 }
@@ -177,6 +208,34 @@ function CheckboxRow({
         )}
       </div>
       <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{label}</span>
+    </div>
+  );
+}
+
+function ProxyInput({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <div>
+      <label className="text-xs block mb-2" style={{ color: 'var(--text-muted)' }}>{label}</label>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full rounded-lg px-3 py-2 text-sm font-mono focus:outline-none"
+        style={{ backgroundColor: 'var(--bg-input)', border: '1px solid var(--border-card)', color: 'var(--text-primary)' }}
+        onFocus={(e) => e.currentTarget.style.borderColor = 'var(--accent-border)'}
+        onBlur={(e) => e.currentTarget.style.borderColor = 'var(--border-card)'}
+      />
     </div>
   );
 }
