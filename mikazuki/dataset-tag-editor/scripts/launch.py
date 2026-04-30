@@ -83,6 +83,7 @@ stderr: {result.stderr.decode(encoding="utf8", errors="ignore") if len(result.st
 
 def prepare_environment():
     write_status("preparing_environment", "Checking Python and PyTorch runtime...")
+    torch_command = "pip install -U torch torchvision"
     if cmd_args.opts.force_install_torch is None:
         pass
     elif cmd_args.opts.force_install_torch == "cpu":
