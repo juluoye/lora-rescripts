@@ -282,10 +282,10 @@ function Test-MikazukiChinaMirrorShouldSkipTorchProbe {
 
 function Add-MikazukiPipResilienceArgs {
     param(
-        [string[]]$Args
+        [string[]]$PipArgs
     )
 
-    $result = @($Args | ForEach-Object { [string]$_ })
+    $result = @($PipArgs | ForEach-Object { [string]$_ })
     $joined = " " + (($result -join " ").ToLowerInvariant()) + " "
 
     if (-not $joined.Contains(" --progress-bar ")) {
@@ -307,12 +307,12 @@ function Add-MikazukiPipResilienceArgs {
 function Invoke-MikazukiRetryablePipInstall {
     param(
         [string]$PythonExe,
-        [string[]]$Args,
+        [string[]]$PipArgs,
         [string]$Label = "pip install",
         [int]$MaxAttempts = 3
     )
 
-    $resolvedArgs = Add-MikazukiPipResilienceArgs -Args $Args
+    $resolvedArgs = Add-MikazukiPipResilienceArgs -PipArgs $PipArgs
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         if ($attempt -gt 1) {
             Write-Host -ForegroundColor Yellow "$Label retry $attempt/$MaxAttempts..."
@@ -388,11 +388,11 @@ function Get-MikazukiRuntimeDependencyCacheDir {
 
 function Add-MikazukiCacheFindLinksArgs {
     param(
-        [string[]]$Args,
+        [string[]]$PipArgs,
         [string[]]$CacheDirs
     )
 
-    $result = @($Args | ForEach-Object { [string]$_ })
+    $result = @($PipArgs | ForEach-Object { [string]$_ })
     foreach ($cacheDir in $CacheDirs) {
         if ([string]::IsNullOrWhiteSpace($cacheDir) -or -not (Test-Path $cacheDir)) {
             continue
@@ -414,7 +414,7 @@ function Add-MikazukiCacheFindLinksArgs {
 
 function Add-MikazukiRuntimeCacheArgs {
     param(
-        [string[]]$Args,
+        [string[]]$PipArgs,
         [string]$RepoRoot,
         [string]$RuntimeId,
         [string[]]$ItemIds = @()
@@ -423,7 +423,7 @@ function Add-MikazukiRuntimeCacheArgs {
     $cacheDirs = New-Object System.Collections.Generic.List[string]
     $runtimeCacheRoot = Get-MikazukiRuntimeDependencyCacheDir -RepoRoot $RepoRoot -RuntimeId $RuntimeId
     if ([string]::IsNullOrWhiteSpace($runtimeCacheRoot)) {
-        return ,$Args
+        return ,$PipArgs
     }
 
     if ($ItemIds -and $ItemIds.Count -gt 0) {
@@ -435,5 +435,5 @@ function Add-MikazukiRuntimeCacheArgs {
         $cacheDirs.Add($runtimeCacheRoot) | Out-Null
     }
 
-    return Add-MikazukiCacheFindLinksArgs -Args $Args -CacheDirs $cacheDirs.ToArray()
+    return Add-MikazukiCacheFindLinksArgs -PipArgs $PipArgs -CacheDirs $cacheDirs.ToArray()
 }
