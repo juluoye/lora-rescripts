@@ -97,6 +97,28 @@ setup_logging()
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_cache_latents_runtime_kwargs(args: argparse.Namespace) -> dict:
+    raw_workers = getattr(args, "cache_latents_cpu_workers", None)
+    try:
+        resolved_workers = None if raw_workers in (None, "") else max(0, int(raw_workers))
+    except (TypeError, ValueError):
+        resolved_workers = None
+
+    raw_prefetch = getattr(args, "cache_latents_prefetch_batches", None)
+    try:
+        resolved_prefetch = None if raw_prefetch in (None, "") else max(1, int(raw_prefetch))
+    except (TypeError, ValueError):
+        resolved_prefetch = None
+
+    return {
+        "preprocess_workers": resolved_workers,
+        "prefetch_batches": resolved_prefetch,
+        "disk_cache_format": normalize_latents_disk_cache_format(getattr(args, "latent_cache_disk_format", None)),
+    }
+
+
 import library.train_dataset_util as _train_dataset_state
 import library.train_dataset_util as _train_dataset_util
 import library.train_patch_util as _train_patch_util
@@ -182,26 +204,6 @@ def resolve_dataloader_runtime_kwargs(args: argparse.Namespace, n_workers: int) 
     if resolved_workers > 0:
         kwargs["prefetch_factor"] = prefetch_factor
     return kwargs
-
-
-def resolve_cache_latents_runtime_kwargs(args: argparse.Namespace) -> dict:
-    raw_workers = getattr(args, "cache_latents_cpu_workers", None)
-    try:
-        resolved_workers = None if raw_workers in (None, "") else max(0, int(raw_workers))
-    except (TypeError, ValueError):
-        resolved_workers = None
-
-    raw_prefetch = getattr(args, "cache_latents_prefetch_batches", None)
-    try:
-        resolved_prefetch = None if raw_prefetch in (None, "") else max(1, int(raw_prefetch))
-    except (TypeError, ValueError):
-        resolved_prefetch = None
-
-    return {
-        "preprocess_workers": resolved_workers,
-        "prefetch_batches": resolved_prefetch,
-        "disk_cache_format": normalize_latents_disk_cache_format(getattr(args, "latent_cache_disk_format", None)),
-    }
 
 
 def _build_trilingual_status_pattern(

@@ -6,9 +6,17 @@ function Test-MikazukiChinaMirrorMode {
 function Get-MikazukiChinaMirrorPresets {
     return @(
         [pscustomobject]@{
+            Id = "aliyun"
+            Label = "Aliyun / 阿里云"
+            Description = "Recommended default / 默认推荐"
+            PipIndexUrl = "https://mirrors.aliyun.com/pypi/simple/"
+            PipFindLinks = "https://mirror.sjtu.edu.cn/pytorch-wheels/torch_stable.html"
+            HfEndpoint = "https://hf-mirror.com"
+        },
+        [pscustomobject]@{
             Id = "tsinghua"
             Label = "Tsinghua / 清华"
-            Description = "Recommended default / 默认推荐"
+            Description = "Alternative PyPI mirror / 备用 PyPI 源"
             PipIndexUrl = "https://pypi.tuna.tsinghua.edu.cn/simple"
             PipFindLinks = "https://mirror.sjtu.edu.cn/pytorch-wheels/torch_stable.html"
             HfEndpoint = "https://hf-mirror.com"
@@ -18,14 +26,6 @@ function Get-MikazukiChinaMirrorPresets {
             Label = "USTC / 中科大"
             Description = "Alternative PyPI mirror / 备用 PyPI 源"
             PipIndexUrl = "https://pypi.mirrors.ustc.edu.cn/simple"
-            PipFindLinks = "https://mirror.sjtu.edu.cn/pytorch-wheels/torch_stable.html"
-            HfEndpoint = "https://hf-mirror.com"
-        },
-        [pscustomobject]@{
-            Id = "aliyun"
-            Label = "Aliyun / 阿里云"
-            Description = "Alternative PyPI mirror / 备用 PyPI 源"
-            PipIndexUrl = "https://mirrors.aliyun.com/pypi/simple/"
             PipFindLinks = "https://mirror.sjtu.edu.cn/pytorch-wheels/torch_stable.html"
             HfEndpoint = "https://hf-mirror.com"
         },
@@ -60,7 +60,7 @@ function Get-MikazukiChinaMirrorPresetById {
 }
 
 function Get-MikazukiDefaultChinaMirrorPreset {
-    return Get-MikazukiChinaMirrorPresetById -Id "tsinghua"
+    return Get-MikazukiChinaMirrorPresetById -Id "aliyun"
 }
 
 function Get-MikazukiChinaMirrorConfigPath {
@@ -138,9 +138,17 @@ function Select-MikazukiChinaMirrorPreset {
 
     Write-Host
     Write-Host "China Mirror Source Selection / 国内镜像源选择" -ForegroundColor Cyan
-    Write-Host "首次使用 CN 启动脚本时可选择一个 PyPI 镜像源，直接回车默认使用清华源。" -ForegroundColor DarkGray
+    Write-Host "首次使用 CN 启动脚本时可选择一个 PyPI 镜像源，直接回车默认使用阿里云源。" -ForegroundColor DarkGray
     Write-Host "Git / Hugging Face / PyTorch wheel mirror helpers will stay enabled in CN mode." -ForegroundColor DarkGray
     Write-Host
+
+    $defaultSelection = 1
+    for ($index = 0; $index -lt $presets.Count; $index++) {
+        if ($presets[$index].Id -eq $defaultPreset.Id) {
+            $defaultSelection = $index + 1
+            break
+        }
+    }
 
     for ($index = 0; $index -lt $presets.Count; $index++) {
         $preset = $presets[$index]
@@ -150,7 +158,7 @@ function Select-MikazukiChinaMirrorPreset {
     }
 
     while ($true) {
-        $answer = Read-Host "Select mirror [1]"
+        $answer = Read-Host ("Select mirror [{0}]" -f $defaultSelection)
         if ([string]::IsNullOrWhiteSpace($answer)) {
             return $defaultPreset
         }
@@ -168,7 +176,7 @@ function Select-MikazukiChinaMirrorPreset {
             return $preset
         }
 
-        Write-Host "Invalid selection. Press Enter for Tsinghua, or enter 1-$($presets.Count)." -ForegroundColor Yellow
+        Write-Host ("Invalid selection. Press Enter for {0}, or enter 1-{1}." -f $defaultPreset.Label, $presets.Count) -ForegroundColor Yellow
     }
 }
 

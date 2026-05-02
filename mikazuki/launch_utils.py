@@ -1,3 +1,4 @@
+import json
 import locale
 import os
 import platform
@@ -20,9 +21,102 @@ from mikazuki.utils.runtime_mode import infer_runtime_environment_name, is_amd_r
 
 python_bin = sys.executable
 
+_CHINA_MIRROR_PRESETS = {
+    "aliyun": {
+        "pip_index_url": "https://mirrors.aliyun.com/pypi/simple/",
+        "pip_find_links": "https://mirror.sjtu.edu.cn/pytorch-wheels/torch_stable.html",
+        "hf_endpoint": "https://hf-mirror.com",
+    },
+    "tsinghua": {
+        "pip_index_url": "https://pypi.tuna.tsinghua.edu.cn/simple",
+        "pip_find_links": "https://mirror.sjtu.edu.cn/pytorch-wheels/torch_stable.html",
+        "hf_endpoint": "https://hf-mirror.com",
+    },
+    "ustc": {
+        "pip_index_url": "https://pypi.mirrors.ustc.edu.cn/simple",
+        "pip_find_links": "https://mirror.sjtu.edu.cn/pytorch-wheels/torch_stable.html",
+        "hf_endpoint": "https://hf-mirror.com",
+    },
+    "baidu": {
+        "pip_index_url": "https://mirror.baidu.com/pypi/simple",
+        "pip_find_links": "https://mirror.sjtu.edu.cn/pytorch-wheels/torch_stable.html",
+        "hf_endpoint": "https://hf-mirror.com",
+    },
+}
+
 
 def base_dir_path():
     return Path(__file__).parents[1].absolute()
+
+
+def _resolve_china_mirror_preset_id() -> str:
+    preset_id = str(os.environ.get("MIKAZUKI_CN_MIRROR_PRESET") or "").strip().lower()
+    if preset_id in _CHINA_MIRROR_PRESETS:
+        return preset_id
+
+    config_path = base_dir_path() / "config" / "china_mirror.json"
+    if config_path.exists():
+        try:
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+            saved_id = str(payload.get("selected_id") or "").strip().lower()
+            if saved_id in _CHINA_MIRROR_PRESETS:
+                return saved_id
+        except Exception:
+            pass
+
+    return "aliyun"
+
+
+def _resolve_china_mirror_env_defaults() -> dict[str, str]:
+    preset_id = _resolve_china_mirror_preset_id()
+    preset = _CHINA_MIRROR_PRESETS.get(preset_id, _CHINA_MIRROR_PRESETS["aliyun"])
+    env = {
+        "MIKAZUKI_CN_MIRROR": "1",
+        "MIKAZUKI_CN_MIRROR_PRESET": preset_id,
+        "HF_HOME": "huggingface",
+        "PIP_FIND_LINKS": preset["pip_find_links"],
+        "PIP_INDEX_URL": preset["pip_index_url"],
+        "HF_ENDPOINT": preset["hf_endpoint"],
+        "GIT_TERMINAL_PROMPT": "false",
+    }
+    gitconfig_cn = base_dir_path() / "assets" / "gitconfig-cn"
+    if gitconfig_cn.exists():
+        env["GIT_CONFIG_GLOBAL"] = str(gitconfig_cn)
+    return env
+
+
+def _iter_pip_index_candidates(index_url: Optional[str] = None) -> List[Optional[str]]:
+    candidates: List[Optional[str]] = []
+
+    def add_candidate(value: Optional[str]) -> None:
+        normalized = str(value or "").strip()
+        candidate = normalized or None
+        if candidate not in candidates:
+            candidates.append(candidate)
+
+    explicit_index = str(index_url or "").strip()
+    if explicit_index:
+        add_candidate(explicit_index)
+        return candidates
+
+    env_index = str(os.environ.get("PIP_INDEX_URL") or "").strip()
+    cn_mirror_enabled = os.environ.get("MIKAZUKI_CN_MIRROR", "") == "1"
+    if env_index:
+        add_candidate(env_index)
+    elif not cn_mirror_enabled:
+        add_candidate(None)
+
+    if cn_mirror_enabled:
+        preset_id = _resolve_china_mirror_preset_id()
+        add_candidate(_CHINA_MIRROR_PRESETS.get(preset_id, _CHINA_MIRROR_PRESETS["aliyun"])["pip_index_url"])
+        for candidate_id, preset in _CHINA_MIRROR_PRESETS.items():
+            if candidate_id != preset_id:
+                add_candidate(preset["pip_index_url"])
+        add_candidate("https://pypi.org/simple")
+    elif not env_index:
+        add_candidate(None)
+
+    return candidates
 
 
 def find_windows_git():
@@ -262,12 +356,28 @@ def pip_install(package: str, version: Optional[str] = None, index_url: Optional
     if version:
         package = f"{package}=={version}"
 
-    command = f"install {package}"
+    index_candidates = _iter_pip_index_candidates(index_url)
+    last_error = None
 
-    if index_url:
-        command = f"{command} -i {index_url}"
+    for attempt_index, candidate_index_url in enumerate(index_candidates):
+        command = f"install {package}"
+        if candidate_index_url:
+            command = f"{command} -i {candidate_index_url}"
 
-    run_pip(command, desc=f"Installing {package}", live=live)
+        try:
+            run_pip(command, desc=f"Installing {package}", live=live)
+            return
+        except RuntimeError as exc:
+            last_error = exc
+            if attempt_index >= len(index_candidates) - 1:
+                raise
+
+            current_label = candidate_index_url or "<default>"
+            next_label = index_candidates[attempt_index + 1] or "<default>"
+            log.warning(f"Installing {package} failed via pip index {current_label}, retrying with {next_label}")
+
+    if last_error is not None:
+        raise last_error
 
 
 def check_run(file: str) -> bool:
@@ -307,15 +417,8 @@ def prepare_environment(disable_auto_mirror: bool = True, prepare_onnxruntime: b
 
     if not disable_auto_mirror and not network_gfw_test():
         log.info("use pip & huggingface mirrors")
-        os.environ.setdefault("MIKAZUKI_CN_MIRROR", "1")
-        os.environ.setdefault("HF_HOME", "huggingface")
-        os.environ.setdefault("PIP_FIND_LINKS", "https://mirror.sjtu.edu.cn/pytorch-wheels/torch_stable.html")
-        os.environ.setdefault("PIP_INDEX_URL", "https://pypi.tuna.tsinghua.edu.cn/simple")
-        os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-        os.environ.setdefault("GIT_TERMINAL_PROMPT", "false")
-        gitconfig_cn = base_dir_path() / "assets" / "gitconfig-cn"
-        if gitconfig_cn.exists():
-            os.environ.setdefault("GIT_CONFIG_GLOBAL", str(gitconfig_cn))
+        for key, value in _resolve_china_mirror_env_defaults().items():
+            os.environ.setdefault(key, value)
 
     if not os.environ.get("PATH"):
         os.environ["PATH"] = os.path.dirname(sys.executable)

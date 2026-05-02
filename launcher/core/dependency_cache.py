@@ -28,6 +28,11 @@ _BLACKWELL_XFORMERS_WHEEL_URL = (
 )
 
 _CHINA_MIRROR_PRESETS: Dict[str, Dict[str, str]] = {
+    "aliyun": {
+        "pip_index_url": "https://mirrors.aliyun.com/pypi/simple/",
+        "pip_find_links": "https://mirror.sjtu.edu.cn/pytorch-wheels/torch_stable.html",
+        "hf_endpoint": "https://hf-mirror.com",
+    },
     "tsinghua": {
         "pip_index_url": "https://pypi.tuna.tsinghua.edu.cn/simple",
         "pip_find_links": "https://mirror.sjtu.edu.cn/pytorch-wheels/torch_stable.html",
@@ -35,11 +40,6 @@ _CHINA_MIRROR_PRESETS: Dict[str, Dict[str, str]] = {
     },
     "ustc": {
         "pip_index_url": "https://pypi.mirrors.ustc.edu.cn/simple",
-        "pip_find_links": "https://mirror.sjtu.edu.cn/pytorch-wheels/torch_stable.html",
-        "hf_endpoint": "https://hf-mirror.com",
-    },
-    "aliyun": {
-        "pip_index_url": "https://mirrors.aliyun.com/pypi/simple/",
         "pip_find_links": "https://mirror.sjtu.edu.cn/pytorch-wheels/torch_stable.html",
         "hf_endpoint": "https://hf-mirror.com",
     },
@@ -75,7 +75,7 @@ def get_runtime_dependency_cache_dir(runtime_id: str, repo_root: Optional[Path] 
 
 def _china_mirror_env(repo_root: Path) -> Dict[str, str]:
     config_path = repo_root / "config" / "china_mirror.json"
-    preset_id = "tsinghua"
+    preset_id = "aliyun"
     if config_path.exists():
         try:
             payload = json.loads(config_path.read_text(encoding="utf-8"))
@@ -83,9 +83,9 @@ def _china_mirror_env(repo_root: Path) -> Dict[str, str]:
             if saved_id in _CHINA_MIRROR_PRESETS:
                 preset_id = saved_id
         except Exception:
-            preset_id = "tsinghua"
+            preset_id = "aliyun"
 
-    preset = _CHINA_MIRROR_PRESETS.get(preset_id, _CHINA_MIRROR_PRESETS["tsinghua"])
+    preset = _CHINA_MIRROR_PRESETS.get(preset_id, _CHINA_MIRROR_PRESETS["aliyun"])
     env = {
         "MIKAZUKI_CN_MIRROR": "1",
         "MIKAZUKI_CN_MIRROR_PRESET": preset_id,
