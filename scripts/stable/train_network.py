@@ -20,7 +20,7 @@ from accelerate.utils import set_seed
 from accelerate import Accelerator
 from diffusers import DDPMScheduler
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
-from library import deepspeed_utils, model_util, sai_model_spec, strategy_base, strategy_sd, sai_model_spec
+from library import deepspeed_utils, model_util, sai_model_spec, strategy_base, strategy_sd
 
 import library.train_util as train_util
 import library.train_loop_setup_util as train_loop_setup_util
@@ -335,31 +335,24 @@ class NetworkTrainer:
             logs["norm/avg_combined_norm"] = mean_combined_norm
 
         lrs = lr_scheduler.get_last_lr()
-        for i, lr in enumerate(lrs):
-            if lr_descriptions is not None:
+        if lr_descriptions is not None:
+            for i, lr in enumerate(lrs):
                 lr_desc = lr_descriptions[i]
-            else:
-                idx = i - (0 if args.network_train_unet_only else -1)
-                if idx == -1:
-                    lr_desc = "textencoder"
-                else:
-                    if len(lrs) > 2:
-                        lr_desc = f"group{idx}"
-                    else:
-                        lr_desc = "unet"
+                logs[f"lr/{lr_desc}"] = lr
 
-            logs[f"lr/{lr_desc}"] = lr
-
-            if args.optimizer_type.lower().startswith("DAdapt".lower()) or args.optimizer_type.lower() == "Prodigy".lower():
-                # tracking d*lr value
-                logs[f"lr/d*lr/{lr_desc}"] = (
-                    lr_scheduler.optimizers[-1].param_groups[i]["d"] * lr_scheduler.optimizers[-1].param_groups[i]["lr"]
-                )
-            if (
-                args.optimizer_type.lower().endswith("ProdigyPlusScheduleFree".lower()) and optimizer is not None
-            ):  # tracking d*lr value of unet.
-                logs["lr/d*lr"] = optimizer.param_groups[0]["d"] * optimizer.param_groups[0]["lr"]
+                if args.optimizer_type.lower().startswith("DAdapt".lower()) or args.optimizer_type.lower() == "Prodigy".lower():
+                    # tracking d*lr value
+                    logs[f"lr/d*lr/{lr_desc}"] = (
+                        lr_scheduler.optimizers[-1].param_groups[i]["d"] * lr_scheduler.optimizers[-1].param_groups[i]["lr"]
+                    )
+                if (
+                    args.optimizer_type.lower().endswith("ProdigyPlusScheduleFree".lower()) and optimizer is not None
+                ):  # tracking d*lr value of unet.
+                    logs["lr/d*lr"] = optimizer.param_groups[0]["d"] * optimizer.param_groups[0]["lr"]
         else:
+            if len(lrs) == 0:
+                return logs
+
             idx = 0
             if not args.network_train_unet_only:
                 logs["lr/textencoder"] = float(lrs[0])

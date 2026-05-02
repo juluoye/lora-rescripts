@@ -23,10 +23,11 @@ function Write-Section {
 
 function Get-GitText {
     param(
-        [string[]]$Args
+        [Alias('Args')]
+        [string[]]$GitArgs
     )
 
-    $output = & git @Args 2>$null
+    $output = & git @GitArgs 2>$null
     if ($LASTEXITCODE -ne 0) {
         return $null
     }
@@ -352,16 +353,17 @@ function Invoke-ArchiveOverlayUpdate {
 
 function Invoke-GitDirect {
     param(
-        [string[]]$Args,
+        [Alias('Args')]
+        [string[]]$GitArgs,
         [switch]$AllowFailure
     )
 
-    Write-Host ('git ' + ($Args -join ' ')) -ForegroundColor DarkGray
-    & git @Args
+    Write-Host ('git ' + ($GitArgs -join ' ')) -ForegroundColor DarkGray
+    & git @GitArgs
     $exitCode = $LASTEXITCODE
 
     if ($exitCode -ne 0 -and -not $AllowFailure) {
-        throw "git command failed (exit $exitCode): git $($Args -join ' ')"
+        throw "git command failed (exit $exitCode): git $($GitArgs -join ' ')"
     }
 
     return $exitCode
@@ -369,14 +371,15 @@ function Invoke-GitDirect {
 
 function Invoke-GitMirrorAware {
     param(
-        [string[]]$Args,
+        [Alias('Args')]
+        [string[]]$GitArgs,
         [switch]$AllowFailure
     )
 
     foreach ($mirrorBase in (Get-GitHubMirrorCandidates)) {
         Write-Host ("Trying GitHub mirror: {0}" -f $mirrorBase) -ForegroundColor Yellow
-        Write-Host ('git -c ' + ('"url.{0}.insteadOf=https://github.com/" ' -f $mirrorBase) + ($Args -join ' ')) -ForegroundColor DarkGray
-        & git '-c' ("url.$mirrorBase.insteadOf=https://github.com/") @Args
+        Write-Host ('git -c ' + ('"url.{0}.insteadOf=https://github.com/" ' -f $mirrorBase) + ($GitArgs -join ' ')) -ForegroundColor DarkGray
+        & git '-c' ("url.$mirrorBase.insteadOf=https://github.com/") @GitArgs
         $exitCode = $LASTEXITCODE
         if ($exitCode -eq 0) {
             return 0
@@ -386,20 +389,21 @@ function Invoke-GitMirrorAware {
     }
 
     Write-Host 'Falling back to direct GitHub remote...' -ForegroundColor Yellow
-    return Invoke-GitDirect -Args $Args -AllowFailure:$AllowFailure
+    return Invoke-GitDirect -GitArgs $GitArgs -AllowFailure:$AllowFailure
 }
 
 function Invoke-GitCommand {
     param(
-        [string[]]$Args,
+        [Alias('Args')]
+        [string[]]$GitArgs,
         [switch]$AllowFailure
     )
 
     if ($UseChinaMirror) {
-        return Invoke-GitMirrorAware -Args $Args -AllowFailure:$AllowFailure
+        return Invoke-GitMirrorAware -GitArgs $GitArgs -AllowFailure:$AllowFailure
     }
 
-    return Invoke-GitDirect -Args $Args -AllowFailure:$AllowFailure
+    return Invoke-GitDirect -GitArgs $GitArgs -AllowFailure:$AllowFailure
 }
 
 try {
@@ -413,7 +417,7 @@ try {
 
     Push-Location $repoRoot
     try {
-        $gitRoot = Get-GitText -Args @('rev-parse', '--show-toplevel')
+        $gitRoot = Get-GitText -GitArgs @('rev-parse', '--show-toplevel')
         if (-not $gitRoot) {
             Write-Host 'The current folder is not a Git repository.' -ForegroundColor Yellow
             Write-Host 'Falling back to source archive update from GitHub...' -ForegroundColor Yellow
@@ -433,17 +437,17 @@ try {
             Initialize-MikazukiChinaMirrorMode -RepoRoot $repoRoot -PromptOnFirstUse:$PromptOnFirstUse | Out-Null
         }
 
-        $currentBranch = Get-GitText -Args @('branch', '--show-current')
+        $currentBranch = Get-GitText -GitArgs @('branch', '--show-current')
         if (-not $currentBranch) {
             throw 'Unable to determine the current branch.'
         }
 
-        $remoteName = Get-GitText -Args @('config', '--get', ("branch.{0}.remote" -f $currentBranch))
+        $remoteName = Get-GitText -GitArgs @('config', '--get', ("branch.{0}.remote" -f $currentBranch))
         if (-not $remoteName) {
             $remoteName = 'origin'
         }
 
-        $mergeRef = Get-GitText -Args @('config', '--get', ("branch.{0}.merge" -f $currentBranch))
+        $mergeRef = Get-GitText -GitArgs @('config', '--get', ("branch.{0}.merge" -f $currentBranch))
         $remoteBranch = $currentBranch
         if ($mergeRef -and $mergeRef.StartsWith('refs/heads/')) {
             $remoteBranch = $mergeRef.Substring(11)
@@ -454,7 +458,7 @@ try {
 
         Write-Host ("Tracking: {0}/{1}" -f $remoteName, $remoteBranch) -ForegroundColor Green
 
-        $dirtyStatus = Get-GitText -Args @('status', '--short', '--untracked-files=no')
+        $dirtyStatus = Get-GitText -GitArgs @('status', '--short', '--untracked-files=no')
         if (-not [string]::IsNullOrWhiteSpace($dirtyStatus)) {
             Write-Host 'Tracked local changes detected. The updater will still try a fast-forward pull.' -ForegroundColor Yellow
             Write-Host 'If Git says files would be overwritten, back up or commit those files first.' -ForegroundColor Yellow
@@ -464,17 +468,17 @@ try {
         }
 
         Write-Section 'Fetch'
-        Invoke-GitCommand -Args @('fetch', '--tags', '--prune', $remoteName) | Out-Null
+        Invoke-GitCommand -GitArgs @('fetch', '--tags', '--prune', $remoteName) | Out-Null
 
         Write-Section 'Pull'
-        Invoke-GitCommand -Args @('pull', '--ff-only', $remoteName, $remoteBranch) | Out-Null
+        Invoke-GitCommand -GitArgs @('pull', '--ff-only', $remoteName, $remoteBranch) | Out-Null
 
         Write-Section 'Submodules'
-        Invoke-GitCommand -Args @('submodule', 'sync', '--recursive') | Out-Null
-        Invoke-GitCommand -Args @('submodule', 'update', '--init', '--recursive') | Out-Null
+        Invoke-GitCommand -GitArgs @('submodule', 'sync', '--recursive') | Out-Null
+        Invoke-GitCommand -GitArgs @('submodule', 'update', '--init', '--recursive') | Out-Null
 
-        $headShort = Get-GitText -Args @('rev-parse', '--short', 'HEAD')
-        $headSubject = Get-GitText -Args @('log', '-1', '--pretty=%s')
+        $headShort = Get-GitText -GitArgs @('rev-parse', '--short', 'HEAD')
+        $headSubject = Get-GitText -GitArgs @('log', '-1', '--pretty=%s')
 
         Write-Section 'Done'
         if ($headShort) {

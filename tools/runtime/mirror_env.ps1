@@ -282,6 +282,7 @@ function Test-MikazukiChinaMirrorShouldSkipTorchProbe {
 
 function Add-MikazukiPipResilienceArgs {
     param(
+        [Alias('Args')]
         [string[]]$PipArgs
     )
 
@@ -307,6 +308,7 @@ function Add-MikazukiPipResilienceArgs {
 function Invoke-MikazukiRetryablePipInstall {
     param(
         [string]$PythonExe,
+        [Alias('Args')]
         [string[]]$PipArgs,
         [string]$Label = "pip install",
         [int]$MaxAttempts = 3
@@ -340,7 +342,7 @@ function Invoke-MirrorAwarePipInstall {
     )
 
     if (-not (Test-MikazukiChinaMirrorMode)) {
-        return Invoke-MikazukiRetryablePipInstall -PythonExe $PythonExe -Args $FallbackArgs -Label $FallbackLabel
+        return Invoke-MikazukiRetryablePipInstall -PythonExe $PythonExe -PipArgs $FallbackArgs -Label $FallbackLabel
     }
 
     if (Test-MikazukiChinaMirrorShouldSkipTorchProbe -FallbackArgs $FallbackArgs) {
@@ -348,17 +350,17 @@ function Invoke-MirrorAwarePipInstall {
             "$MirrorLabel does not currently mirror the requested PyTorch CUDA/nightly wheel channel. " +
             "Skipping the mirror probe and using $FallbackLabel directly while keeping the selected PyPI mirror for other packages."
         )
-        return Invoke-MikazukiRetryablePipInstall -PythonExe $PythonExe -Args $FallbackArgs -Label $FallbackLabel
+        return Invoke-MikazukiRetryablePipInstall -PythonExe $PythonExe -PipArgs $FallbackArgs -Label $FallbackLabel
     }
 
     Write-Host -ForegroundColor Yellow "Trying $MirrorLabel first..."
-    $mirrorExitCode = Invoke-MikazukiRetryablePipInstall -PythonExe $PythonExe -Args $MirrorArgs -Label $MirrorLabel
+    $mirrorExitCode = Invoke-MikazukiRetryablePipInstall -PythonExe $PythonExe -PipArgs $MirrorArgs -Label $MirrorLabel
     if ($mirrorExitCode -eq 0 -or $NoFallback) {
         return $mirrorExitCode
     }
 
     Write-Host -ForegroundColor Yellow "$MirrorLabel did not complete successfully. Retrying via $FallbackLabel..."
-    return Invoke-MikazukiRetryablePipInstall -PythonExe $PythonExe -Args $FallbackArgs -Label $FallbackLabel
+    return Invoke-MikazukiRetryablePipInstall -PythonExe $PythonExe -PipArgs $FallbackArgs -Label $FallbackLabel
 }
 
 function Get-MikazukiDependencyCacheRoot {
@@ -388,6 +390,7 @@ function Get-MikazukiRuntimeDependencyCacheDir {
 
 function Add-MikazukiCacheFindLinksArgs {
     param(
+        [Alias('Args')]
         [string[]]$PipArgs,
         [string[]]$CacheDirs
     )
@@ -414,6 +417,7 @@ function Add-MikazukiCacheFindLinksArgs {
 
 function Add-MikazukiRuntimeCacheArgs {
     param(
+        [Alias('Args')]
         [string[]]$PipArgs,
         [string]$RepoRoot,
         [string]$RuntimeId,

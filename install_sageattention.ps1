@@ -769,12 +769,12 @@ else {
         )
         if ($Profile -eq "triton-v2") {
             $mirrorArgs = $mirrorArgs + @("torch==2.6.0+cu124", "torchvision==0.21.0+cu124")
-            $mirrorArgs = Add-MikazukiRuntimeCacheArgs -Args $mirrorArgs -RepoRoot $repoRoot -RuntimeId $runtimeCacheId -ItemIds @("torch_stack")
+            $mirrorArgs = Add-MikazukiRuntimeCacheArgs -PipArgs $mirrorArgs -RepoRoot $repoRoot -RuntimeId $runtimeCacheId -ItemIds @("torch_stack")
             $fallbackArgs = $mirrorArgs + @("--index-url", "https://download.pytorch.org/whl/cu124")
         }
         else {
             $mirrorArgs = $mirrorArgs + @("torch==2.10.0+cu128", "torchvision==0.25.0+cu128")
-            $mirrorArgs = Add-MikazukiRuntimeCacheArgs -Args $mirrorArgs -RepoRoot $repoRoot -RuntimeId $runtimeCacheId -ItemIds @("torch_stack")
+            $mirrorArgs = Add-MikazukiRuntimeCacheArgs -PipArgs $mirrorArgs -RepoRoot $repoRoot -RuntimeId $runtimeCacheId -ItemIds @("torch_stack")
             $fallbackArgs = $mirrorArgs + @("--extra-index-url", "https://download.pytorch.org/whl/cu128")
         }
         Invoke-MirrorAwarePipInstall `
@@ -798,7 +798,7 @@ else {
             "-r",
             "requirements.txt"
         )
-        $requirementArgs = Add-MikazukiRuntimeCacheArgs -Args $requirementArgs -RepoRoot $repoRoot -RuntimeId $runtimeCacheId -ItemIds @("requirements")
+        $requirementArgs = Add-MikazukiRuntimeCacheArgs -PipArgs $requirementArgs -RepoRoot $repoRoot -RuntimeId $runtimeCacheId -ItemIds @("requirements")
         & $sageAttentionPython -m pip install @requirementArgs
     }
 }
@@ -822,7 +822,7 @@ else {
             "--prefer-binary",
             $TritonPackage
         )
-        $tritonArgs = Add-MikazukiRuntimeCacheArgs -Args $tritonArgs -RepoRoot $repoRoot -RuntimeId $runtimeCacheId -ItemIds @("triton_runtime")
+        $tritonArgs = Add-MikazukiRuntimeCacheArgs -PipArgs $tritonArgs -RepoRoot $repoRoot -RuntimeId $runtimeCacheId -ItemIds @("triton_runtime")
         & $sageAttentionPython -m pip install @tritonArgs
     }
 }

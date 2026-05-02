@@ -651,7 +651,7 @@ Invoke-Step "Installing PyTorch and torchvision for FlashAttention environment..
         "torch==2.10.0+cu128",
         "torchvision==0.25.0+cu128"
     )
-    $mirrorArgs = Add-MikazukiRuntimeCacheArgs -Args $mirrorArgs -RepoRoot $repoRoot -RuntimeId "flashattention" -ItemIds @("torch_stack")
+    $mirrorArgs = Add-MikazukiRuntimeCacheArgs -PipArgs $mirrorArgs -RepoRoot $repoRoot -RuntimeId "flashattention" -ItemIds @("torch_stack")
     $fallbackArgs = $mirrorArgs + @("--extra-index-url", "https://download.pytorch.org/whl/cu128")
     Invoke-MirrorAwarePipInstall `
         -PythonExe $flashAttentionPython `
@@ -669,7 +669,7 @@ Invoke-Step "Installing project dependencies into $flashAttentionRuntimeDirName.
         "-r",
         "requirements.txt"
     )
-    $requirementArgs = Add-MikazukiRuntimeCacheArgs -Args $requirementArgs -RepoRoot $repoRoot -RuntimeId "flashattention" -ItemIds @("requirements")
+    $requirementArgs = Add-MikazukiRuntimeCacheArgs -PipArgs $requirementArgs -RepoRoot $repoRoot -RuntimeId "flashattention" -ItemIds @("requirements")
     & $flashAttentionPython -m pip install @requirementArgs
 }
 

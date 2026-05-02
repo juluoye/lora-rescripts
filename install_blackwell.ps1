@@ -492,9 +492,9 @@ else {
         "--extra-index-url", "https://download.pytorch.org/whl/cu128"
     )
 }
-$torchInstallArgs = @($torchInstallArgs[0..4]) + @(Add-MikazukiRuntimeCacheArgs -Args $torchInstallArgs[5..($torchInstallArgs.Count - 1)] -RepoRoot $repoRoot -RuntimeId "blackwell" -ItemIds @("torch_stack"))
+$torchInstallArgs = @($torchInstallArgs[0..4]) + @(Add-MikazukiRuntimeCacheArgs -PipArgs $torchInstallArgs[5..($torchInstallArgs.Count - 1)] -RepoRoot $repoRoot -RuntimeId "blackwell" -ItemIds @("torch_stack"))
 if ($optionalTorchaudioArgs) {
-    $optionalTorchaudioArgs = @($optionalTorchaudioArgs[0..5]) + @(Add-MikazukiRuntimeCacheArgs -Args $optionalTorchaudioArgs[6..($optionalTorchaudioArgs.Count - 1)] -RepoRoot $repoRoot -RuntimeId "blackwell" -ItemIds @("torch_stack"))
+    $optionalTorchaudioArgs = @($optionalTorchaudioArgs[0..5]) + @(Add-MikazukiRuntimeCacheArgs -PipArgs $optionalTorchaudioArgs[6..($optionalTorchaudioArgs.Count - 1)] -RepoRoot $repoRoot -RuntimeId "blackwell" -ItemIds @("torch_stack"))
 }
 
 Invoke-Step "Upgrading pip tooling for Blackwell environment..." {
@@ -519,7 +519,7 @@ Invoke-Step "Installing project dependencies into $blackwellRuntimeDirName..." {
         "-r",
         "requirements.txt"
     )
-    $requirementArgs = Add-MikazukiRuntimeCacheArgs -Args $requirementArgs -RepoRoot $repoRoot -RuntimeId "blackwell" -ItemIds @("requirements")
+    $requirementArgs = Add-MikazukiRuntimeCacheArgs -PipArgs $requirementArgs -RepoRoot $repoRoot -RuntimeId "blackwell" -ItemIds @("requirements")
     & $blackwellPython -m pip install @requirementArgs
 }
 
@@ -567,7 +567,7 @@ if (-not $SkipXformers) {
                 "https://download.pytorch.org/whl/cu128",
                 "xformers>=0.0.34"
             )
-            $xformersArgs = Add-MikazukiRuntimeCacheArgs -Args $xformersArgs -RepoRoot $repoRoot -RuntimeId "blackwell" -ItemIds @("blackwell_xformers")
+            $xformersArgs = Add-MikazukiRuntimeCacheArgs -PipArgs $xformersArgs -RepoRoot $repoRoot -RuntimeId "blackwell" -ItemIds @("blackwell_xformers")
             & $blackwellPython -m pip install @xformersArgs
         } "Official xformers installation failed. Blackwell users can still use SDPA or install a community cp312 wheel later."
     }

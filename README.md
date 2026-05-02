@@ -18,7 +18,7 @@
 
 _✨ Enjoy Stable Diffusion Train！ ✨_
 
-**v1.5.5**
+**v1.5.7**
 
 Fork from 秋葉 `aaaki/lora-scripts`  
 Modify By `Lulynx`
@@ -60,12 +60,12 @@ LoRA & Dreambooth training GUI & scripts preset & one key training environment f
 
 ## Recent Updates
 
-### v1.5.5
+### v1.5.7
 
-- improved Launcher graceful stop flow, duplicate-stop protection, and clearer `Stopping...` task state feedback
-- fixed failed trainer startup leaving task slots occupied and improved Windows stop / kill behavior
-- fixed multiple training issues across Anima, Aesthetic Scorer, and Newbie resume / checkpoint flows
-- hardened community UI installation with safer GitHub validation, manifest handling, and zip extraction checks
+- added a dependency cache manager with prefetch, batch caching, progress, ETA, and install-time cache reuse
+- added global proxy settings plus optional trainer-side proxy inheritance for downloads and preflight flows
+- fixed shared runtime install/update scripts dropping pip or git arguments, which could break runtime setup
+- fixed several training and tooling regressions, including SD3 log output cleanup and Dataset Tag Editor torch bootstrap fallback
 
 ## ✨ NEW: SD-reScripts Launcher
 

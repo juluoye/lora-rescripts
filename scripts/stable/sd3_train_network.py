@@ -6,13 +6,13 @@ from typing import Any, Optional, Union
 
 import torch
 from accelerate import Accelerator
-from library import sd3_models, strategy_sd3, utils
+from library import sd3_models
 from library.device_utils import init_ipex, clean_memory_on_device
 from library.safetensors_utils import load_safetensors
 
 init_ipex()
 
-from library import flux_models, flux_train_utils, flux_utils, sd3_train_utils, sd3_utils, strategy_base, strategy_sd3, train_util
+from library import flux_train_utils, flux_utils, sd3_train_utils, sd3_utils, strategy_base, strategy_sd3, train_util
 import train_network
 from library.utils import setup_logging
 
@@ -319,7 +319,7 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
         latents,
         batch,
         text_encoder_conds,
-        unet: flux_models.Flux,
+        unet: sd3_models.MMDiT,
         network,
         weight_dtype,
         train_unet,
@@ -455,8 +455,8 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
         # drop cached text encoder outputs: in validation, we drop cached outputs deterministically by fixed seed
         text_encoder_outputs_list = batch.get("text_encoder_outputs_list", None)
         if text_encoder_outputs_list is not None:
-            text_encodoing_strategy: strategy_sd3.Sd3TextEncodingStrategy = strategy_base.TextEncodingStrategy.get_strategy()
-            text_encoder_outputs_list = text_encodoing_strategy.drop_cached_text_encoder_outputs(*text_encoder_outputs_list)
+            text_encoding_strategy: strategy_sd3.Sd3TextEncodingStrategy = strategy_base.TextEncodingStrategy.get_strategy()
+            text_encoder_outputs_list = text_encoding_strategy.drop_cached_text_encoder_outputs(*text_encoder_outputs_list)
             batch["text_encoder_outputs_list"] = text_encoder_outputs_list
 
     def on_validation_step_end(self, args, accelerator, network, text_encoders, unet, batch, weight_dtype):
