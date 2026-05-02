@@ -29,9 +29,7 @@ def create_network(
         network_alpha = 1.0
 
     # train LLM adapter
-    train_llm_adapter = kwargs.get("train_llm_adapter", "false")
-    if train_llm_adapter is not None:
-        train_llm_adapter = True if train_llm_adapter.lower() == "true" else False
+    train_llm_adapter = _parse_bool_arg(kwargs.get("train_llm_adapter", None), default=False)
 
     exclude_patterns = kwargs.get("exclude_patterns", None)
     if exclude_patterns is None:
@@ -637,3 +635,4 @@ class LoRANetwork(torch.nn.Module):
             norms.append(scalednorm.item())
 
         return keys_scaled, sum(norms) / len(norms), max(norms)
+

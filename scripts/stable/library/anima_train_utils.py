@@ -2,7 +2,7 @@
 
 import argparse
 import importlib
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from functools import lru_cache
 import gc
 import math
@@ -1111,7 +1111,8 @@ def apply_opt_channels_last_for_anima(args: argparse.Namespace, *named_models):
     return applied
 
 
-_ANIMA_PADDING_MASK_CACHE: dict[tuple[str, str, int, int, int, bool], torch.Tensor] = {}
+ANIMA_PADDING_MASK_CACHE_MAX_ENTRIES = 32
+_ANIMA_PADDING_MASK_CACHE: OrderedDict[tuple[str, str, int, int, int, bool], torch.Tensor] = OrderedDict()
 
 
 def get_cached_anima_padding_mask(
@@ -1130,7 +1131,11 @@ def get_cached_anima_padding_mask(
         if use_channels_last:
             cached = cached.contiguous(memory_format=torch.channels_last)
         _ANIMA_PADDING_MASK_CACHE[key] = cached
+        _ANIMA_PADDING_MASK_CACHE.move_to_end(key)
+        while len(_ANIMA_PADDING_MASK_CACHE) > ANIMA_PADDING_MASK_CACHE_MAX_ENTRIES:
+            _ANIMA_PADDING_MASK_CACHE.popitem(last=False)
     else:
+        _ANIMA_PADDING_MASK_CACHE.move_to_end(key)
         cached.zero_()
     return cached
 
@@ -1859,3 +1864,4 @@ def _sample_image_inference(
         import wandb
 
         wandb_tracker.log({f"sample_{i}": wandb.Image(image, caption=prompt)}, commit=False)
+

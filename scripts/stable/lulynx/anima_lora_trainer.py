@@ -1085,11 +1085,14 @@ class AnimaNetworkTrainer:
         anima_train_utils.run_vae_roundtrip_self_check(args, accelerator, vae, train_dataset_group, vae_dtype)
 
         if cache_latents:
-            vae.to(accelerator.device, dtype=vae_dtype)
-            vae.requires_grad_(False)
-            train_dataset_group.new_cache_latents(vae, accelerator)
-            vae.to("cpu")
-            clean_memory_on_device(accelerator.device)
+            try:
+                vae.to(accelerator.device, dtype=vae_dtype)
+                vae.requires_grad_(False)
+                train_dataset_group.new_cache_latents(vae, accelerator)
+            finally:
+                vae.to("cpu")
+                clean_memory_on_device(accelerator.device)
+                accelerator.wait_for_everyone()
             accelerator.wait_for_everyone()
 
         logger.info(f"Loading Anima DiT model with attn_mode={args.attn_mode}, split_attn: {args.split_attn}...")
@@ -2054,3 +2057,4 @@ def setup_parser() -> argparse.ArgumentParser:
         help="[Deprecated] use 'skip_cache_check' instead",
     )
     return parser
+

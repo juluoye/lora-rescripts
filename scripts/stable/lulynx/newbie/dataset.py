@@ -61,6 +61,29 @@ def read_cached_caption_length(cache_path: Path) -> int | None:
         return None
 
 
+
+
+def _cache_has_required_keys(cache_path: Path, required_keys: tuple[str, ...]) -> bool:
+    if not cache_path.exists():
+        return False
+    if safe_open is None:
+        return True
+
+    try:
+        with safe_open(str(cache_path), framework="pt", device="cpu") as handle:
+            keys = set(handle.keys())
+            return all(key in keys for key in required_keys)
+    except Exception:
+        return False
+
+
+def has_valid_newbie_latents_cache(cache_path: Path) -> bool:
+    return _cache_has_required_keys(cache_path, ("latents", "width", "height"))
+
+
+def has_valid_newbie_text_cache(cache_path: Path) -> bool:
+    return _cache_has_required_keys(cache_path, ("cap_feats", "cap_mask", "clip_text_pooled"))
+
 def read_image_size(image_path: Path) -> tuple[int, int]:
     with Image.open(image_path) as image:
         return int(image.width), int(image.height)
@@ -203,8 +226,8 @@ def discover_training_records(
                 caption_length=caption_length,
                 caption_length_bucket=caption_bucket_key(caption_length, caption_length_bucket_size),
                 repeats=repeats,
-                has_latents_cache=latents_cache_path.exists(),
-                has_text_cache=text_cache_path.exists(),
+                has_latents_cache=has_valid_newbie_latents_cache(latents_cache_path),
+                has_text_cache=has_valid_newbie_text_cache(text_cache_path),
             )
         )
 

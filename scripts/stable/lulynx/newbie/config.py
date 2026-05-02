@@ -121,6 +121,13 @@ def _parse_resolution(raw_value: Any) -> tuple[int, int]:
     return 1024, 1024
 
 
+
+
+def _require_multiple_of(label: str, value: int, step: int) -> int:
+    if int(value) % int(step) != 0:
+        raise NewbieConfigError(f"{label} 必须是 {step} 的倍数，当前值: {value}")
+    return int(value)
+
 def _parse_string_list(raw_value: Any) -> list[str] | None:
     if raw_value is None:
         return None
@@ -491,6 +498,8 @@ def load_newbie_runtime_config(config_path: str | Path) -> tuple[NewbieRuntimeCo
     resolution_width, resolution_height = _parse_resolution(
         _lookup_config_value(raw, "resolution", default="1024,1024")
     )
+    _require_multiple_of("Newbie 训练分辨率宽度", resolution_width, 8)
+    _require_multiple_of("Newbie 训练分辨率高度", resolution_height, 8)
     if resolution_width != resolution_height:
         warnings.append(
             "Newbie 当前内部目标分辨率仍按最大边对齐做规划；非正方形训练会继续走 bucket，但模型侧会优先按最大边估算 token 压力。"
@@ -614,6 +623,21 @@ def load_newbie_runtime_config(config_path: str | Path) -> tuple[NewbieRuntimeCo
     )
     lokr_train_norm = _parse_bool(_lookup_config_value(raw, "lokr_train_norm", default=False), False)
 
+    min_bucket_reso = _parse_int(_lookup_config_value(raw, "min_bucket_reso", default=256), 256, minimum=64)
+    max_bucket_reso = _parse_int(_lookup_config_value(raw, "max_bucket_reso", default=2048), 2048, minimum=64)
+    bucket_reso_step = _parse_int(
+        _lookup_config_value(raw, "bucket_reso_steps", "bucket_reso_step", default=64),
+        64,
+        minimum=8,
+    )
+    _require_multiple_of("Newbie min_bucket_reso", min_bucket_reso, 8)
+    _require_multiple_of("Newbie max_bucket_reso", max_bucket_reso, 8)
+    _require_multiple_of("Newbie bucket_reso_step", bucket_reso_step, 8)
+    if max_bucket_reso < min_bucket_reso:
+        raise NewbieConfigError(
+            f"Newbie max_bucket_reso 不能小于 min_bucket_reso：{max_bucket_reso} < {min_bucket_reso}"
+        )
+
     config = NewbieRuntimeConfig(
         config_path=resolved_config,
         repo_root=repo_root,
@@ -633,13 +657,9 @@ def load_newbie_runtime_config(config_path: str | Path) -> tuple[NewbieRuntimeCo
         resolution_width=resolution_width,
         resolution_height=resolution_height,
         enable_bucket=_parse_bool(_lookup_config_value(raw, "enable_bucket", default=True), True),
-        min_bucket_reso=_parse_int(_lookup_config_value(raw, "min_bucket_reso", default=256), 256, minimum=64),
-        max_bucket_reso=_parse_int(_lookup_config_value(raw, "max_bucket_reso", default=2048), 2048, minimum=64),
-        bucket_reso_step=_parse_int(
-            _lookup_config_value(raw, "bucket_reso_steps", "bucket_reso_step", default=64),
-            64,
-            minimum=8,
-        ),
+        min_bucket_reso=min_bucket_reso,
+        max_bucket_reso=max_bucket_reso,
+        bucket_reso_step=bucket_reso_step,
         dataloader_num_workers=_parse_int(_lookup_config_value(raw, "dataloader_num_workers", default=DEFAULT_DATALOADER_WORKERS), DEFAULT_DATALOADER_WORKERS, minimum=0),
         train_batch_size=_parse_int(_lookup_config_value(raw, "train_batch_size", default=1), 1, minimum=1),
         gradient_accumulation_steps=_parse_int(
@@ -716,8 +736,8 @@ def load_newbie_runtime_config(config_path: str | Path) -> tuple[NewbieRuntimeCo
         newbie_safe_fallback=_parse_bool(_lookup_config_value(raw, "newbie_safe_fallback", default=True), True),
         enable_preview=_parse_bool(_lookup_config_value(raw, "enable_preview", default=False), False),
         lulynx_experimental_core_enabled=_parse_bool(
-            _lookup_config_value(raw, "lulynx_experimental_core_enabled", default=False),
-            False,
+            _lookup_config_value(raw, "lulynx_experimental_core_enabled", default=True),
+            True,
         ),
         lulynx_lisa_enabled=_parse_bool(
             _lookup_config_value(raw, "lulynx_lisa_enabled", default=False),

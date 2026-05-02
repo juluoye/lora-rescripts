@@ -274,15 +274,16 @@ def train(args):
     anima_train_utils.apply_opt_channels_last_for_anima(args, ("Anima VAE", vae))
 
     if cache_latents:
-        vae.to(accelerator.device, dtype=weight_dtype)
-        vae.requires_grad_(False)
-        vae.eval()
+        try:
+            vae.to(accelerator.device, dtype=weight_dtype)
+            vae.requires_grad_(False)
+            vae.eval()
 
-        train_dataset_group.new_cache_latents(vae, accelerator)
-
-        vae.to("cpu")
-        clean_memory_on_device(accelerator.device)
-        accelerator.wait_for_everyone()
+            train_dataset_group.new_cache_latents(vae, accelerator)
+        finally:
+            vae.to("cpu")
+            clean_memory_on_device(accelerator.device)
+            accelerator.wait_for_everyone()
 
     # Load DiT (MiniTrainDIT + optional LLM Adapter)
     logger.info("Loading Anima DiT...")
@@ -1203,4 +1204,5 @@ if __name__ == "__main__":
         args.attn_mode = "torch"  # backward compatibility
 
     train(args)
+
 

@@ -50,12 +50,12 @@ class NewbieTrainer:
             warnings.append(
                 "检测到部分 caption 估计长度超过当前 Gemma token 上限；后续缓存/编码阶段应主动裁剪或分桶，避免被长文本拖大联合序列。"
             )
-        if not self.config.use_cache:
-            warnings.append("当前 stable Newbie wrapper 暂不支持 use_cache=false；请先开启 use_cache。")
-        if not self.config.newbie_two_phase_execution:
-            warnings.append("当前 stable Newbie wrapper 暂不支持关闭两阶段执行；请保持 newbie_two_phase_execution=true。")
         if self.config.enable_preview:
             warnings.append("当前 stable Newbie wrapper 暂不支持训练中预览；请先关闭 enable_preview。")
+        if not self.config.use_cache:
+            notes.append("已请求 use_cache=false：stable wrapper 会为本次训练生成临时 cache 文件，并在训练完成后清理本次新增 cache。")
+        if not self.config.newbie_two_phase_execution:
+            notes.append("已请求关闭两阶段执行：stable wrapper 会在同一进程内连续执行 cache 与 train。")
         if self.config.peak_vram_control_enabled:
             notes.append(
                 "已启用显存峰值控制："
@@ -106,41 +106,24 @@ class NewbieTrainer:
     ) -> list[NewbieExecutionPhase]:
         phases: list[NewbieExecutionPhase] = []
 
-        if not self.config.use_cache:
-            phases.append(
-                NewbieExecutionPhase(
-                    name="cache",
-                    enabled=False,
-                    reason="当前配置关闭 cache。",
-                    notes=["stable wrapper 当前不会在 use_cache=false 时继续执行任何训练阶段。"],
-                )
-            )
-            phases.append(
-                NewbieExecutionPhase(
-                    name="train",
-                    enabled=False,
-                    reason="当前 stable Newbie wrapper 暂不支持 use_cache=false。",
-                    notes=["请先开启 use_cache，或等待后续接入真实 no-cache 训练分支。"],
-                )
-            )
-            notes.append("execution phases: none (use_cache=false is not supported by the stable wrapper yet)")
-            return phases
-
-        cache_needed = self.config.use_cache and (
-            self.config.newbie_rebuild_cache or not dataset_report.cache_complete
-        )
+        transient_cache_mode = not self.config.use_cache
+        cache_needed = self.config.newbie_rebuild_cache or transient_cache_mode or not dataset_report.cache_complete
         phases.append(
             NewbieExecutionPhase(
                 name="cache",
                 enabled=cache_needed,
                 reason=(
-                    "cache 缺失或显式要求重建，先单独执行编码缓存阶段。"
-                    if cache_needed
-                    else "缓存完整，跳过独立 cache 阶段。"
+                    "use_cache=false 已启用兼容模式；仍会先生成本次训练所需的临时 cache。"
+                    if transient_cache_mode
+                    else (
+                        "cache 缺失或显式要求重建，先单独执行编码缓存阶段。"
+                        if cache_needed
+                        else "缓存完整，跳过独立 cache 阶段。"
+                    )
                 ),
                 notes=[
                     "将 Gemma / Jina CLIP / VAE 与正式训练阶段解耦，避免把首次缓存峰值叠到训练峰值上。"
-                ],
+                ] + (["本次新增 cache 文件会在训练结束后清理。"] if transient_cache_mode else []),
             )
         )
 
@@ -152,6 +135,8 @@ class NewbieTrainer:
             train_notes.append("context_refiner / noise_refiner 规划纳入额外 checkpointing。")
         if self.config.newbie_force_cache_only:
             train_notes.append("force_cache_only 已开启；正式训练阶段不应回退到 no-cache 编码路径。")
+        if not self.config.newbie_two_phase_execution:
+            train_notes.append("two_phase 已关闭；cache 与 train 会在同一次脚本执行中串行完成。")
 
         phases.append(
             NewbieExecutionPhase(
@@ -230,4 +215,3 @@ class NewbieTrainer:
                 lines.append(f"  - {note}")
 
         return lines
-

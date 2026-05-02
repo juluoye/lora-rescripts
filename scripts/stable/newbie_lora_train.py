@@ -26,6 +26,39 @@ def _configure_runtime_environment(config) -> None:
             )
 
 
+def _snapshot_existing_cache_paths(records) -> set[Path]:
+    existing_paths: set[Path] = set()
+    for record in records:
+        for cache_path in (record.latents_cache_path, record.text_cache_path):
+            if cache_path.exists():
+                existing_paths.add(cache_path)
+    return existing_paths
+
+
+def _cleanup_transient_cache_paths(existing_paths: set[Path], records) -> int:
+    removed = 0
+    seen_paths: set[Path] = set()
+    for record in records:
+        for cache_path in (record.latents_cache_path, record.text_cache_path):
+            if cache_path in seen_paths or cache_path in existing_paths or not cache_path.exists():
+                continue
+            seen_paths.add(cache_path)
+            try:
+                cache_path.unlink()
+                removed += 1
+            except OSError as exc:
+                print(f'[newbie][warn] failed to remove transient cache file: {cache_path} ({exc})')
+    return removed
+
+
+def _write_cache_failure_report(config, failure_messages: list[str]) -> Path:
+    output_dir = Path(config.output_dir).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report_path = output_dir / f'newbie-cache-failures-{os.getpid()}.log'
+    report_path.write_text('\n'.join(failure_messages), encoding='utf-8')
+    return report_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description='Prototype Lulynx Newbie trainer shell. This is a new trainer branch and does not reuse the upstream monolithic training script.'
@@ -143,64 +176,63 @@ def main() -> None:
         print('[newbie] inspection-only run completed.')
         return
 
-    if not config.use_cache:
-        raise RuntimeError(
-            'Current stable Newbie wrapper does not support use_cache=false yet. '
-            'Please enable use_cache or wait for a true no-cache training path.'
-        )
-    if not config.newbie_two_phase_execution:
-        raise RuntimeError(
-            'Current stable Newbie wrapper does not support disabling two-phase execution yet. '
-            'Please keep newbie_two_phase_execution enabled.'
-        )
     if config.enable_preview:
         raise RuntimeError(
             'Current stable Newbie wrapper does not support in-training preview yet. '
             'Please disable enable_preview.'
         )
 
-    if args.phase in {'cache', 'full'}:
-        print(f'[newbie] running cache phase on device={args.device} ...')
-        cache_summary = cache_missing_newbie_records(
-            config=config,
-            records=preparation.dataset.records,
-            device=args.device,
-        )
-        print(
-            '[newbie-cache] '
-            f'total={cache_summary.total_records} '
-            f'latent_generated={cache_summary.generated_latent_cache} '
-            f'text_generated={cache_summary.generated_text_cache} '
-            f'skipped={cache_summary.skipped_complete_cache} '
-            f'failed={cache_summary.failed_records}'
-        )
-        for failure in cache_summary.failure_messages[:20]:
-            print(f'[newbie-cache][error] {failure}')
-        if cache_summary.failed_records > 0 and config.newbie_force_cache_only:
-            raise RuntimeError(
-                'Newbie cache phase did not complete successfully while force_cache_only is enabled. '
-                'Please resolve the cache errors above before entering the train phase.'
+    transient_cache_paths = _snapshot_existing_cache_paths(preparation.dataset.records) if not config.use_cache else None
+
+    try:
+        if args.phase in {'cache', 'full'}:
+            print(f'[newbie] running cache phase on device={args.device} ...')
+            cache_summary = cache_missing_newbie_records(
+                config=config,
+                records=preparation.dataset.records,
+                device=args.device,
             )
-        if args.phase == 'cache':
+            print(
+                '[newbie-cache] '
+                f'total={cache_summary.total_records} '
+                f'latent_generated={cache_summary.generated_latent_cache} '
+                f'text_generated={cache_summary.generated_text_cache} '
+                f'skipped={cache_summary.skipped_complete_cache} '
+                f'failed={cache_summary.failed_records}'
+            )
+            for failure in cache_summary.failure_messages[:20]:
+                print(f'[newbie-cache][error] {failure}')
+            if cache_summary.failed_records > 0:
+                report_path = _write_cache_failure_report(config, cache_summary.failure_messages)
+                print(f'[newbie-cache] full failure report: {report_path}')
+            if cache_summary.failed_records > 0 and config.newbie_force_cache_only:
+                raise RuntimeError(
+                    'Newbie cache phase did not complete successfully while force_cache_only is enabled. '
+                    'Please resolve the cache errors above before entering the train phase.'
+                )
+            if args.phase == 'cache':
+                return
+
+        if args.phase in {'train', 'full'}:
+            print('[newbie] running train phase ...')
+            result = NewbieCachedTrainer(config).train()
+            print(
+                '[newbie-train] '
+                f'global_step={result.global_step} '
+                f'completed_epochs={result.completed_epochs} '
+                f'last_loss={result.last_loss:.6f} '
+                f'trainable_params={result.trainable_params} '
+                f'total_params={result.total_params} '
+                f'saved_adapter={result.saved_adapter_path}'
+            )
             return
 
-    if args.phase in {'train', 'full'}:
-        print('[newbie] running train phase ...')
-        result = NewbieCachedTrainer(config).train()
-        print(
-            '[newbie-train] '
-            f'global_step={result.global_step} '
-            f'completed_epochs={result.completed_epochs} '
-            f'last_loss={result.last_loss:.6f} '
-            f'trainable_params={result.trainable_params} '
-            f'total_params={result.total_params} '
-            f'saved_adapter={result.saved_adapter_path}'
-        )
-        return
-
-    raise ValueError(f'Unsupported phase: {args.phase}')
+        raise ValueError(f'Unsupported phase: {args.phase}')
+    finally:
+        if transient_cache_paths is not None:
+            removed = _cleanup_transient_cache_paths(transient_cache_paths, preparation.dataset.records)
+            print(f'[newbie] cleaned transient cache files: removed={removed}')
 
 
 if __name__ == '__main__':
     main()
-
