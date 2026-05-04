@@ -21,7 +21,7 @@ export interface RuntimeDef {
   name_en: string;
   desc_zh: string;
   desc_en: string;
-  category: 'nvidia' | 'intel' | 'amd';
+  category: 'nvidia' | 'nvidia_frontier' | 'intel' | 'amd';
   experimental: boolean;
   preferred_runtime: string;
   python_rel_path: string;
@@ -484,7 +484,7 @@ export interface ManagedImportState {
 }
 
 // Category labels
-export const CATEGORY_ORDER = ['nvidia', 'intel', 'amd'] as const;
+export const CATEGORY_ORDER = ['nvidia', 'nvidia_frontier', 'intel', 'amd'] as const;
 export type RuntimeCategory = (typeof CATEGORY_ORDER)[number];
 
 // Navigation page IDs

@@ -131,7 +131,8 @@ def run_image_resize_job(raw_config: Mapping[str, object]) -> dict[str, object]:
         "Starting lulynx image preprocessor: "
         f"input={input_dir} output={output_dir or '[in-place]'} "
         f"format={payload.get('format', 'ORIGINAL')} resize={payload.get('enable_resize', True)} "
-        f"mode={payload.get('resize_mode', 'fit')} recursive={payload.get('recursive', False)}"
+        f"mode={payload.get('resize_mode', 'fit')} rename_mode={payload.get('rename_mode', 'legacy_suffix')} "
+        f"recursive={payload.get('recursive', False)}"
     )
     log.info(
         "开始执行 lulynx 图像预处理："
@@ -139,6 +140,7 @@ def run_image_resize_job(raw_config: Mapping[str, object]) -> dict[str, object]:
         f"输出格式={payload.get('format', 'ORIGINAL')}，"
         f"启用缩放={payload.get('enable_resize', True)}，"
         f"模式={payload.get('resize_mode', 'fit')}，"
+        f"命名模式={payload.get('rename_mode', 'legacy_suffix')}，"
         f"递归处理={payload.get('recursive', False)}"
     )
 

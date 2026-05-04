@@ -123,6 +123,13 @@ class PreparedTrainingComponents(typing.NamedTuple):
     lr_scheduler: Any
 
 
+def _tqdm_log(message: str) -> None:
+    try:
+        tqdm.write(message)
+    except Exception:
+        logger.info(message)
+
+
 class ExperimentalAttentionStepProfiler:
     SECTION_ORDER = (
         "forward",
@@ -298,8 +305,8 @@ class ExperimentalAttentionStepProfiler:
             parts.append(f"attention_stats={attention_delta}")
             parts_zh.append(f"attention统计={attention_delta}")
 
-        logger.info(f"{self.route_label} step timing window @ step {global_step}: " + " | ".join(parts))
-        logger.info(f"{self.route_label} 步骤耗时窗口统计 @ step {global_step}：" + " | ".join(parts_zh))
+        _tqdm_log(f"{self.route_label} step timing window @ step {global_step}: " + " | ".join(parts))
+        _tqdm_log(f"{self.route_label} 步骤耗时窗口统计 @ step {global_step}：" + " | ".join(parts_zh))
 
 
 class NetworkTrainer:

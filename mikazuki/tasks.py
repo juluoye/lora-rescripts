@@ -431,6 +431,23 @@ class TaskManager:
             return "not-found"
         return task.request_terminate()
 
+    def remove_task(self, task_id: str) -> str:
+        with self._tasks_lock:
+            task = self.tasks.get(task_id)
+            if task is None:
+                return "not-found"
+            if task.is_active():
+                return "running"
+            del self.tasks[task_id]
+        return "removed"
+
+    def clear_finished_tasks(self) -> int:
+        with self._tasks_lock:
+            removable_ids = [task_id for task_id, task in self.tasks.items() if not task.is_active()]
+            for task_id in removable_ids:
+                del self.tasks[task_id]
+        return len(removable_ids)
+
     def wait_for_process(self, task_id: str):
         with self._tasks_lock:
             task = self.tasks.get(task_id)

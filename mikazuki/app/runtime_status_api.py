@@ -84,6 +84,22 @@ async def get_tasks() -> APIResponse:
     })
 
 
+@router.delete("/tasks", response_model_exclude_none=True)
+async def clear_tasks() -> APIResponse:
+    deleted = tm.clear_finished_tasks()
+    return APIResponseSuccess(message="Task history cleared / 任务历史已清空。", data={"deleted": deleted})
+
+
+@router.delete("/tasks/{task_id}", response_model_exclude_none=True)
+async def delete_task(task_id: str) -> APIResponse:
+    result = tm.remove_task(task_id)
+    if result == "not-found":
+        return APIResponseFail(message="Task not found")
+    if result == "running":
+        return APIResponseFail(message="Task is still running and cannot be deleted / 任务仍在运行，无法删除。")
+    return APIResponseSuccess(message="Task deleted / 任务已删除。", data={"task_id": task_id})
+
+
 @router.get("/backend/status", response_model_exclude_none=True)
 async def get_backend_status() -> APIResponse:
     return APIResponseSuccess(data=read_backend_status())

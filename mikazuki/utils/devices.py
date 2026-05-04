@@ -152,7 +152,7 @@ def _should_log_sdpa_cutless_reassurance(torch_module, attention_summary: dict, 
 
 def _log_sdpa_cutless_reassurance() -> None:
     log.info(
-        "SDPA已切换到cutless线路,并做了shim优化,效率接近甚至超过xformers,请放心使用,如果不放心可以对比测试"
+        "SDPA已切换到cutlass线路,并做了shim优化,效率接近甚至超过xformers,请放心使用,如果不放心可以对比测试"
     )
 
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
-APP_VERSION = "v1.5.8"
+APP_VERSION = "v1.5.9"
 
 
 def get_repo_root() -> Path:
@@ -45,7 +45,7 @@ class RuntimeDef:
     install_scripts: Tuple[str, ...] = ()  # filenames in repo root
     attention_policy_default: str = ""  # if this runtime forces an attention policy
     experimental: bool = False  # show "experimental" badge
-    category: str = "nvidia"  # nvidia, intel, amd
+    category: str = "nvidia"  # nvidia, nvidia_frontier, intel, amd
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +111,7 @@ RUNTIMES: List[RuntimeDef] = [
         env_dir_names=("python_blackwell",),
         env_vars={"MIKAZUKI_BLACKWELL_STARTUP": "1"},
         install_scripts=("install_blackwell.ps1",),
-        category="nvidia",
+        category="nvidia_frontier",
     ),
     RuntimeDef(
         id="sageattention-blackwell",
@@ -126,7 +126,7 @@ RUNTIMES: List[RuntimeDef] = [
             "MIKAZUKI_BLACKWELL_STARTUP": "1",
         },
         install_scripts=("install_blackwell.ps1", "install_sageattention.ps1"),
-        category="nvidia",
+        category="nvidia_frontier",
     ),
     RuntimeDef(
         id="intel-xpu",

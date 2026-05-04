@@ -23,6 +23,22 @@ def _json_error(message: str, status_code: int = 400) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"status": "error", "message": message})
 
 
+def _load_local_task_history() -> list[dict]:
+    ensure_ui_state_root()
+    try:
+        tasks = json.loads(TASK_HISTORY_FILE.read_text(encoding="utf-8")) if TASK_HISTORY_FILE.exists() else []
+    except Exception:
+        tasks = []
+    if not isinstance(tasks, list):
+        return []
+    return [item for item in tasks if isinstance(item, dict)]
+
+
+def _save_local_task_history(tasks: list[dict]) -> None:
+    ensure_ui_state_root()
+    TASK_HISTORY_FILE.write_text(json.dumps(tasks, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 @router.get("/config/saved_params")
 async def get_saved_params() -> APIResponse:
     saved_params = app_config["saved_params"]
@@ -153,16 +169,8 @@ async def rename_saved_config(request: Request):
 
 @router.api_route("/local/task_history", methods=["GET", "POST", "DELETE"])
 async def manage_local_task_history(request: Request):
-    ensure_ui_state_root()
-
     if request.method == "GET":
-        try:
-            tasks = json.loads(TASK_HISTORY_FILE.read_text(encoding="utf-8")) if TASK_HISTORY_FILE.exists() else []
-            if not isinstance(tasks, list):
-                tasks = []
-        except Exception:
-            tasks = []
-        return APIResponseSuccess(data={"tasks": tasks})
+        return APIResponseSuccess(data={"tasks": _load_local_task_history()})
 
     if request.method == "DELETE":
         if TASK_HISTORY_FILE.exists():
@@ -180,5 +188,21 @@ async def manage_local_task_history(request: Request):
     if not isinstance(tasks, list):
         return _json_error("tasks 必须是数组。")
 
-    TASK_HISTORY_FILE.write_text(json.dumps(tasks, ensure_ascii=False, indent=2), encoding="utf-8")
+    _save_local_task_history([item for item in tasks if isinstance(item, dict)])
     return APIResponseSuccess()
+
+
+@router.delete("/local/task_history/{task_id}")
+async def delete_local_task_history_item(task_id: str):
+    task_id = str(task_id or "").strip()
+    if not task_id:
+        return _json_error("task_id 不能为空。")
+
+    tasks = _load_local_task_history()
+    remaining = [item for item in tasks if str(item.get("id", "") or "") != task_id]
+    deleted = len(tasks) - len(remaining)
+    if deleted <= 0:
+        return _json_error("任务历史不存在。", status_code=404)
+
+    _save_local_task_history(remaining)
+    return APIResponseSuccess(data={"deleted": deleted, "task_id": task_id})

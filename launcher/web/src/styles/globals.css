@@ -303,3 +303,91 @@ Utility animations (existing)
 .animate-fade-in {
   animation: fadeIn 0.3s ease-out;
 }
+
+@keyframes launcherBootSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes launcherBootPulse {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes launcherBootGridDrift {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(24px, 18px, 0);
+  }
+}
+
+@keyframes launcherBootShimmer {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+.launcher-boot-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 32px 32px;
+  animation: launcherBootGridDrift 10s linear infinite alternate;
+}
+
+[data-theme="light"] .launcher-boot-grid {
+  background-image:
+    linear-gradient(rgba(0, 0, 0, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.04) 1px, transparent 1px);
+}
+
+.launcher-boot-spinner {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  border-top-color: var(--boot-accent, var(--accent));
+  border-right-color: color-mix(in srgb, var(--boot-accent, var(--accent)) 65%, transparent);
+  animation: launcherBootSpin 1.2s linear infinite;
+}
+
+.launcher-boot-spinner::before,
+.launcher-boot-spinner::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.launcher-boot-spinner::before {
+  inset: 8px;
+  border: 2px solid color-mix(in srgb, var(--boot-accent, var(--accent)) 24%, transparent);
+  animation: launcherBootPulse 1.8s ease-in-out infinite;
+}
+
+.launcher-boot-spinner::after {
+  inset: 22px;
+  background: var(--boot-accent, var(--accent));
+  box-shadow: 0 0 18px color-mix(in srgb, var(--boot-accent, var(--accent)) 55%, transparent);
+}
+
+.launcher-boot-progress {
+  background-size: 200% 100%;
+  animation: launcherBootShimmer 2.4s linear infinite;
+}

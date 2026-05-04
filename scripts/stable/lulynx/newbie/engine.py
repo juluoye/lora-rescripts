@@ -56,6 +56,7 @@ from .state import (
     save_newbie_adapter,
     save_newbie_checkpoint,
 )
+from .preview import sample_images as sample_newbie_images, start_preview_prewarm_async
 
 
 @dataclass(slots=True)
@@ -349,7 +350,21 @@ class NewbieCachedTrainer:
                 f"checkpoint={checkpoint_path} | adapter={adapter_path}"
             )
 
+        def _maybe_sample_preview(epoch_value, step_value: int) -> None:
+            if not bool(getattr(self.config, 'enable_preview', False)):
+                return
+            sample_newbie_images(
+                accelerator,
+                self.config,
+                model,
+                epoch=epoch_value,
+                steps=step_value,
+            )
+
         progress_bar = None
+        if accelerator.is_main_process and bool(getattr(self.config, 'enable_preview', False)):
+            if start_preview_prewarm_async(self.config):
+                print("[newbie-preview] background prewarm scheduled.", flush=True)
         if accelerator.is_main_process:
             print(
                 f"[newbie-train] entering optimization loop | total_steps={max_train_steps} | "
@@ -362,6 +377,7 @@ class NewbieCachedTrainer:
                 dynamic_ncols=True,
                 leave=True,
             )
+        _maybe_sample_preview(None, 0)
         graceful_interrupt = {"signal": None}
         previous_signal_handlers = {}
         def _format_interrupt_signal(signum) -> str:
@@ -759,6 +775,7 @@ class NewbieCachedTrainer:
                         stop_training_requested = True
                     if save_every_steps > 0 and global_step % save_every_steps == 0:
                         _save_periodic_artifacts(global_step, f"every_{save_every_steps}_steps", epoch)
+                    _maybe_sample_preview(None, global_step)
                     if stop_training_requested:
                         break
                 else:
@@ -782,6 +799,8 @@ class NewbieCachedTrainer:
                 _save_periodic_artifacts(global_step, "every_epoch", epoch)
             elif epoch_completed and completed_epochs % save_every_epochs == 0:
                 _save_periodic_artifacts(global_step, f"every_{save_every_epochs}_epochs", epoch)
+            if epoch_completed:
+                _maybe_sample_preview(completed_epochs, global_step)
             if epoch_completed and len(accelerator.trackers) > 0:
                 epoch_average_loss = loss_running_total / max(1, loss_running_steps)
                 accelerator.log(
@@ -828,8 +847,6 @@ class NewbieCachedTrainer:
             total_params=total_params,
             saved_adapter_path=str(final_adapter_path),
         )
-
-
 
 
 

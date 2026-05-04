@@ -147,6 +147,7 @@ class ImageResizeRequest(BaseModel):
     pad_color: str = "#ffffff"
     recursive: bool = False
     rename: bool = False
+    rename_mode: Literal["legacy_suffix", "folder_sequence"] = "legacy_suffix"
     delete_original: bool = False
     sync_metadata: bool = True
 

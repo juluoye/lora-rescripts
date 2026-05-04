@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import threading
@@ -43,6 +44,68 @@ _TASK_LOG_LIMIT = 200
 _TASK_LOG_PERSIST_INTERVAL = 10
 
 
+def _read_stream_chunks(
+    stream,
+    on_line: Callable[[str, bool], None],
+    *,
+    encoding: str = "utf-8",
+) -> None:
+    if stream is None:
+        return
+
+    try:
+        fd = stream.fileno()
+    except Exception:
+        return
+
+    def _decode(raw: bytes) -> str:
+        try:
+            return raw.decode(encoding, errors="replace")
+        except Exception:
+            return raw.decode("utf-8", errors="replace")
+
+    buf = b""
+    while True:
+        try:
+            chunk = os.read(fd, 8192)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf += chunk
+
+        while True:
+            cr_idx = buf.find(b"\r")
+            lf_idx = buf.find(b"\n")
+            if cr_idx == -1 and lf_idx == -1:
+                break
+
+            if cr_idx == -1:
+                idx = lf_idx
+            elif lf_idx == -1:
+                idx = cr_idx
+            else:
+                idx = min(cr_idx, lf_idx)
+
+            is_progress = buf[idx : idx + 1] == b"\r"
+            delimiter_length = 1
+            if is_progress and idx + 1 < len(buf) and buf[idx + 1 : idx + 2] == b"\n":
+                is_progress = False
+                delimiter_length = 2
+
+            raw_line = buf[:idx]
+            buf = buf[idx + delimiter_length :]
+
+            line = _decode(raw_line).rstrip()
+            if line:
+                on_line(line, is_progress)
+
+    if buf:
+        line = _decode(buf).rstrip()
+        if line:
+            on_line(line, False)
+
+
 class LauncherTaskExecutor:
     """Coordinates long-running launcher tasks and their stage events."""
 
@@ -69,6 +132,7 @@ class LauncherTaskExecutor:
         self._task_command_history: list[Dict[str, Any]] = []
         self._task_log_lines: list[str] = []
         self._task_log_dirty_count = 0
+        self._last_task_log_was_progress = False
         self._recover_interrupted_task_if_needed()
 
     def _wait_for_runtime_detection(
@@ -1288,14 +1352,20 @@ class LauncherTaskExecutor:
             except ValueError:
                 self._task_command_history[-1]["duration_ms"] = None
 
-    def _append_task_log_line(self, line: str, *, event_name: str) -> None:
+    def _append_task_log_line(self, line: str, *, event_name: str, progress: bool = False) -> None:
         self._emit(event_name, line)
         if self._task_state.get("task_type") == "idle":
             return
-        self._task_log_lines.append(line)
+        if progress and self._last_task_log_was_progress and self._task_log_lines:
+            self._task_log_lines[-1] = line
+        elif not progress and self._last_task_log_was_progress and self._task_log_lines and self._task_log_lines[-1] == line:
+            pass
+        else:
+            self._task_log_lines.append(line)
         if len(self._task_log_lines) > _TASK_LOG_LIMIT:
             self._task_log_lines = self._task_log_lines[-_TASK_LOG_LIMIT:]
         self._task_log_dirty_count += 1
+        self._last_task_log_was_progress = progress
         if self._task_log_dirty_count >= _TASK_LOG_PERSIST_INTERVAL:
             self._task_log_dirty_count = 0
             self._persist_active_task_state()
@@ -1411,6 +1481,7 @@ class LauncherTaskExecutor:
         self._task_command_history = []
         self._task_log_lines = []
         self._task_log_dirty_count = 0
+        self._last_task_log_was_progress = False
         self._task_state = begin_task_state(
             task_type,
             stage_code,
@@ -1510,10 +1581,14 @@ class LauncherTaskExecutor:
         if not self._process or not self._process.stdout:
             return
         try:
-            for line in self._process.stdout:
-                decoded = line.decode("utf-8", errors="replace").rstrip("\n\r")
-                if decoded:
-                    self._append_task_log_line(decoded, event_name="console_line")
+            _read_stream_chunks(
+                self._process.stdout,
+                lambda line, progress: self._append_task_log_line(
+                    line,
+                    event_name="console_line",
+                    progress=progress,
+                ),
+            )
         except Exception:
             pass
         finally:

@@ -62,11 +62,10 @@ from PIL import Image
 import imagesize
 import cv2
 import safetensors.torch
-from library.lpw_stable_diffusion import StableDiffusionLongPromptWeightingPipeline
-from library.sdxl_lpw_stable_diffusion import SdxlStableDiffusionLongPromptWeightingPipeline
 import library.model_util as model_util
 import library.dataset_argument_groups_util as dataset_argument_groups_util
 import library.train_argument_groups_util as train_argument_groups_util
+from library.train_config_util import get_sai_model_spec
 import library.huggingface_util as huggingface_util
 import library.sai_model_spec as sai_model_spec
 import library.deepspeed_utils as deepspeed_utils
@@ -79,11 +78,14 @@ logger = logging.getLogger(__name__)
 
 EPOCH_STATE_NAME = '{}-{:06d}-state'
 EPOCH_FILE_NAME = '{}-{:06d}'
+EPOCH_DIFFUSERS_DIR_NAME = '{}-{:06d}'
 LAST_STATE_NAME = '{}-state'
 DEFAULT_EPOCH_NAME = 'epoch'
 DEFAULT_LAST_OUTPUT_NAME = 'last'
 DEFAULT_STEP_NAME = 'at'
 STEP_STATE_NAME = '{}-step{:08d}-state'
+STEP_FILE_NAME = '{}-step{:08d}'
+STEP_DIFFUSERS_DIR_NAME = '{}-step{:08d}'
 
 def default_if_none(value, default):
     return default if value is None else value
@@ -265,6 +267,9 @@ def save_and_remove_state_on_epoch_end(args: argparse.Namespace, accelerator, ep
 
     state_dir = os.path.join(args.output_dir, EPOCH_STATE_NAME.format(model_name, epoch_no))
     accelerator.save_state(state_dir)
+    from library.train_prepare_util import _ensure_scheduler_state_compatibility
+
+    _ensure_scheduler_state_compatibility(accelerator, args, state_dir)
     if args.save_state_to_huggingface:
         logger.info("uploading state to huggingface.")
         huggingface_util.upload(args, state_dir, "/" + EPOCH_STATE_NAME.format(model_name, epoch_no))
@@ -287,6 +292,9 @@ def save_and_remove_state_stepwise(args: argparse.Namespace, accelerator, step_n
 
     state_dir = os.path.join(args.output_dir, STEP_STATE_NAME.format(model_name, step_no))
     accelerator.save_state(state_dir)
+    from library.train_prepare_util import _ensure_scheduler_state_compatibility
+
+    _ensure_scheduler_state_compatibility(accelerator, args, state_dir)
     if args.save_state_to_huggingface:
         logger.info("uploading state to huggingface.")
         huggingface_util.upload(args, state_dir, "/" + STEP_STATE_NAME.format(model_name, step_no))
@@ -313,6 +321,9 @@ def save_state_on_train_end(args: argparse.Namespace, accelerator):
 
     state_dir = os.path.join(args.output_dir, LAST_STATE_NAME.format(model_name))
     accelerator.save_state(state_dir)
+    from library.train_prepare_util import _ensure_scheduler_state_compatibility
+
+    _ensure_scheduler_state_compatibility(accelerator, args, state_dir)
 
     if args.save_state_to_huggingface:
         logger.info("uploading last state to huggingface.")

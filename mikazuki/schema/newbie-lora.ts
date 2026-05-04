@@ -86,6 +86,7 @@ Schema.intersect([
     }).description("缓存与运行时"),
 
     SHARED_SCHEMAS.LOG_SETTINGS,
+    SHARED_SCHEMAS.PREVIEW_IMAGE,
     SHARED_SCHEMAS.THERMAL_MANAGEMENT
 ]);
 

@@ -221,6 +221,7 @@ def apply_anima_ui_overrides(config: dict) -> None:
             lora_type = "lora"
 
     if model_train_type == "anima-lora" and lora_type:
+        config["lora_type"] = lora_type
         config.pop("lycoris_algo", None)
 
         if lora_type == "lokr":

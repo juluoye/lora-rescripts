@@ -80,6 +80,7 @@ import cv2
 import safetensors.torch
 from library.lpw_stable_diffusion import StableDiffusionLongPromptWeightingPipeline
 from library.sdxl_lpw_stable_diffusion import SdxlStableDiffusionLongPromptWeightingPipeline
+from library.train_config_util import get_sanitized_config_or_none
 import library.model_util as model_util
 import library.dataset_argument_groups_util as dataset_argument_groups_util
 import library.train_argument_groups_util as train_argument_groups_util
@@ -260,8 +261,6 @@ def load_prompts(prompt_file: str) -> List[Dict]:
     for i in range(len(prompts)):
         prompt_dict = prompts[i]
         if isinstance(prompt_dict, str):
-            from library.train_util import line_to_prompt_dict
-
             prompt_dict = line_to_prompt_dict(prompt_dict)
             prompts[i] = prompt_dict
         assert isinstance(prompt_dict, dict)

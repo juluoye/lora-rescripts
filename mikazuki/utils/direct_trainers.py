@@ -258,8 +258,6 @@ def validate_newbie_runtime_config(config: dict) -> Optional[str]:
         return "Newbie 训练图像目录不能为空。"
     if not train_utils.validate_data_dir(train_data_dir):
         return "Newbie 训练图像目录不存在或没有图片，请检查目录。"
-    if parse_boolish(config.get("enable_preview")):
-        return "当前 stable Newbie wrapper 暂不支持训练中预览。请先关闭 enable_preview。"
 
     resume_path = str(config.get("resume", "") or "").strip()
     if resume_path:
@@ -293,8 +291,8 @@ def build_newbie_start_warnings(config: dict) -> list[str]:
         warnings.append("use_cache=false 将走兼容模式：本次仍会生成训练所需的临时 cache，并在训练完成后清理本次新增 cache 文件。")
     if not parse_boolish(config.get("newbie_two_phase_execution", True)):
         warnings.append("newbie_two_phase_execution=false 将在同一进程内连续执行 cache 与 train，不再要求逻辑上分阶段。")
-    if parse_boolish(config.get("enable_preview")):
-        warnings.append("当前 stable Newbie wrapper 暂不支持训练中预览；请先关闭 enable_preview。")
+    if parse_boolish(config.get("enable_preview")) and not str(config.get("sample_prompts", "") or "").strip():
+        warnings.append("已启用 Newbie 训练预览；若未提供 sample_prompts / prompt_file / 正负提示词，则训练过程中不会生成预览图。")
     return warnings
 
 

@@ -378,7 +378,17 @@ class NewbieRuntimeConfig:
     pytorch_cuda_expandable_segments: bool
     newbie_safe_fallback: bool
     enable_preview: bool
-    lulynx_experimental_core_enabled: bool
+    sample_prompts: str | None = None
+    sample_every_n_steps: int | None = None
+    sample_every_n_epochs: int | None = None
+    sample_at_first: bool = False
+    sample_width: int = 512
+    sample_height: int = 512
+    sample_cfg: float = 7.0
+    sample_seed: int | None = None
+    sample_steps: int = 24
+    sample_sampler: str = "euler_a"
+    lulynx_experimental_core_enabled: bool = True
     lulynx_lisa_enabled: bool = False
     lulynx_lisa_active_ratio: float = 0.2
     lulynx_lisa_interval: int = 1
@@ -395,6 +405,8 @@ class NewbieRuntimeConfig:
     peak_vram_diagnostics_enabled: bool = False
     peak_vram_diagnostics_interval: int = 25
     peak_vram_auto_protection_enabled: bool = False
+    _peak_vram_auto_protection_current_level: int = 0
+    _peak_vram_auto_protection_active: bool = False
 
     @property
     def model_resolution(self) -> int:
@@ -735,6 +747,25 @@ def load_newbie_runtime_config(config_path: str | Path) -> tuple[NewbieRuntimeCo
         ),
         newbie_safe_fallback=_parse_bool(_lookup_config_value(raw, "newbie_safe_fallback", default=True), True),
         enable_preview=_parse_bool(_lookup_config_value(raw, "enable_preview", default=False), False),
+        sample_prompts=str(_lookup_config_value(raw, "sample_prompts", default="") or "").strip() or None,
+        sample_every_n_steps=(
+            _parse_int(_lookup_config_value(raw, "sample_every_n_steps", default=0), 0, minimum=0) or None
+        ),
+        sample_every_n_epochs=(
+            _parse_int(_lookup_config_value(raw, "sample_every_n_epochs", default=0), 0, minimum=0) or None
+        ),
+        sample_at_first=_parse_bool(_lookup_config_value(raw, "sample_at_first", default=False), False),
+        sample_width=_parse_int(_lookup_config_value(raw, "sample_width", default=512), 512, minimum=64),
+        sample_height=_parse_int(_lookup_config_value(raw, "sample_height", default=512), 512, minimum=64),
+        sample_cfg=_parse_float(_lookup_config_value(raw, "sample_cfg", default=7.0), 7.0, minimum=1.0),
+        sample_seed=(
+            None
+            if not _value_is_present(_lookup_config_value(raw, "sample_seed", default=None))
+            else _parse_int(_lookup_config_value(raw, "sample_seed", default=0), 0, minimum=0)
+        ),
+        sample_steps=_parse_int(_lookup_config_value(raw, "sample_steps", default=24), 24, minimum=1),
+        sample_sampler=str(_lookup_config_value(raw, "sample_sampler", default="euler_a") or "euler_a").strip().lower()
+        or "euler_a",
         lulynx_experimental_core_enabled=_parse_bool(
             _lookup_config_value(raw, "lulynx_experimental_core_enabled", default=True),
             True,

@@ -168,12 +168,12 @@ def collect_health_report(
             _finding(
                 "no_installed_runtime",
                 "warn",
-                "还没有可直接启动的运行时",
-                "No launch-ready runtime yet",
-                "当前没有已安装完成的运行时，所以还不能直接启动训练器。",
-                "No runtime is fully installed yet, so the trainer cannot be launched directly.",
-                "先准备本地 Python 环境，再去安装页完成一条运行时安装。",
-                "Prepare a local Python runtime first, then finish installing one runtime on the Install page.",
+                "未找到/未安装环境",
+                "No installed or launch-ready environment found",
+                "未安装可用环境，请安装后重试。",
+                "No usable environment is installed yet. Install one and try again.",
+                "请在已初始化的环境中部署运行时支持。",
+                "Deploy runtime support into an initialized environment first.",
                 "install",
             )
         )
@@ -315,12 +315,12 @@ def collect_health_report(
                 _finding(
                     "selected_runtime_not_ready",
                     "warn",
-                    "当前选中的运行时尚未就绪",
-                    "The selected runtime is not ready",
-                    f"当前选择的是 {selected_runtime_id}，但它还没有安装完成。",
-                    f"{selected_runtime_id} is currently selected, but it is not fully installed yet.",
-                    "可以先完成这条运行时安装，或切换到另一条已经安装好的运行时。",
-                    "Finish installing this runtime first, or switch to another runtime that is already installed.",
+                    "环境未就绪",
+                    "Environment is not ready",
+                    f"当前选择的 {selected_runtime_id}，未部署就绪。",
+                    f"The currently selected runtime, {selected_runtime_id}, is not deployed and ready yet.",
+                    "请先完成部署，或切换到另一个运行时环境。",
+                    "Finish deployment first, or switch to another runtime environment.",
                     "runtime",
                 )
             )

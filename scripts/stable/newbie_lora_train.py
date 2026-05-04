@@ -176,12 +176,6 @@ def main() -> None:
         print('[newbie] inspection-only run completed.')
         return
 
-    if config.enable_preview:
-        raise RuntimeError(
-            'Current stable Newbie wrapper does not support in-training preview yet. '
-            'Please disable enable_preview.'
-        )
-
     transient_cache_paths = _snapshot_existing_cache_paths(preparation.dataset.records) if not config.use_cache else None
 
     try:

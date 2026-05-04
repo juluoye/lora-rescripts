@@ -6,7 +6,7 @@ import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Mapping
+from typing import Callable, Iterable, Mapping, Optional
 
 from PIL import Image, ImageColor
 
@@ -41,6 +41,7 @@ class ImagePreprocessorConfig:
     pad_color: str = "#ffffff"
     recursive: bool = False
     rename: bool = False
+    rename_mode: str = "legacy_suffix"
     delete_original: bool = False
     sync_metadata: bool = True
     log_callback: Callable[[str], None] | None = None
@@ -77,6 +78,56 @@ def collect_images(directory: Path, recursive: bool = False) -> list[Path]:
     )
 
 
+def _natural_sort_key(text: str):
+    return tuple(
+        (0, int(part)) if part.isdigit() else (1, part.lower())
+        for part in re.split(r"(\d+)", str(text))
+    )
+
+
+def _natural_path_sort_key(path: Path):
+    return _natural_sort_key(str(path))
+
+
+def _parse_parent_sequence_number(stem: str, parent_name: str) -> Optional[int]:
+    prefix = f"{parent_name}_"
+    if not stem.startswith(prefix):
+        return None
+    suffix = stem[len(prefix):]
+    if not suffix.isdigit():
+        return None
+    return int(suffix)
+
+
+def sort_images_for_auto_rename(images: list[Path]) -> list[Path]:
+    def sort_key(filepath: Path):
+        parent_name = filepath.parent.name
+        seq_num = _parse_parent_sequence_number(filepath.stem, parent_name)
+        if seq_num is None:
+            item_key = (1, _natural_sort_key(filepath.stem), filepath.suffix.lower())
+        else:
+            item_key = (0, seq_num, _natural_sort_key(filepath.stem), filepath.suffix.lower())
+        return (_natural_path_sort_key(filepath.parent), item_key)
+
+    return sorted(images, key=sort_key)
+
+
+def build_folder_sequence_rename_plan(images: list[Path]) -> tuple[list[Path], dict[Path, str | None]]:
+    ordered_images = sort_images_for_auto_rename(images)
+    counters: dict[str, int] = {}
+    rename_plan: dict[Path, str | None] = {}
+
+    for filepath in ordered_images:
+        parent_name = filepath.parent.name
+        dir_key = str(filepath.parent.resolve())
+        next_num = counters.get(dir_key, 0) + 1
+        counters[dir_key] = next_num
+        expected_name = f"{parent_name}_{next_num}"
+        rename_plan[filepath] = None if filepath.stem == expected_name else expected_name
+
+    return ordered_images, rename_plan
+
+
 def find_closest_resolution(image_ratio: float, resolutions: Iterable[tuple[int, int]]) -> tuple[int, int]:
     candidates = list(resolutions)
     if not candidates:
@@ -106,6 +157,15 @@ def run_image_preprocessor(raw_config: Mapping[str, object] | ImagePreprocessorC
     if config.output_dir is not None:
         config.output_dir.mkdir(parents=True, exist_ok=True)
 
+    images_to_process = images
+    rename_plan: dict[Path, str | None] = {}
+    if config.rename and config.rename_mode == "folder_sequence":
+        images_to_process, rename_plan = build_folder_sequence_rename_plan(images)
+        _log(
+            config,
+            "[Image Preprocessor] rename_mode=folder_sequence enabled; filenames will use parent_folder_index ordering",
+        )
+
     summary = {
         "processed": 0,
         "skipped": 0,
@@ -121,13 +181,14 @@ def run_image_preprocessor(raw_config: Mapping[str, object] | ImagePreprocessorC
             f"format={config.target_format} resize={config.enable_resize} exact={config.exact_size} "
             f"mode={config.resize_mode} anchor=({config.crop_anchor_x:.3f},{config.crop_anchor_y:.3f}) "
             f"pad_color={config.pad_color} recursive={config.recursive} rename={config.rename} "
+            f"rename_mode={config.rename_mode} "
             f"delete_original={config.delete_original} sync_metadata={config.sync_metadata}"
         ),
     )
 
-    for index, image_path in enumerate(images, start=1):
+    for index, image_path in enumerate(images_to_process, start=1):
         try:
-            result = process_single_image(image_path, config)
+            result = process_single_image(image_path, config, rename_name=rename_plan.get(image_path))
             summary["processed"] += int(result["status"] == "success")
             summary["skipped"] += int(result["status"] == "skip")
             summary["failed"] += int(result["status"] == "fail")
@@ -142,7 +203,12 @@ def run_image_preprocessor(raw_config: Mapping[str, object] | ImagePreprocessorC
     return summary
 
 
-def process_single_image(image_path: Path, config: ImagePreprocessorConfig) -> dict[str, object]:
+def process_single_image(
+    image_path: Path,
+    config: ImagePreprocessorConfig,
+    *,
+    rename_name: str | None = None,
+) -> dict[str, object]:
     save_format, output_ext = _normalize_output_format(config.target_format, image_path)
     resize_mode = _normalize_resize_mode(config.resize_mode, config.exact_size)
 
@@ -181,6 +247,8 @@ def process_single_image(image_path: Path, config: ImagePreprocessorConfig) -> d
             output_root=config.output_dir,
             output_ext=output_ext,
             rename=config.rename,
+            rename_mode=config.rename_mode,
+            rename_name=rename_name,
             final_size=(final_width, final_height),
             enable_resize=config.enable_resize,
         )
@@ -250,6 +318,7 @@ def _coerce_config(raw_config: Mapping[str, object] | ImagePreprocessorConfig) -
         pad_color=_normalize_pad_color(raw_config.get("pad_color", "#ffffff")),
         recursive=bool(raw_config.get("recursive", False)),
         rename=bool(raw_config.get("rename", False)),
+        rename_mode=_normalize_rename_mode(raw_config.get("rename_mode", "legacy_suffix")),
         delete_original=bool(raw_config.get("delete_original", False)),
         sync_metadata=bool(raw_config.get("sync_metadata", True)),
         log_callback=raw_config.get("log_callback") if callable(raw_config.get("log_callback")) else None,
@@ -405,6 +474,8 @@ def _build_target_path(
     output_root: Path | None,
     output_ext: str,
     rename: bool,
+    rename_mode: str,
+    rename_name: str | None,
     final_size: tuple[int, int],
     enable_resize: bool,
 ) -> Path:
@@ -413,12 +484,23 @@ def _build_target_path(
     target_parent.mkdir(parents=True, exist_ok=True)
 
     if rename:
-        suffix = f"+{final_size[0]}x{final_size[1]}" if enable_resize else "+converted"
-        target_name = f"{source.stem}{suffix}{output_ext}"
+        if rename_mode == "folder_sequence":
+            target_stem = rename_name or source.stem
+            target_name = f"{target_stem}{output_ext}"
+        else:
+            suffix = f"+{final_size[0]}x{final_size[1]}" if enable_resize else "+converted"
+            target_name = f"{source.stem}{suffix}{output_ext}"
     else:
         target_name = f"{source.stem}{output_ext}"
 
     return target_parent / target_name
+
+
+def _normalize_rename_mode(raw_value: object) -> str:
+    normalized = str(raw_value or "legacy_suffix").strip().lower()
+    if normalized not in {"legacy_suffix", "folder_sequence"}:
+        return "legacy_suffix"
+    return normalized
 
 
 def _save_image_atomic(image: Image.Image, target_path: Path, save_format: str, quality: int) -> None:

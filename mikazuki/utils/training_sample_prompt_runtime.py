@@ -20,7 +20,11 @@ def prepare_training_sample_prompt_config(
     enrich_inline_sample_prompts: Callable[[str, dict], str],
     build_sample_prompt_file_name: Callable[[dict], str],
 ) -> Optional[str]:
-    if direct_python_training or skip_preview_prompt_prep:
+    model_train_type = str(config.get("model_train_type", "") or "").strip().lower()
+    preview_capable_direct_python_types = {"newbie-lora"}
+    if skip_preview_prompt_prep or (
+        direct_python_training and model_train_type not in preview_capable_direct_python_types
+    ):
         for key in (
             "prompt_file",
             "sample_prompts",

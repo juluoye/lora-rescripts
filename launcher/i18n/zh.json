@@ -62,8 +62,8 @@
     "attention_prefer_sage_desc": "优先使用 SageAttention 优化器加速",
     "attention_prefer_flash": "优先 FlashAttention 2",
     "attention_prefer_flash_desc": "优先使用 FlashAttention 2 优化器加速",
-    "attention_force_sdpa": "仅使用 SDPA Cutless加速",
-    "attention_force_sdpa_desc": "强制使用 PyTorch SDPA，禁用 xformers/Sage/Flash(已启用SDPA Cutless 3.x特性,效率接近甚至超过Xformers,可以放心使用",
+    "attention_force_sdpa": "仅使用 SDPA Cutlass加速",
+    "attention_force_sdpa_desc": "强制使用 PyTorch SDPA，禁用 xformers/Sage/Flash(已启用SDPA Cutlass 3.x特性,效率接近甚至超过Xformers,可以放心使用",
 
     "host": "监听地址",
     "port": "端口",
@@ -250,6 +250,7 @@
     "runtime_auto_desc": "优先使用 SageAttention 运行时（仅SDXL），否则使用默认运行时",
 
     "category_nvidia": "NVIDIA GPU",
+    "category_nvidia_frontier": "Nvidia Frontier Experiments",
     "category_intel": "Intel GPU",
     "category_amd": "AMD GPU",
     "experimental_badge": "实验性支持",

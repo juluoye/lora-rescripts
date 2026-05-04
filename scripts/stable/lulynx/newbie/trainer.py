@@ -50,8 +50,8 @@ class NewbieTrainer:
             warnings.append(
                 "检测到部分 caption 估计长度超过当前 Gemma token 上限；后续缓存/编码阶段应主动裁剪或分桶，避免被长文本拖大联合序列。"
             )
-        if self.config.enable_preview:
-            warnings.append("当前 stable Newbie wrapper 暂不支持训练中预览；请先关闭 enable_preview。")
+        if self.config.enable_preview and not self.config.sample_prompts:
+            warnings.append("已启用 Newbie 训练预览，但当前没有 sample_prompts；未提供预览提示词时不会生成预览图。")
         if not self.config.use_cache:
             notes.append("已请求 use_cache=false：stable wrapper 会为本次训练生成临时 cache 文件，并在训练完成后清理本次新增 cache。")
         if not self.config.newbie_two_phase_execution:
@@ -152,8 +152,8 @@ class NewbieTrainer:
                 NewbieExecutionPhase(
                     name="preview",
                     enabled=True,
-                    reason="训练中预览当前只是可选扩展阶段，建议在第一版默认关闭。",
-                    notes=["预览生成将延后到正式训练主链稳定后再接入。"],
+                    reason="训练中预览已启用，将按 sample_at_first / sample_every_n_steps / sample_every_n_epochs 规则尝试生成。",
+                    notes=["当前预览走 Newbie stable 最小采样链路，会额外占用一定显存与时间。"],
                 )
             )
 

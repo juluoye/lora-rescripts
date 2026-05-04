@@ -250,6 +250,7 @@
     "runtime_auto_desc": "Prefer SageAttention runtime if installed, otherwise use standard",
 
     "category_nvidia": "NVIDIA GPU",
+    "category_nvidia_frontier": "Nvidia Frontier Experiments",
     "category_intel": "Intel GPU",
     "category_amd": "AMD GPU",
     "experimental_badge": "Experimental",

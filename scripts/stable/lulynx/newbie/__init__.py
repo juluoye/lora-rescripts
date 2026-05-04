@@ -28,6 +28,7 @@ from .dataset import (
     newbie_cached_collate,
 )
 from .engine import NewbieCachedTrainer, NewbieTrainResult, NewbieTrainRuntimeError
+from .preview import sample_images as sample_newbie_images
 from .memory import (
     NewbieAdaptiveBlockSwapController,
     apply_newbie_memory_runtime_patch,
@@ -91,4 +92,5 @@ __all__ = [
     'release_newbie_runtime_modules',
     'save_newbie_adapter',
     'save_newbie_checkpoint',
+    'sample_newbie_images',
 ]

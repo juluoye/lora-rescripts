@@ -78,8 +78,6 @@ from PIL import Image
 import imagesize
 import cv2
 import safetensors.torch
-from library.lpw_stable_diffusion import StableDiffusionLongPromptWeightingPipeline
-from library.sdxl_lpw_stable_diffusion import SdxlStableDiffusionLongPromptWeightingPipeline
 import library.model_util as model_util
 import library.dataset_argument_groups_util as dataset_argument_groups_util
 import library.train_argument_groups_util as train_argument_groups_util
@@ -99,11 +97,35 @@ import logging
 logger = logging.getLogger(__name__)
 
 HIGH_VRAM = False
+_RUNTIME_BUCKET_POLICY = {
+    "mode": None,
+    "target_edge": None,
+}
 
 
 def set_high_vram(enabled: bool) -> None:
     global HIGH_VRAM
     HIGH_VRAM = bool(enabled)
+
+
+def configure_bucket_runtime_policy(*, mode: Optional[str] = None, target_edge: Optional[int] = None) -> None:
+    normalized_mode = str(mode or "").strip().lower() or None
+    if normalized_mode not in {"long_edge", "short_edge"}:
+        normalized_mode = None
+
+    normalized_target_edge = None
+    if target_edge is not None:
+        try:
+            normalized_target_edge = max(64, int(target_edge))
+        except (TypeError, ValueError):
+            normalized_target_edge = None
+
+    _RUNTIME_BUCKET_POLICY["mode"] = normalized_mode
+    _RUNTIME_BUCKET_POLICY["target_edge"] = normalized_target_edge
+
+
+def get_bucket_runtime_policy() -> dict[str, Optional[int | str]]:
+    return dict(_RUNTIME_BUCKET_POLICY)
 
 
 # region dataset
@@ -3683,6 +3705,8 @@ def cache_batch_latents(
 def cache_batch_text_encoder_outputs(
     image_infos, tokenizers, text_encoders, max_token_length, cache_to_disk, input_ids1, input_ids2, dtype
 ):
+    from library.train_prepare_util import get_hidden_states_sdxl
+
     input_ids1 = input_ids1.to(text_encoders[0].device)
     input_ids2 = input_ids2.to(text_encoders[1].device)
 
@@ -3761,6 +3785,8 @@ def load_text_encoder_outputs_from_disk(npz_path):
 
 __all__ = [
     'set_high_vram',
+    'configure_bucket_runtime_policy',
+    'get_bucket_runtime_policy',
     'split_train_val',
     'ImageInfo',
     'parse_tag_text_list',

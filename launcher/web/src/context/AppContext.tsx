@@ -33,6 +33,7 @@ import type {
 } from '../api/types';
 
 export type Theme = 'dark' | 'light';
+export type BootStage = 'waiting_api' | 'loading_config' | 'loading_runtime' | 'finalizing' | 'ready' | 'error';
 
 interface InstallSummary {
   runtimeId: string;
@@ -42,6 +43,9 @@ interface InstallSummary {
 
 interface AppState {
   ready: boolean;
+  bootstrapped: boolean;
+  bootStage: BootStage;
+  bootError: string | null;
   runtimes: Record<string, RuntimeStatus>;
   runtimeDefs: RuntimeDef[];
   selectedRuntime: string | null;
@@ -194,6 +198,9 @@ const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
+  const [bootstrapped, setBootstrapped] = useState(false);
+  const [bootStage, setBootStage] = useState<BootStage>('waiting_api');
+  const [bootError, setBootError] = useState<string | null>(null);
   const [runtimes, setRuntimes] = useState<Record<string, RuntimeStatus>>({});
   const [runtimeDefs, setRuntimeDefs] = useState<RuntimeDef[]>([]);
   const [selectedRuntime, setSelectedRuntime] = useState<string | null>(null);
@@ -234,6 +241,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const pendingSettingsRef = useRef<Partial<Settings>>({});
   const settingsRef = useRef<Settings>(defaultSettings);
   const projectVersionRef = useRef<ProjectVersionInfo | null>(null);
+  const apiReadyHandledRef = useRef(false);
 
   // Apply theme attribute on mount and change
   useEffect(() => {
@@ -243,21 +251,37 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Wait for pywebview API
   useEffect(() => {
-    const check = () => {
+    let active = true;
+
+    const markApiReady = () => {
+      if (!active || apiReadyHandledRef.current) {
+        return true;
+      }
       if (isApiReady()) {
+        apiReadyHandledRef.current = true;
         setReady(true);
+        setBootStage((current) => (current === 'waiting_api' ? 'loading_config' : current));
         return true;
       }
       return false;
     };
 
-    if (check()) return;
+    if (markApiReady()) {
+      return () => {
+        active = false;
+      };
+    }
 
-    const onReady = () => setReady(true);
+    const onReady = () => {
+      void markApiReady();
+    };
     window.addEventListener('pywebview-ready', onReady);
-    const interval = setInterval(() => { check(); }, 300);
+    const interval = window.setInterval(() => {
+      void markApiReady();
+    }, 300);
 
     return () => {
+      active = false;
       window.removeEventListener('pywebview-ready', onReady);
       clearInterval(interval);
     };
@@ -267,89 +291,132 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!ready) return;
 
+    let cancelled = false;
+
+    const applyIfActive = <T,>(setter: (value: T) => void, value: T) => {
+      if (!cancelled) {
+        setter(value);
+      }
+    };
+
     const load = async () => {
+      setBootError(null);
+      setBootstrapped(false);
+      setBootStage('loading_config');
+
       try {
-        const [rt, defs, dependencyCaches, best, st, lang, trans, ver, plug, uiProfileState, recommendation, compatibility, detectedProjectVersion, taskState, history, managed, managedState] = await Promise.all([
-          api.getRuntimes(),
-          api.getRuntimeDefs(),
-          api.getDependencyCacheStates(),
-          api.getBestRuntime(),
+        const [st, trans, lang, ver] = await Promise.all([
           api.getSettings(),
-          api.getLanguage(),
           api.getTranslations(),
+          api.getLanguage(),
           api.getAppVersion(),
-          api.scanPlugins(),
-          api.getUiProfiles(),
-          api.getRuntimeRecommendation(),
-          api.getRuntimeCompatibility(),
-          api.getProjectVersion(),
-          api.getTaskState(),
-          api.getTaskHistory(),
-          api.getManagedCatalog(false),
-          api.getManagedImportState(),
         ]);
 
         const storedTheme = localStorage.getItem('launcher-theme') as Theme | null;
         const effectiveTheme = storedTheme || st.theme || 'light';
         const normalizedSettings = { ...st, theme: effectiveTheme };
 
-        setRuntimes(rt);
-        setRuntimeDefs(defs);
-        setDependencyCacheStates(dependencyCaches);
-        setSettings(normalizedSettings);
+        applyIfActive(setSettings, normalizedSettings);
         settingsRef.current = normalizedSettings;
-        setTheme(effectiveTheme);
+        applyIfActive(setTheme, effectiveTheme);
         if (effectiveTheme !== st.theme) {
           pendingSettingsRef.current = { ...pendingSettingsRef.current, theme: effectiveTheme };
           void api.setSettings({ theme: effectiveTheme });
         }
-        setLanguage(lang);
-        setTranslations(trans);
-        setVersion(ver);
-        setPlugins(plug);
-        setUiProfiles(uiProfileState);
-        setRuntimeRecommendation(recommendation);
-        setRuntimeCompatibility(compatibility);
-        setProjectVersion(detectedProjectVersion);
+        applyIfActive(setLanguage, lang);
+        applyIfActive(setTranslations, trans);
+        applyIfActive(setVersion, ver);
+
+        setBootStage('loading_runtime');
+
+        const [rt, defs, dependencyCaches, best, recommendation, compatibility, detectedProjectVersion, taskState, history] = await Promise.all([
+          api.getRuntimes(),
+          api.getRuntimeDefs(),
+          api.getDependencyCacheStates(),
+          api.getBestRuntime(),
+          api.getRuntimeRecommendation(),
+          api.getRuntimeCompatibility(),
+          api.getProjectVersion(),
+          api.getTaskState(),
+          api.getTaskHistory(),
+        ]);
+
+        applyIfActive(setRuntimes, rt);
+        applyIfActive(setRuntimeDefs, defs);
+        applyIfActive(setDependencyCacheStates, dependencyCaches);
+        applyIfActive(setRuntimeRecommendation, recommendation);
+        applyIfActive(setRuntimeCompatibility, compatibility);
+        applyIfActive(setProjectVersion, detectedProjectVersion);
         projectVersionRef.current = detectedProjectVersion;
-        setCurrentTaskState(taskState || defaultTaskState);
-        setTaskHistory(history || []);
-        setManagedCatalog(managed);
-        setManagedImportState(managedState);
+        applyIfActive(setCurrentTaskState, taskState || defaultTaskState);
+        applyIfActive(setTaskHistory, history || []);
 
         // Use saved last_runtime or auto-detect
         const saved = st.last_runtime;
+        let resolvedRuntimeId: string | null = null;
         if (saved && rt[saved]?.installed) {
-          setSelectedRuntime(saved);
+          resolvedRuntimeId = saved;
         } else if (recommendation.selected_runtime_id && rt[recommendation.selected_runtime_id]?.installed) {
-          setSelectedRuntime(recommendation.selected_runtime_id);
+          resolvedRuntimeId = recommendation.selected_runtime_id;
         } else if (best && rt[best]?.installed) {
-          setSelectedRuntime(best);
+          resolvedRuntimeId = best;
+        }
+        applyIfActive(setSelectedRuntime, resolvedRuntimeId);
+
+        setBootStage('finalizing');
+
+        const selectedForHealth = resolvedRuntimeId;
+        const [health, initialPlan, running] = await Promise.all([
+          api.getHealthReport(selectedForHealth),
+          api.getLaunchPlan(selectedForHealth, normalizedSettings),
+          api.isRunning(),
+        ]);
+
+        applyIfActive(setHealthReport, health);
+        applyIfActive(setLaunchPlan, initialPlan);
+        applyIfActive(setIsRunning, running);
+
+        if (!cancelled) {
+          setBootstrapped(true);
+          setBootStage('ready');
         }
 
-        const selectedForHealth =
-          (saved && rt[saved]?.installed && saved)
-          || (recommendation.selected_runtime_id && rt[recommendation.selected_runtime_id]?.installed && recommendation.selected_runtime_id)
-          || (best && rt[best]?.installed && best)
-          || null;
-        const health = await api.getHealthReport(selectedForHealth);
-        setHealthReport(health);
-
-        const initialPlan = await api.getLaunchPlan(
-          selectedForHealth,
-          normalizedSettings,
-        );
-        setLaunchPlan(initialPlan);
-
-        // Check running state
-        const running = await api.isRunning();
-        setIsRunning(running);
+        void Promise.allSettled([
+          api.scanPlugins(),
+          api.getUiProfiles(),
+          api.getManagedCatalog(false),
+          api.getManagedImportState(),
+        ]).then(([plugResult, uiProfilesResult, managedResult, managedImportResult]) => {
+          if (cancelled) {
+            return;
+          }
+          if (plugResult.status === 'fulfilled') {
+            setPlugins(plugResult.value);
+          }
+          if (uiProfilesResult.status === 'fulfilled') {
+            setUiProfiles(uiProfilesResult.value);
+          }
+          if (managedResult.status === 'fulfilled') {
+            setManagedCatalog(managedResult.value);
+          }
+          if (managedImportResult.status === 'fulfilled') {
+            setManagedImportState(managedImportResult.value);
+          }
+        });
       } catch (e) {
         console.error('Failed to load initial data:', e);
+        if (!cancelled) {
+          const message = e instanceof Error ? e.message : String(e);
+          setBootError(message || 'Unknown startup error');
+          setBootStage('error');
+        }
       }
     };
 
     load();
+    return () => {
+      cancelled = true;
+    };
   }, [ready]);
 
   useEffect(() => {
@@ -410,7 +477,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // GPU stats polling
   useEffect(() => {
-    if (!ready) return;
+    if (!bootstrapped) return;
     const poll = async () => {
       try {
         const stats = await api.getGpuStats();
@@ -422,7 +489,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     poll();
     const interval = setInterval(poll, 2000);
     return () => clearInterval(interval);
-  }, [ready]);
+  }, [bootstrapped]);
 
   // Event subscriptions
   useEvent('console_line', (line: string) => {
@@ -706,7 +773,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [flushSettingsNow]);
 
   useEffect(() => {
-    if (!ready) return;
+    if (!bootstrapped) return;
     let active = true;
 
     const run = async () => {
@@ -731,12 +798,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => {
       active = false;
     };
-  }, [ready, selectedRuntime, settings, runtimes]);
+  }, [bootstrapped, selectedRuntime, settings, runtimes]);
 
   useEffect(() => {
-    if (!ready) return;
+    if (!bootstrapped) return;
     void refreshHealthReport();
-  }, [ready, selectedRuntime, refreshHealthReport]);
+  }, [bootstrapped, selectedRuntime, refreshHealthReport]);
 
   const refreshUpdateInfo = useCallback(async (force = false) => {
     setIsCheckingUpdates(true);
@@ -782,9 +849,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [flushSettingsNow]);
 
   useEffect(() => {
-    if (!ready) return;
+    if (!bootstrapped) return;
     void refreshUpdateInfo(false);
-  }, [ready, settings.update_channel, refreshUpdateInfo]);
+  }, [bootstrapped, settings.update_channel, refreshUpdateInfo]);
 
   const testManagedConnection = useCallback(async () => {
     await flushSettingsNow();
@@ -1167,6 +1234,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const value: AppContextValue = {
     ready,
+    bootstrapped,
+    bootStage,
+    bootError,
     runtimes,
     runtimeDefs,
     selectedRuntime,

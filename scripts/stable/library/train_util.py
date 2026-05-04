@@ -78,8 +78,6 @@ from PIL import Image
 import imagesize
 import cv2
 import safetensors.torch
-from library.lpw_stable_diffusion import StableDiffusionLongPromptWeightingPipeline
-from library.sdxl_lpw_stable_diffusion import SdxlStableDiffusionLongPromptWeightingPipeline
 import library.model_util as model_util
 import library.dataset_argument_groups_util as dataset_argument_groups_util
 import library.train_argument_groups_util as train_argument_groups_util
@@ -153,30 +151,12 @@ from library.original_unet import UNet2DConditionModel
 
 _ARGPARSE_ZH_HELP_FALLBACK = " / 中文说明：请参考前面的英文描述。"
 _EPOCH_COOLDOWN_WARNING_KEYS = set()
-_RUNTIME_BUCKET_POLICY = {
-    "mode": None,
-    "target_edge": None,
-}
-
-
 def configure_bucket_runtime_policy(*, mode: Optional[str] = None, target_edge: Optional[int] = None) -> None:
-    normalized_mode = str(mode or "").strip().lower() or None
-    if normalized_mode not in {"long_edge", "short_edge"}:
-        normalized_mode = None
-
-    normalized_target_edge = None
-    if target_edge is not None:
-        try:
-            normalized_target_edge = max(64, int(target_edge))
-        except (TypeError, ValueError):
-            normalized_target_edge = None
-
-    _RUNTIME_BUCKET_POLICY["mode"] = normalized_mode
-    _RUNTIME_BUCKET_POLICY["target_edge"] = normalized_target_edge
+    _train_dataset_util.configure_bucket_runtime_policy(mode=mode, target_edge=target_edge)
 
 
 def get_bucket_runtime_policy() -> dict[str, Optional[int | str]]:
-    return dict(_RUNTIME_BUCKET_POLICY)
+    return _train_dataset_util.get_bucket_runtime_policy()
 
 
 def resolve_dataloader_runtime_kwargs(args: argparse.Namespace, n_workers: int) -> dict:

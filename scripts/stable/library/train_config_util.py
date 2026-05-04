@@ -78,8 +78,6 @@ from PIL import Image
 import imagesize
 import cv2
 import safetensors.torch
-from library.lpw_stable_diffusion import StableDiffusionLongPromptWeightingPipeline
-from library.sdxl_lpw_stable_diffusion import SdxlStableDiffusionLongPromptWeightingPipeline
 import library.model_util as model_util
 import library.dataset_argument_groups_util as dataset_argument_groups_util
 import library.train_argument_groups_util as train_argument_groups_util
@@ -97,6 +95,7 @@ setup_logging()
 import logging
 
 logger = logging.getLogger(__name__)
+_EPOCH_COOLDOWN_WARNING_KEYS = set()
 
 from library.argument_help_util import normalize_help_text
 import library.train_dataset_util as dataset_util

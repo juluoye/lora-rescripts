@@ -188,7 +188,7 @@ export function LaunchPage() {
         </div>
         {currentDef && (
           <div className="flex gap-2">
-            {currentDef.category === 'nvidia' && (
+            {currentDef.category.startsWith('nvidia') && (
               <span className="px-2 py-1 text-xs rounded" style={{ backgroundColor: 'var(--success-subtle)', color: 'var(--success-text)', border: '1px solid var(--success-border)' }}>
                 NVIDIA
               </span>

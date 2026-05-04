@@ -102,10 +102,10 @@ def collect_launch_preflight(
                 _issue(
                     "runtime_not_ready",
                     "error",
-                    "运行时未就绪",
+                    "环境未就绪",
                     "Runtime Not Ready",
-                    f"当前选择的运行时 {runtime_id} 尚未安装完成，无法启动。",
-                    f"The selected runtime {runtime_id} is not fully installed yet and cannot be used to launch the trainer.",
+                    f"当前选择的 {runtime_id}，未部署就绪。",
+                    f"The selected runtime {runtime_id} is not deployed and ready yet.",
                     action_page="runtime",
                 )
             )
