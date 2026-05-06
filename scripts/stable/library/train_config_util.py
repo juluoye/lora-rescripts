@@ -535,6 +535,7 @@ def add_optimizer_arguments(parser: argparse.ArgumentParser):
         "--fused_backward_pass",
         action="store_true",
         help="Combines backward pass and optimizer step to reduce VRAM usage. Only available in SDXL, SD3 and FLUX"
+        " / 将反向传播与优化器 step 合并执行，以减少 VRAM 占用。仅适用于 SDXL、SD3 和 FLUX。"
         " / バックワードパスとオプティマイザステップを組み合わせてVRAMの使用量を削減します。SDXL、SD3、FLUXでのみ利用可能",
     )
     parser.add_argument(
@@ -591,6 +592,7 @@ def add_dit_training_arguments(parser: argparse.ArgumentParser):
         type=int,
         default=None,
         help="text encoder batch size (default: None, use dataset's batch size)"
+        + " / text encoder 批大小（默认: None，沿用数据集的 batch size）"
         + " / text encoderのバッチサイズ（デフォルト: None, データセットのバッチサイズを使用）",
     )
 

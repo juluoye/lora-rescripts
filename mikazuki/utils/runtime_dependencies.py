@@ -8,6 +8,7 @@ from typing import Iterable
 
 from mikazuki.utils.runtime_dependency_rules import collect_training_dependency_requirements
 from mikazuki.utils.runtime_mode import infer_runtime_environment_name, is_amd_rocm_runtime, is_intel_xpu_runtime
+from mikazuki.utils.runtime_sageattention import probe_runtime_sageattention
 from mikazuki.utils.sagebwd_runtime import is_sagebwd_nvidia_runtime, probe_runtime_sagebwd
 
 
@@ -231,6 +232,24 @@ def inspect_runtime_package(module_name: str, probe_import: bool = True) -> dict
                 "installed": bool(probe.get("importable")),
                 "importable": bool(probe.get("importable")),
                 "version": _metadata_version(package_name),
+                "reason": reason,
+            }
+        if module_name == "sageattention" and runtime_name == "spargeattn2":
+            probe = probe_runtime_sageattention()
+            spas_version = _metadata_version("spas_sage_attn")
+            spas_spec = _safe_find_spec("spas_sage_attn")
+            installed = bool(probe.get("importable")) or spas_spec is not None or spas_version is not None
+            reason = str(probe.get("reason", "") or "")
+            if installed and not reason:
+                reason = "SpargeAttn2 compatibility runtime detected."
+            return {
+                "module_name": module_name,
+                "package_name": "spas-sage-attn",
+                "display_name": "spas_sage_attn",
+                "required_by_default": required_by_default,
+                "installed": installed,
+                "importable": bool(probe.get("ready")),
+                "version": spas_version or _metadata_version(package_name),
                 "reason": reason,
             }
         if module_name == "pytorch_optimizer" and (is_amd_rocm_runtime(runtime_name) or is_intel_xpu_runtime(runtime_name)):

@@ -63,6 +63,12 @@ _RUNTIME_RULES: Dict[str, Dict[str, Dict[str, str]]] = {
         "anima": _rule("recommended", "Anima 当前更推荐 FlashAttention 2 路线。", "Anima is currently best matched with the FlashAttention 2 path."),
         "tlora": _rule("supported", "可以使用，通常比保守标准线更激进一些。", "Usable and typically a bit more aggressive than the conservative standard path."),
     },
+    "spargeattn2": {
+        "sdxl": _rule("caution", "SpargeAttn2 当前仍属于前沿实验路线，建议先做短跑验证再决定是否投入长训。", "SpargeAttn2 is still a frontier experimental path. Validate with a short run before committing to long training."),
+        "newbie": _rule("caution", "可尝试，但更适合作为实验加速分支而不是默认主线。", "Tryable, but it is better treated as an experimental acceleration branch than a default mainline."),
+        "anima": _rule("caution", "当前建议先验证环境与注意力路径是否稳定，再考虑投入正式训练。", "Validate the environment and attention path first before using it for formal training."),
+        "tlora": _rule("caution", "组合验证还不充分，建议只做小样本测试。", "Validation coverage is still limited, so keep it to small test runs for now."),
+    },
     "blackwell": {
         "sdxl": _rule("recommended", "Blackwell 专用线适合 RTX 50 系列上的主流训练。", "The dedicated Blackwell path is well suited for mainstream training on RTX 50 series GPUs."),
         "newbie": _rule("recommended", "Newbie 主线通常适合 Blackwell 专用运行时。", "Newbie usually fits the dedicated Blackwell runtime."),
@@ -100,6 +106,7 @@ _RUNTIME_TAGS: Dict[str, Tuple[str, ...]] = {
     "sageattention": ("high_performance", "nvidia_mainline", "anima_caution", "tlora_caution"),
     "sageattention2": ("high_performance", "nvidia_mainline", "anima_caution", "tlora_caution"),
     "flashattention": ("high_performance", "nvidia_mainline", "anima_friendly"),
+    "spargeattn2": ("experimental", "high_performance", "nvidia_mainline", "anima_caution", "tlora_caution"),
     "blackwell": ("high_performance", "stable", "anima_friendly", "nvidia_mainline"),
     "sageattention-blackwell": ("high_performance", "nvidia_mainline", "anima_caution", "tlora_caution"),
     "intel-xpu": ("experimental", "xpu_path", "tlora_caution"),

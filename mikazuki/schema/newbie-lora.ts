@@ -35,7 +35,7 @@ Schema.intersect([
     }).description("训练相关参数"),
 
     Schema.object({
-        optimizer_type: Schema.union(["AdamW8bit", "AdamW"]).default("AdamW8bit").description("优化器"),
+        optimizer_type: Schema.union(["AdamW8bit", "AdamW8bitKahan", "AdamW"]).default("AdamW8bit").description("优化器"),
         learning_rate: Schema.number().step(0.000001).default(0.0001).description("学习率"),
         weight_decay: Schema.number().step(0.0001).default(0.01).description("权重衰减"),
         lr_scheduler: Schema.union(["cosine", "cosine_with_restarts", "linear", "constant"]).default("cosine").description("学习率调度器"),

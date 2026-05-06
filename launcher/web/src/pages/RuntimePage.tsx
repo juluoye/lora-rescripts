@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Download, CheckCircle2, AlertCircle, XCircle, Sparkles, Trash2 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Download, CheckCircle2, AlertCircle, XCircle, Sparkles, Trash2, ShieldAlert, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import { CompatibilitySummary } from '../components/CompatibilitySummary';
 import { useApp } from '../context/AppContext';
 import { useTranslation } from '../hooks/useTranslation';
@@ -72,6 +73,190 @@ function CapabilityTagList({
   );
 }
 
+function ConfirmDialog({
+  open,
+  title,
+  message,
+  runtimeName,
+  language,
+  confirmLabel,
+  cancelLabel,
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean;
+  title: string;
+  message: string;
+  runtimeName: string;
+  language: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  busy: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !busy) {
+        event.preventDefault();
+        onCancel();
+      }
+      if (event.key === 'Enter' && !busy) {
+        event.preventDefault();
+        onConfirm();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [busy, onCancel, onConfirm, open]);
+
+  if (!open) {
+    return null;
+  }
+
+  const helperBadge = language === 'zh' ? '依赖级卸载' : 'Dependency-only';
+  const helperTitle = language === 'zh' ? '这次不会删除整个运行时目录' : 'This will not remove the whole runtime directory';
+  const helperDesc = language === 'zh'
+    ? '会保留本地 Python、pip bootstrap 和初始化骨架，后续可以直接重新安装依赖。'
+    : 'The local Python, pip bootstrap, and initialized runtime skeleton will stay intact so you can reinstall dependencies directly later.';
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+      style={{ backdropFilter: 'blur(8px)' }}
+      onClick={() => {
+        if (!busy) {
+          onCancel();
+        }
+      }}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div
+        className="w-full max-w-xl rounded-2xl shadow-2xl"
+        style={{
+          backgroundColor: 'var(--bg-base)',
+          border: '1px solid var(--border-card)',
+          boxShadow: '0 24px 80px rgba(0, 0, 0, 0.28)',
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="px-6 pt-6">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex min-w-0 items-start gap-4">
+              <div
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl"
+                style={{
+                  backgroundColor: 'var(--danger-subtle)',
+                  color: 'var(--danger-text)',
+                  border: '1px solid var(--danger-border)',
+                }}
+              >
+                <ShieldAlert size={20} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+                  {title}
+                </div>
+                <p className="mt-2 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
+                  {message}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={onCancel}
+              disabled={busy}
+              className="btn-interactive rounded-xl p-2 disabled:opacity-40"
+              style={{ backgroundColor: 'var(--bg-input)', color: 'var(--text-muted)' }}
+              aria-label={cancelLabel}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+
+        <div className="px-6 pt-5">
+          <div
+            className="rounded-2xl p-4"
+            style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-card)' }}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className="text-[10px] px-2 py-1 rounded-full"
+                style={{
+                  backgroundColor: 'var(--accent-subtle)',
+                  color: 'var(--accent-text)',
+                  border: '1px solid var(--accent-border)',
+                }}
+              >
+                {runtimeName}
+              </span>
+              <span
+                className="text-[10px] px-2 py-1 rounded-full"
+                style={{
+                  backgroundColor: 'var(--danger-subtle)',
+                  color: 'var(--danger-text)',
+                  border: '1px solid var(--danger-border)',
+                }}
+              >
+                {helperBadge}
+              </span>
+            </div>
+            <div className="mt-3 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+              {helperTitle}
+            </div>
+            <div className="mt-2 text-xs leading-6" style={{ color: 'var(--text-secondary)' }}>
+              {helperDesc}
+            </div>
+          </div>
+        </div>
+
+        <div
+          className="mt-6 flex justify-end gap-3 border-t px-6 py-4"
+          style={{ borderColor: 'var(--border-card)' }}
+        >
+          <button
+            onClick={onCancel}
+            disabled={busy}
+            className="btn-interactive px-4 py-2 rounded-xl text-sm font-medium disabled:opacity-40"
+            style={{
+              backgroundColor: 'var(--bg-input)',
+              color: 'var(--text-secondary)',
+              border: '1px solid var(--border-card)',
+            }}
+          >
+            {cancelLabel}
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={busy}
+            className="btn-interactive px-4 py-2 rounded-xl text-sm font-medium text-white disabled:opacity-40"
+            style={{
+              backgroundColor: 'var(--danger)',
+              boxShadow: '0 10px 24px color-mix(in srgb, var(--danger) 35%, transparent)',
+            }}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export function RuntimePage() {
   const {
     runtimes,
@@ -90,6 +275,7 @@ export function RuntimePage() {
   } = useApp();
   const { t } = useTranslation(translations, language);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmingRuntime, setConfirmingRuntime] = useState<{ id: string; name: string } | null>(null);
   const isInitializingTask = currentTaskState.task_type === 'initialize';
 
   const grouped = CATEGORY_ORDER.map((cat) => ({
@@ -106,8 +292,33 @@ export function RuntimePage() {
     ? (language === 'zh' ? selectedStatus.integrity_message_zh : selectedStatus.integrity_message_en)
     : null;
 
+  const handleConfirmUninstall = async () => {
+    if (!confirmingRuntime) {
+      return;
+    }
+
+    const target = confirmingRuntime;
+    setConfirmingRuntime(null);
+    const result = await uninstallRuntime(target.id);
+    if (result.error) {
+      setActionError(result.error);
+    }
+  };
+
   return (
     <div className="space-y-6 animate-fade-in animate-slide-in-right">
+      <ConfirmDialog
+        open={!!confirmingRuntime}
+        title={t('runtime_uninstall_dialog_title')}
+        message={confirmingRuntime ? t('runtime_uninstall_confirm', { runtime: confirmingRuntime.name }) : ''}
+        runtimeName={confirmingRuntime?.name || ''}
+        language={language}
+        confirmLabel={t('runtime_uninstall_confirm_action')}
+        cancelLabel={t('runtime_uninstall_cancel')}
+        busy={isInstalling}
+        onConfirm={handleConfirmUninstall}
+        onCancel={() => setConfirmingRuntime(null)}
+      />
       {actionError && (
         <div className="rounded-xl p-3 text-sm flex items-start gap-2" style={{ backgroundColor: 'var(--danger-subtle)', border: '1px solid var(--danger-border)', color: 'var(--danger-text)' }}>
           <AlertCircle size={16} />
@@ -348,10 +559,7 @@ export function RuntimePage() {
                         <button
                           onClick={async () => {
                             setActionError(null);
-                            const result = await uninstallRuntime(def.id);
-                            if (result.error) {
-                              setActionError(result.error);
-                            }
+                            setConfirmingRuntime({ id: def.id, name });
                           }}
                           disabled={isBusy}
                           className="btn-interactive flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium disabled:opacity-40"

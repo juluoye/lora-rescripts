@@ -8,6 +8,7 @@ from transformers import CLIPTokenizer, T5TokenizerFast, CLIPTextModel, CLIPText
 
 from library import sd3_utils, train_util
 from library import sd3_models
+from library.latents_disk_cache import LatentsDiskCacheRef
 from library.strategy_base import LatentsCachingStrategy, TextEncodingStrategy, TokenizeStrategy, TextEncoderOutputsCachingStrategy
 
 from library.utils import setup_logging
@@ -272,44 +273,66 @@ class Sd3TextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
     def get_outputs_npz_path(self, image_abs_path: str) -> str:
         return os.path.splitext(image_abs_path)[0] + Sd3TextEncoderOutputsCachingStrategy.SD3_TEXT_ENCODER_OUTPUTS_NPZ_SUFFIX
 
+    @property
+    def cache_suffix(self) -> str:
+        return self.SD3_TEXT_ENCODER_OUTPUTS_NPZ_SUFFIX
+
+    def get_disk_cache_config_payload(self) -> dict[str, Any]:
+        payload = super().get_disk_cache_config_payload()
+        payload.update({
+            "arch": "sd3",
+            "apply_lg_attn_mask": bool(self.apply_lg_attn_mask),
+            "apply_t5_attn_mask": bool(self.apply_t5_attn_mask),
+        })
+        return payload
+
     def is_disk_cached_outputs_expected(self, npz_path: str):
-        if not self.cache_to_disk:
-            return False
-        if not os.path.exists(npz_path):
-            return False
-        if self.skip_disk_cache_validity_check:
-            return True
+        return super().is_disk_cached_outputs_expected(npz_path)
 
-        try:
-            npz = self._load_npz_archive(npz_path)
-            if "lg_out" not in npz:
-                return False
-            if "lg_pooled" not in npz:
-                return False
-            if "clip_l_attn_mask" not in npz or "clip_g_attn_mask" not in npz:  # necessary even if not used
-                return False
-            if "apply_lg_attn_mask" not in npz:
-                return False
-            if "t5_out" not in npz:
-                return False
-            if "t5_attn_mask" not in npz:
-                return False
-            npz_apply_lg_attn_mask = npz["apply_lg_attn_mask"]
-            if npz_apply_lg_attn_mask != self.apply_lg_attn_mask:
-                return False
-            if "apply_t5_attn_mask" not in npz:
-                return False
-            npz_apply_t5_attn_mask = npz["apply_t5_attn_mask"]
-            if npz_apply_t5_attn_mask != self.apply_t5_attn_mask:
-                return False
-        except Exception as e:
-            logger.error(f"Error loading file: {npz_path}")
-            raise e
-
+    def is_legacy_outputs_archive_valid(self, archive: dict[str, np.ndarray]) -> bool:
+        required = {
+            "lg_out",
+            "lg_pooled",
+            "clip_l_attn_mask",
+            "clip_g_attn_mask",
+            "apply_lg_attn_mask",
+            "t5_out",
+            "t5_attn_mask",
+            "apply_t5_attn_mask",
+        }
+        if not required.issubset(set(archive.keys())):
+            return False
+        if bool(np.asarray(archive["apply_lg_attn_mask"]).reshape(()).item()) != bool(self.apply_lg_attn_mask):
+            return False
+        if bool(np.asarray(archive["apply_t5_attn_mask"]).reshape(()).item()) != bool(self.apply_t5_attn_mask):
+            return False
         return True
 
-    def load_outputs_npz(self, npz_path: str) -> List[np.ndarray]:
-        data = self._load_npz_archive(npz_path)
+    def is_safetensors_payload_valid(self, metadata: dict[str, Any]) -> bool:
+        return (
+            bool(metadata.get("apply_lg_attn_mask", False)) == bool(self.apply_lg_attn_mask)
+            and bool(metadata.get("apply_t5_attn_mask", False)) == bool(self.apply_t5_attn_mask)
+        )
+
+    def get_text_cache_manifest_payload(self, info, payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "apply_lg_attn_mask": bool(self.apply_lg_attn_mask),
+            "apply_t5_attn_mask": bool(self.apply_t5_attn_mask),
+        }
+
+    def decode_loaded_text_cache_entry(self, values: dict[str, np.ndarray], metadata: dict[str, Any]) -> List[np.ndarray]:
+        lg_out = values.get("lg_out")
+        lg_pooled = values.get("lg_pooled")
+        t5_out = values.get("t5_out")
+        l_attn_mask = values.get("clip_l_attn_mask")
+        g_attn_mask = values.get("clip_g_attn_mask")
+        t5_attn_mask = values.get("t5_attn_mask")
+        return [lg_out, t5_out, lg_pooled, l_attn_mask, g_attn_mask, t5_attn_mask]
+
+    def load_outputs_npz(self, npz_path_or_ref) -> List[np.ndarray]:
+        if isinstance(npz_path_or_ref, LatentsDiskCacheRef) and npz_path_or_ref.format == "safetensors":
+            return self._load_safetensors_outputs_entry(npz_path_or_ref)
+        data = self._load_npz_archive(str(npz_path_or_ref))
         lg_out = data["lg_out"]
         lg_pooled = data["lg_pooled"]
         t5_out = data["t5_out"]
@@ -339,16 +362,9 @@ class Sd3TextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
                 enable_dropout=False,
             )
 
-        if lg_out.dtype == torch.bfloat16:
-            lg_out = lg_out.float()
-        if lg_pooled.dtype == torch.bfloat16:
-            lg_pooled = lg_pooled.float()
-        if t5_out.dtype == torch.bfloat16:
-            t5_out = t5_out.float()
-
-        lg_out = lg_out.cpu().numpy()
-        lg_pooled = lg_pooled.cpu().numpy()
-        t5_out = t5_out.cpu().numpy()
+        lg_out = self.prepare_value_for_cache(lg_out)
+        lg_pooled = self.prepare_value_for_cache(lg_pooled)
+        t5_out = self.prepare_value_for_cache(t5_out)
 
         l_attn_mask = tokens_and_masks[3].cpu().numpy()
         g_attn_mask = tokens_and_masks[4].cpu().numpy()
@@ -365,17 +381,36 @@ class Sd3TextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
             apply_t5_attn_mask = self.apply_t5_attn_mask
 
             if self.cache_to_disk:
-                np.savez(
-                    info.text_encoder_outputs_npz,
-                    lg_out=lg_out_i,
-                    lg_pooled=lg_pooled_i,
-                    t5_out=t5_out_i,
-                    clip_l_attn_mask=l_attn_mask_i,
-                    clip_g_attn_mask=g_attn_mask_i,
-                    t5_attn_mask=t5_attn_mask_i,
-                    apply_lg_attn_mask=apply_lg_attn_mask,
-                    apply_t5_attn_mask=apply_t5_attn_mask,
-                )
+                if self.uses_safetensors_disk_cache:
+                    self.queue_safetensors_payload(
+                        info,
+                        {
+                            "values": {
+                                "lg_out": self.ensure_safetensors_cache_tensor(lg_out_i),
+                                "lg_pooled": self.ensure_safetensors_cache_tensor(lg_pooled_i),
+                                "t5_out": self.ensure_safetensors_cache_tensor(t5_out_i),
+                                "clip_l_attn_mask": self.ensure_safetensors_cache_tensor(l_attn_mask_i),
+                                "clip_g_attn_mask": self.ensure_safetensors_cache_tensor(g_attn_mask_i),
+                                "t5_attn_mask": self.ensure_safetensors_cache_tensor(t5_attn_mask_i),
+                            },
+                            "metadata": {
+                                "apply_lg_attn_mask": bool(apply_lg_attn_mask),
+                                "apply_t5_attn_mask": bool(apply_t5_attn_mask),
+                            },
+                        },
+                    )
+                else:
+                    np.savez(
+                        info.text_encoder_outputs_npz,
+                        lg_out=lg_out_i,
+                        lg_pooled=lg_pooled_i,
+                        t5_out=t5_out_i,
+                        clip_l_attn_mask=l_attn_mask_i,
+                        clip_g_attn_mask=g_attn_mask_i,
+                        t5_attn_mask=t5_attn_mask_i,
+                        apply_lg_attn_mask=apply_lg_attn_mask,
+                        apply_t5_attn_mask=apply_t5_attn_mask,
+                    )
             else:
                 # it's fine that attn mask is not None. it's overwritten before calling the model if necessary
                 info.text_encoder_outputs = (lg_out_i, t5_out_i, lg_pooled_i, l_attn_mask_i, g_attn_mask_i, t5_attn_mask_i)

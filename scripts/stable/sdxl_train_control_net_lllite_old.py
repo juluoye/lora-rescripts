@@ -20,6 +20,7 @@ from accelerate.utils import set_seed
 from diffusers import DDPMScheduler, ControlNetModel
 from safetensors.torch import load_file
 from library import deepspeed_utils, sai_model_spec, sdxl_model_util, sdxl_original_unet, sdxl_train_util
+from library import strategy_base, strategy_sd, strategy_sdxl
 
 import library.model_util as model_util
 import library.train_util as train_util
@@ -76,7 +77,14 @@ def train(args):
         args.seed = random.randint(0, 2**32)
     set_seed(args.seed)
 
-    tokenizer1, tokenizer2 = sdxl_train_util.load_tokenizers(args)
+    tokenize_strategy = strategy_sdxl.SdxlTokenizeStrategy(args.max_token_length, args.tokenizer_cache_dir)
+    strategy_base.TokenizeStrategy.set_strategy(tokenize_strategy)
+    tokenizer1, tokenizer2 = tokenize_strategy.tokenizer1, tokenize_strategy.tokenizer2
+
+    latents_caching_strategy = strategy_sd.SdSdxlLatentsCachingStrategy(
+        False, args.cache_latents_to_disk, args.vae_batch_size, args.skip_cache_check
+    )
+    strategy_base.LatentsCachingStrategy.set_strategy(latents_caching_strategy)
 
     # データセットを準備する
     blueprint_generator = BlueprintGenerator(ConfigSanitizer(False, False, True, True))
@@ -165,29 +173,30 @@ def train(args):
         vae.requires_grad_(False)
         vae.eval()
         with torch.no_grad():
-            train_dataset_group.cache_latents(
-                vae,
-                args.vae_batch_size,
-                args.cache_latents_to_disk,
-                accelerator.is_main_process,
-            )
+            train_dataset_group.new_cache_latents(vae, accelerator)
         vae.to("cpu")
         clean_memory_on_device(accelerator.device)
 
         accelerator.wait_for_everyone()
 
+    text_encoding_strategy = strategy_sdxl.SdxlTextEncodingStrategy(args.clip_skip)
+    strategy_base.TextEncodingStrategy.set_strategy(text_encoding_strategy)
+
     # TextEncoderの出力をキャッシュする
     if args.cache_text_encoder_outputs:
         # Text Encodes are eval and no grad
+        text_encoder_output_caching_strategy = strategy_sdxl.SdxlTextEncoderOutputsCachingStrategy(
+            args.cache_text_encoder_outputs_to_disk,
+            None,
+            args.skip_cache_check,
+        )
+        strategy_base.TextEncoderOutputsCachingStrategy.set_strategy(text_encoder_output_caching_strategy)
+
+        text_encoder1.to(accelerator.device)
+        text_encoder2.to(accelerator.device)
         with torch.no_grad():
-            train_dataset_group.cache_text_encoder_outputs(
-                (tokenizer1, tokenizer2),
-                (text_encoder1, text_encoder2),
-                accelerator.device,
-                None,
-                args.cache_text_encoder_outputs_to_disk,
-                accelerator.is_main_process,
-            )
+            with accelerator.autocast():
+                train_dataset_group.new_cache_text_encoder_outputs([text_encoder1, text_encoder2], accelerator)
         accelerator.wait_for_everyone()
 
     # prepare ControlNet

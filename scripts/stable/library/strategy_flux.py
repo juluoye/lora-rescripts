@@ -6,6 +6,7 @@ import numpy as np
 from transformers import CLIPTokenizer, T5TokenizerFast
 
 from library import flux_utils, train_util
+from library.latents_disk_cache import LatentsDiskCacheRef
 from library.strategy_base import LatentsCachingStrategy, TextEncodingStrategy, TokenizeStrategy, TextEncoderOutputsCachingStrategy
 
 from library.utils import setup_logging
@@ -104,37 +105,40 @@ class FluxTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
     def get_outputs_npz_path(self, image_abs_path: str) -> str:
         return os.path.splitext(image_abs_path)[0] + FluxTextEncoderOutputsCachingStrategy.FLUX_TEXT_ENCODER_OUTPUTS_NPZ_SUFFIX
 
+    @property
+    def cache_suffix(self) -> str:
+        return self.FLUX_TEXT_ENCODER_OUTPUTS_NPZ_SUFFIX
+
+    def get_disk_cache_config_payload(self) -> dict[str, Any]:
+        payload = super().get_disk_cache_config_payload()
+        payload.update({
+            "arch": "flux",
+            "apply_t5_attn_mask": bool(self.apply_t5_attn_mask),
+        })
+        return payload
+
     def is_disk_cached_outputs_expected(self, npz_path: str):
-        if not self.cache_to_disk:
+        return super().is_disk_cached_outputs_expected(npz_path)
+
+    def is_legacy_outputs_archive_valid(self, archive: dict[str, np.ndarray]) -> bool:
+        required = {"l_pooled", "t5_out", "txt_ids", "t5_attn_mask", "apply_t5_attn_mask"}
+        if not required.issubset(set(archive.keys())):
             return False
-        if not os.path.exists(npz_path):
-            return False
-        if self.skip_disk_cache_validity_check:
-            return True
+        return bool(np.asarray(archive["apply_t5_attn_mask"]).reshape(()).item()) == bool(self.apply_t5_attn_mask)
 
-        try:
-            npz = self._load_npz_archive(npz_path)
-            if "l_pooled" not in npz:
-                return False
-            if "t5_out" not in npz:
-                return False
-            if "txt_ids" not in npz:
-                return False
-            if "t5_attn_mask" not in npz:
-                return False
-            if "apply_t5_attn_mask" not in npz:
-                return False
-            npz_apply_t5_attn_mask = npz["apply_t5_attn_mask"]
-            if npz_apply_t5_attn_mask != self.apply_t5_attn_mask:
-                return False
-        except Exception as e:
-            logger.error(f"Error loading file: {npz_path}")
-            raise e
+    def is_safetensors_payload_valid(self, metadata: dict[str, Any]) -> bool:
+        return bool(metadata.get("apply_t5_attn_mask", False)) == bool(self.apply_t5_attn_mask)
 
-        return True
+    def get_text_cache_manifest_payload(self, info, payload: dict[str, Any]) -> dict[str, Any]:
+        return {"apply_t5_attn_mask": bool(self.apply_t5_attn_mask)}
 
-    def load_outputs_npz(self, npz_path: str) -> List[np.ndarray]:
-        data = self._load_npz_archive(npz_path)
+    def decode_loaded_text_cache_entry(self, values: dict[str, np.ndarray], metadata: dict[str, Any]) -> List[np.ndarray]:
+        return [values.get("l_pooled"), values.get("t5_out"), values.get("txt_ids"), values.get("t5_attn_mask")]
+
+    def load_outputs_npz(self, npz_path_or_ref) -> List[np.ndarray]:
+        if isinstance(npz_path_or_ref, LatentsDiskCacheRef) and npz_path_or_ref.format == "safetensors":
+            return self._load_safetensors_outputs_entry(npz_path_or_ref)
+        data = self._load_npz_archive(str(npz_path_or_ref))
         l_pooled = data["l_pooled"]
         t5_out = data["t5_out"]
         txt_ids = data["txt_ids"]
@@ -161,16 +165,9 @@ class FluxTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
             # attn_mask is applied in text_encoding_strategy.encode_tokens if apply_t5_attn_mask is True
             l_pooled, t5_out, txt_ids, _ = flux_text_encoding_strategy.encode_tokens(tokenize_strategy, models, tokens_and_masks)
 
-        if l_pooled.dtype == torch.bfloat16:
-            l_pooled = l_pooled.float()
-        if t5_out.dtype == torch.bfloat16:
-            t5_out = t5_out.float()
-        if txt_ids.dtype == torch.bfloat16:
-            txt_ids = txt_ids.float()
-
-        l_pooled = l_pooled.cpu().numpy()
-        t5_out = t5_out.cpu().numpy()
-        txt_ids = txt_ids.cpu().numpy()
+        l_pooled = self.prepare_value_for_cache(l_pooled)
+        t5_out = self.prepare_value_for_cache(t5_out)
+        txt_ids = self.prepare_value_for_cache(txt_ids)
         t5_attn_mask = tokens_and_masks[2].cpu().numpy()
 
         for i, info in enumerate(infos):
@@ -181,14 +178,30 @@ class FluxTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
             apply_t5_attn_mask_i = self.apply_t5_attn_mask
 
             if self.cache_to_disk:
-                np.savez(
-                    info.text_encoder_outputs_npz,
-                    l_pooled=l_pooled_i,
-                    t5_out=t5_out_i,
-                    txt_ids=txt_ids_i,
-                    t5_attn_mask=t5_attn_mask_i,
-                    apply_t5_attn_mask=apply_t5_attn_mask_i,
-                )
+                if self.uses_safetensors_disk_cache:
+                    self.queue_safetensors_payload(
+                        info,
+                        {
+                            "values": {
+                                "l_pooled": self.ensure_safetensors_cache_tensor(l_pooled_i),
+                                "t5_out": self.ensure_safetensors_cache_tensor(t5_out_i),
+                                "txt_ids": self.ensure_safetensors_cache_tensor(txt_ids_i),
+                                "t5_attn_mask": self.ensure_safetensors_cache_tensor(t5_attn_mask_i),
+                            },
+                            "metadata": {
+                                "apply_t5_attn_mask": bool(apply_t5_attn_mask_i),
+                            },
+                        },
+                    )
+                else:
+                    np.savez(
+                        info.text_encoder_outputs_npz,
+                        l_pooled=l_pooled_i,
+                        t5_out=t5_out_i,
+                        txt_ids=txt_ids_i,
+                        t5_attn_mask=t5_attn_mask_i,
+                        apply_t5_attn_mask=apply_t5_attn_mask_i,
+                    )
             else:
                 # it's fine that attn mask is not None. it's overwritten before calling the model if necessary
                 info.text_encoder_outputs = (l_pooled_i, t5_out_i, txt_ids_i, t5_attn_mask_i)

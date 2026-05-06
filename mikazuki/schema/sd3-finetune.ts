@@ -81,6 +81,7 @@ Schema.intersect([
             optimizer_type: Schema.union([
                 "AdamW",
                 "AdamW8bit",
+                "AdamW8bitKahan",
                 "PagedAdamW8bit",
                 "RAdamScheduleFree",
                 "Lion",
@@ -120,6 +121,8 @@ Schema.intersect([
             fp8_base_unet: Schema.boolean().description("仅对 U-Net / DiT 使用 FP8 精度"),
             cache_text_encoder_outputs: Schema.boolean().default(true).description("缓存文本编码器的输出"),
             cache_text_encoder_outputs_to_disk: Schema.boolean().default(true).description("缓存文本编码器输出到磁盘"),
+            text_encoder_outputs_cache_disk_format: Schema.union(["safetensors", "npz"]).default("safetensors").description("文本编码器输出磁盘缓存格式。默认 safetensors；若已有旧缓存会自动兼容读取 npz"),
+            text_encoder_outputs_cache_dtype: Schema.union(["auto", "fp16", "bf16", "fp32"]).default("auto").description("文本编码器输出磁盘缓存保存精度。auto 会尽量保留运行时 dtype；fp16 / bf16 可减少缓存体积，fp32 兼容性最高"),
             text_encoder_batch_size: Schema.number().min(1).description("文本编码器缓存批量大小"),
             disable_mmap_load_safetensors: Schema.boolean().default(false).description("禁用 safetensors 的 mmap 加载"),
             blocks_to_swap: Schema.number().min(1).description("在 CPU/GPU 间交换的 Transformer block 数量"),

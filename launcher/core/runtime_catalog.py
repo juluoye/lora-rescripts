@@ -29,6 +29,10 @@ _RUNTIME_NOTES: Dict[str, Dict[str, str]] = {
         "notes_zh": "当前更适合作为 Anima 的高性能优先路线，也适合需要完整前后向加速的训练。",
         "notes_en": "Currently a strong high-performance path for Anima and for workloads that benefit from forward + backward acceleration.",
     },
+    "spargeattn2": {
+        "notes_zh": "面向前沿注意力实验的独立运行时。当前优先解决环境隔离、安装与后续内核接入，建议先做短跑验证。",
+        "notes_en": "A separate runtime for frontier attention experiments. It currently prioritizes environment isolation, installation, and future kernel integration, so validate with short runs first.",
+    },
     "blackwell": {
         "notes_zh": "面向 RTX 50 系列的主线路，优先追求匹配新架构的稳定与收益。",
         "notes_en": "Primary path for RTX 50 series, aiming for architecture-matched stability and performance.",
@@ -116,4 +120,3 @@ def build_runtime_catalog(repo_root: Optional[Path] = None) -> List[Dict[str, An
         repo_root = get_repo_root()
 
     return [describe_runtime(runtime_def, repo_root=repo_root) for runtime_def in RUNTIMES]
-

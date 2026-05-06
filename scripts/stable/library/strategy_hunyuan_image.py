@@ -5,6 +5,7 @@ import numpy as np
 from transformers import AutoTokenizer, Qwen2Tokenizer
 
 from library import hunyuan_image_text_encoder, hunyuan_image_vae, train_util
+from library.latents_disk_cache import LatentsDiskCacheRef
 from library.strategy_base import LatentsCachingStrategy, TextEncodingStrategy, TokenizeStrategy, TextEncoderOutputsCachingStrategy
 
 from library.utils import setup_logging
@@ -93,34 +94,29 @@ class HunyuanImageTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStr
             + HunyuanImageTextEncoderOutputsCachingStrategy.HUNYUAN_IMAGE_TEXT_ENCODER_OUTPUTS_NPZ_SUFFIX
         )
 
+    @property
+    def cache_suffix(self) -> str:
+        return self.HUNYUAN_IMAGE_TEXT_ENCODER_OUTPUTS_NPZ_SUFFIX
+
+    def get_disk_cache_config_payload(self) -> dict[str, Any]:
+        payload = super().get_disk_cache_config_payload()
+        payload["arch"] = "hunyuan-image"
+        return payload
+
     def is_disk_cached_outputs_expected(self, npz_path: str):
-        if not self.cache_to_disk:
-            return False
-        if not os.path.exists(npz_path):
-            return False
-        if self.skip_disk_cache_validity_check:
-            return True
+        return super().is_disk_cached_outputs_expected(npz_path)
 
-        try:
-            npz = self._load_npz_archive(npz_path)
-            if "vlm_embed" not in npz:
-                return False
-            if "vlm_mask" not in npz:
-                return False
-            if "byt5_embed" not in npz:
-                return False
-            if "byt5_mask" not in npz:
-                return False
-            if "ocr_mask" not in npz:
-                return False
-        except Exception as e:
-            logger.error(f"Error loading file: {npz_path}")
-            raise e
+    def is_legacy_outputs_archive_valid(self, archive: dict[str, np.ndarray]) -> bool:
+        required = {"vlm_embed", "vlm_mask", "byt5_embed", "byt5_mask", "ocr_mask"}
+        return required.issubset(set(archive.keys()))
 
-        return True
+    def decode_loaded_text_cache_entry(self, values: dict[str, np.ndarray], metadata: dict[str, Any]) -> List[np.ndarray]:
+        return [values["vlm_embed"], values["vlm_mask"], values["byt5_embed"], values["byt5_mask"], values["ocr_mask"]]
 
-    def load_outputs_npz(self, npz_path: str) -> List[np.ndarray]:
-        data = self._load_npz_archive(npz_path)
+    def load_outputs_npz(self, npz_path_or_ref) -> List[np.ndarray]:
+        if isinstance(npz_path_or_ref, LatentsDiskCacheRef) and npz_path_or_ref.format == "safetensors":
+            return self._load_safetensors_outputs_entry(npz_path_or_ref)
+        data = self._load_npz_archive(str(npz_path_or_ref))
         vln_embed = data["vlm_embed"]
         vlm_mask = data["vlm_mask"]
         byt5_embed = data["byt5_embed"]
@@ -140,14 +136,9 @@ class HunyuanImageTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStr
                 tokenize_strategy, models, tokens_and_masks
             )
 
-        if vlm_embed.dtype == torch.bfloat16:
-            vlm_embed = vlm_embed.float()
-        if byt5_embed.dtype == torch.bfloat16:
-            byt5_embed = byt5_embed.float()
-
-        vlm_embed = vlm_embed.cpu().numpy()
+        vlm_embed = self.prepare_value_for_cache(vlm_embed)
         vlm_mask = vlm_mask.cpu().numpy()
-        byt5_embed = byt5_embed.cpu().numpy()
+        byt5_embed = self.prepare_value_for_cache(byt5_embed)
         byt5_mask = byt5_mask.cpu().numpy()
         ocr_mask = ocr_mask.cpu().numpy()
 
@@ -159,14 +150,29 @@ class HunyuanImageTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStr
             ocr_mask_i = ocr_mask[i]
 
             if self.cache_to_disk:
-                np.savez(
-                    info.text_encoder_outputs_npz,
-                    vlm_embed=vlm_embed_i,
-                    vlm_mask=vlm_mask_i,
-                    byt5_embed=byt5_embed_i,
-                    byt5_mask=byt5_mask_i,
-                    ocr_mask=ocr_mask_i,
-                )
+                if self.uses_safetensors_disk_cache:
+                    self.queue_safetensors_payload(
+                        info,
+                        {
+                            "values": {
+                                "vlm_embed": self.ensure_safetensors_cache_tensor(vlm_embed_i),
+                                "vlm_mask": self.ensure_safetensors_cache_tensor(vlm_mask_i),
+                                "byt5_embed": self.ensure_safetensors_cache_tensor(byt5_embed_i),
+                                "byt5_mask": self.ensure_safetensors_cache_tensor(byt5_mask_i),
+                                "ocr_mask": self.ensure_safetensors_cache_tensor(ocr_mask_i),
+                            },
+                            "metadata": {},
+                        },
+                    )
+                else:
+                    np.savez(
+                        info.text_encoder_outputs_npz,
+                        vlm_embed=vlm_embed_i,
+                        vlm_mask=vlm_mask_i,
+                        byt5_embed=byt5_embed_i,
+                        byt5_mask=byt5_mask_i,
+                        ocr_mask=ocr_mask_i,
+                    )
             else:
                 info.text_encoder_outputs = (vlm_embed_i, vlm_mask_i, byt5_embed_i, byt5_mask_i, ocr_mask_i)
 

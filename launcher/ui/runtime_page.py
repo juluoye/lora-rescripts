@@ -229,7 +229,7 @@ class RuntimePage(ctk.CTkScrollableFrame):
         for rt in RUNTIMES:
             categories.setdefault(rt.category, []).append(rt)
 
-        category_order = ["nvidia", "intel", "amd"]
+        category_order = ["nvidia", "nvidia_frontier", "intel", "amd"]
         card_index = 0
         for cat in category_order:
             if cat not in categories:

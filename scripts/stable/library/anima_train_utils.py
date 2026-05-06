@@ -383,7 +383,7 @@ def _has_importable_flashattention() -> bool:
 
 def resolve_default_anima_attn_mode() -> str:
     runtime_mode = _infer_anima_runtime_mode()
-    if runtime_mode == "sageattention" and _has_working_sageattention():
+    if runtime_mode in {"sageattention", "sageattention2", "spargeattn2"} and _has_working_sageattention():
         return "sageattn"
     if runtime_mode == "intel-xpu-sage" and _has_working_sageattention():
         return "sageattn"
@@ -537,80 +537,93 @@ def add_anima_training_arguments(parser: argparse.ArgumentParser):
         "--qwen3",
         type=str,
         default=None,
-        help="Path to Qwen3-0.6B model (safetensors file or directory)",
+        help="Path to Qwen3-0.6B model (safetensors file or directory)"
+        " / Qwen3-0.6B 模型路径（safetensors 文件或目录）",
     )
     parser.add_argument(
         "--llm_adapter_path",
         type=str,
         default=None,
-        help="Path to separate LLM adapter weights. If None, adapter is loaded from DiT file if present",
+        help="Path to separate LLM adapter weights. If None, adapter is loaded from DiT file if present"
+        " / 单独的 LLM adapter 权重路径。留空时若 DiT 文件内自带 adapter，则直接从 DiT 加载",
     )
     parser.add_argument(
         "--llm_adapter_lr",
         type=float,
         default=None,
-        help="Learning rate for LLM adapter. None=same as base LR, 0=freeze adapter",
+        help="Learning rate for LLM adapter. None=same as base LR, 0=freeze adapter"
+        " / LLM adapter 的学习率。None 表示跟随基础学习率，0 表示冻结 adapter",
     )
     parser.add_argument(
         "--self_attn_lr",
         type=float,
         default=None,
-        help="Learning rate for self-attention layers. None=same as base LR, 0=freeze",
+        help="Learning rate for self-attention layers. None=same as base LR, 0=freeze"
+        " / 自注意力层学习率。None 表示跟随基础学习率，0 表示冻结",
     )
     parser.add_argument(
         "--cross_attn_lr",
         type=float,
         default=None,
-        help="Learning rate for cross-attention layers. None=same as base LR, 0=freeze",
+        help="Learning rate for cross-attention layers. None=same as base LR, 0=freeze"
+        " / 交叉注意力层学习率。None 表示跟随基础学习率，0 表示冻结",
     )
     parser.add_argument(
         "--mlp_lr",
         type=float,
         default=None,
-        help="Learning rate for MLP layers. None=same as base LR, 0=freeze",
+        help="Learning rate for MLP layers. None=same as base LR, 0=freeze"
+        " / MLP 层学习率。None 表示跟随基础学习率，0 表示冻结",
     )
     parser.add_argument(
         "--mod_lr",
         type=float,
         default=None,
-        help="Learning rate for AdaLN modulation layers. None=same as base LR, 0=freeze. Note: mod layers are not included in LoRA by default.",
+        help="Learning rate for AdaLN modulation layers. None=same as base LR, 0=freeze. Note: mod layers are not included in LoRA by default."
+        " / AdaLN 调制层学习率。None 表示跟随基础学习率，0 表示冻结。注意：LoRA 默认不会包含这些 mod 层。",
     )
     parser.add_argument(
         "--t5_tokenizer_path",
         type=str,
         default=None,
-        help="Path to T5 tokenizer directory. If None, uses default configs/t5_old/",
+        help="Path to T5 tokenizer directory. If None, uses default configs/t5_old/"
+        " / T5 tokenizer 目录路径。留空时使用默认的 configs/t5_old/",
     )
     parser.add_argument(
         "--qwen3_max_token_length",
         type=int,
         default=512,
-        help="Maximum token length for Qwen3 tokenizer (default: 512)",
+        help="Maximum token length for Qwen3 tokenizer (default: 512)"
+        " / Qwen3 tokenizer 的最大 token 长度（默认 512）",
     )
     parser.add_argument(
         "--t5_max_token_length",
         type=int,
         default=512,
-        help="Maximum token length for T5 tokenizer (default: 512)",
+        help="Maximum token length for T5 tokenizer (default: 512)"
+        " / T5 tokenizer 的最大 token 长度（默认 512）",
     )
     parser.add_argument(
         "--discrete_flow_shift",
         type=float,
         default=3.0,
-        help="Timestep distribution shift for rectified flow training (default: 3.0, matches the official Anima trainer)",
+        help="Timestep distribution shift for rectified flow training (default: 3.0, matches the official Anima trainer)"
+        " / Rectified Flow 训练使用的时间步分布偏移量（默认 3.0，与官方 Anima 训练器一致）",
     )
     parser.add_argument(
         "--timestep_sampling",
         type=str,
         default="shift",
         choices=["sigma", "uniform", "sigmoid", "shift", "flux_shift"],
-        help="Timestep sampling method (default: shift, matches the official Anima trainer)",
+        help="Timestep sampling method (default: shift, matches the official Anima trainer)"
+        " / 时间步采样方式（默认 shift，与官方 Anima 训练器一致）",
     )
     parser.add_argument(
         "--sigmoid_scale",
         type=float,
         default=1.0,
-        help="Scale factor for sigmoid (logit_normal) timestep sampling (default: 1.0)",
+        help="Scale factor for sigmoid (logit_normal) timestep sampling (default: 1.0)"
+        " / sigmoid（logit_normal）时间步采样的缩放系数（默认 1.0）",
     )
     parser.add_argument(
         "--attn_mode",
@@ -622,25 +635,28 @@ def add_anima_training_arguments(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--split_attn",
         action="store_true",
-        help="split attention computation to reduce memory usage / メモリ使用量を減らすためにattention時にバッチを分割する",
+        help="split attention computation to reduce memory usage / 拆分 attention 计算以减少显存占用 / メモリ使用量を減らすためにattention時にバッチを分割する",
     )
     parser.add_argument(
         "--vae_chunk_size",
         type=int,
         default=None,
         help="Spatial chunk size for VAE encoding/decoding to reduce memory usage. Must be even number. If not specified, chunking is disabled (official behavior)."
+        + " / 为减少显存占用而设置的 VAE 编码/解码空间分块大小。必须为偶数；留空则关闭分块（与官方行为一致）。"
         + " / メモリ使用量を減らすためのVAEエンコード/デコードの空間チャンクサイズ。偶数である必要があります。未指定の場合、チャンク処理は無効になります（公式の動作）。",
     )
     parser.add_argument(
         "--vae_disable_cache",
         action="store_true",
         help="Disable internal VAE caching mechanism to reduce memory usage. Encoding / decoding will also be faster, but this differs from official behavior."
+        + " / 关闭内部 VAE 缓存机制以减少显存/内存占用。编码与解码也会更快，但这与官方默认行为不同。"
         + " / VAEのメモリ使用量を減らすために内部のキャッシュ機構を無効にします。エンコード/デコードも速くなりますが、公式の動作とは異なります。",
     )
     parser.add_argument(
         "--anima_component_cpu_offload",
         action="store_true",
         help="Keep frozen Anima helper components on CPU between training subphases when latents or text outputs are not cached. This can reduce VRAM, but it will slow training noticeably."
+        + " / 当 latents 或 text encoder outputs 未缓存时，在各训练子阶段之间把冻结的 Anima 辅助组件留在 CPU 上。这样可以减少显存占用，但训练速度会明显变慢。"
         + " / latents や text encoder outputs をキャッシュしていない場合、凍結済みの補助コンポーネント（Qwen3 / VAE）を学習の合間に CPU へ退避させます。VRAM は減りますが、学習速度はかなり低下します。",
     )
     parser.add_argument(
@@ -648,6 +664,7 @@ def add_anima_training_arguments(parser: argparse.ArgumentParser):
         type=str,
         default="simple",
         help="Sampling scheduler used by Anima preview generation during training. Currently 'simple' is supported."
+        + " / Anima 训练中生成预览图时使用的采样调度器，目前仅支持 simple。"
         + " / Anima の学習中プレビュー生成で使用するサンプリング scheduler。現在は simple のみサポートします。",
     )
     parser.add_argument(

@@ -10,7 +10,7 @@ RUNTIME_ENVIRONMENT_ALIASES = {}
 
 INTEL_XPU_RUNTIME_NAMES = {"intel-xpu", "intel-xpu-sage"}
 AMD_ROCM_RUNTIME_NAMES = {"rocm-amd"}
-SAGEATTENTION_RUNTIME_NAMES = {"sageattention", "sageattention2"}
+SAGEATTENTION_RUNTIME_NAMES = {"sageattention", "sageattention2", "spargeattn2"}
 
 
 def normalize_runtime_name(runtime_name: str) -> str:
@@ -23,6 +23,8 @@ def infer_runtime_environment_name(executable: str | None = None) -> str:
         return "sagebwd-nvidia"
     if executable_matches_runtime(executable, "flashattention"):
         return "flashattention"
+    if executable_matches_runtime(executable, "spargeattn2"):
+        return "spargeattn2"
     if executable_matches_runtime(executable, "intel-xpu-sage"):
         return "intel-xpu-sage"
     if executable_matches_runtime(executable, "intel-xpu"):
@@ -76,3 +78,7 @@ def is_intel_xpu_runtime(runtime_name: str) -> bool:
 
 def is_amd_rocm_runtime(runtime_name: str) -> bool:
     return str(runtime_name or "").strip().lower() in AMD_ROCM_RUNTIME_NAMES
+
+
+def is_sageattention_runtime(runtime_name: str) -> bool:
+    return str(runtime_name or "").strip().lower() in SAGEATTENTION_RUNTIME_NAMES

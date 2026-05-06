@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
-APP_VERSION = "v1.6.0"
+APP_VERSION = "v1.6.1"
 
 
 def get_repo_root() -> Path:
@@ -100,6 +100,19 @@ RUNTIMES: List[RuntimeDef] = [
         env_vars={"MIKAZUKI_FLASHATTENTION_STARTUP": "1"},
         install_scripts=("install_flashattention.ps1",),
         category="nvidia",
+    ),
+    RuntimeDef(
+        id="spargeattn2",
+        name_zh="SpargeAttn2",
+        name_en="SpargeAttn2",
+        desc_zh="SpargeAttn2 实验运行时，使用独立 Python 3.11 环境与预编译 wheel",
+        desc_en="Experimental SpargeAttn2 runtime using a separate Python 3.11 environment and prebuilt wheel",
+        preferred_runtime="spargeattn2",
+        env_dir_names=("python-spargeattn2", "python_spargeattn2"),
+        env_vars={"MIKAZUKI_STARTUP_ATTENTION_POLICY": "prefer_sage"},
+        install_scripts=("install_spargeattn2.ps1",),
+        experimental=True,
+        category="nvidia_frontier",
     ),
     RuntimeDef(
         id="blackwell",
@@ -253,11 +266,13 @@ SIDEBAR_WIDTH = 200
 CATEGORY_LABELS = {
     "zh": {
         "nvidia": "NVIDIA",
+        "nvidia_frontier": "NVIDIA Frontier Experiments",
         "intel": "Intel",
         "amd": "AMD",
     },
     "en": {
         "nvidia": "NVIDIA",
+        "nvidia_frontier": "NVIDIA Frontier Experiments",
         "intel": "Intel",
         "amd": "AMD",
     },

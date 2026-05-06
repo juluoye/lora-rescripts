@@ -310,6 +310,17 @@ def _build_8bit_optimizer(
         logger.info(f"use 8-bit AdamW optimizer | {optimizer_kwargs}")
         optimizer_class = bnb.optim.AdamW8bit
         optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+    elif optimizer_type == "AdamW8bitKahan".lower():
+        try:
+            from library.adamw_8bit_kahan import AdamW8bitKahan
+        except ImportError:
+            raise ImportError(
+                "AdamW8bitKahan requires bitsandbytes / AdamW8bitKahan には bitsandbytes が必要です / "
+                "AdamW8bitKahan 需要 bitsandbytes"
+            )
+        logger.info(f"use 8-bit AdamW Kahan optimizer | {optimizer_kwargs}")
+        optimizer_class = AdamW8bitKahan
+        optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
     elif optimizer_type == "SGDNesterov8bit".lower():
         logger.info(f"use 8-bit SGD with Nesterov optimizer | {optimizer_kwargs}")
         if "momentum" not in optimizer_kwargs:
@@ -666,7 +677,7 @@ def build_optimizer(
     if optimizer_type == "Lion".lower():
         return _build_lion_optimizer(trainable_params, optimizer_kwargs, lr, logger)
 
-    if optimizer_type.endswith("8bit".lower()):
+    if optimizer_type == "AdamW8bitKahan".lower() or optimizer_type.endswith("8bit".lower()):
         result = _build_8bit_optimizer(optimizer_type, trainable_params, optimizer_kwargs, lr, logger)
         if result is not None:
             return result

@@ -119,6 +119,33 @@ def add_dataset_resolution_and_cache_arguments(parser: argparse.ArgumentParser) 
         help="disk format for latent cache. Defaults to safetensors; existing npz cache files are still readable as fallback / latent ディスクキャッシュの保存形式。デフォルトは safetensors で、既存の npz キャッシュも引き続き読み込み可能です。",
     )
     add(
+        "--latent_cache_disk_dtype",
+        type=str,
+        default=None,
+        choices=["auto", "fp16", "bf16", "fp32"],
+        help="dtype used when saving latent cache to disk. auto keeps the runtime dtype when possible; npz + bf16 will be stored as fp32 for compatibility"
+        " / latent をディスクキャッシュする際の保存精度。auto は可能な限り実行時 dtype を維持します。npz + bf16 は互換性のため fp32 で保存されます。"
+        " / 将 latent 保存到磁盘缓存时使用的精度。auto 会在可能时尽量保留运行时 dtype；若使用 npz + bf16，则会为了兼容性回退为 fp32 保存。",
+    )
+    add(
+        "--text_encoder_outputs_cache_disk_format",
+        type=str,
+        default=None,
+        choices=["safetensors", "npz"],
+        help="disk format for text encoder outputs cache. Defaults to safetensors; existing npz cache files are still readable as fallback"
+        " / text encoder 出力ディスクキャッシュの保存形式。デフォルトは safetensors で、既存の npz キャッシュも引き続き読み込み可能です。"
+        " / text encoder 输出磁盘缓存的保存格式。默认使用 safetensors；若已存在旧的 npz 缓存，也会继续兼容读取。",
+    )
+    add(
+        "--text_encoder_outputs_cache_dtype",
+        type=str,
+        default=None,
+        choices=["auto", "fp16", "bf16", "fp32"],
+        help="dtype used when saving text encoder outputs cache to disk. auto keeps the runtime dtype when possible"
+        " / text encoder 出力をディスクキャッシュする際の保存精度。auto は可能な限り実行時 dtype を維持します。"
+        " / 将 text encoder 输出保存到磁盘缓存时使用的精度。auto 会在可能时尽量保留运行时 dtype。",
+    )
+    add(
         "--skip_cache_check",
         action="store_true",
         help="skip the content validation of cache (latent and text encoder output). Cache file existence check is always performed, and cache processing is performed if the file does not exist"

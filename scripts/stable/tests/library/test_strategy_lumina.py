@@ -1,8 +1,16 @@
 import os
 import tempfile
+import sys
+import types
+import importlib.machinery
 import torch
 import numpy as np
 from unittest.mock import patch
+
+cv2_stub = sys.modules.setdefault("cv2", types.ModuleType("cv2"))
+if getattr(cv2_stub, "__spec__", None) is None:
+    cv2_stub.__spec__ = importlib.machinery.ModuleSpec("cv2", loader=None)
+
 from transformers import Gemma2Model
 
 from library.strategy_lumina import (
@@ -188,6 +196,8 @@ def test_lumina_latents_caching_strategy():
     with tempfile.TemporaryDirectory() as tmpdir:
         # Prepare a mock absolute path
         abs_path = os.path.join(tmpdir, "test_image.png")
+        with open(abs_path, "wb") as handle:
+            handle.write(b"stub")
 
         # Use smaller image size for faster testing
         image_size = (64, 64)
@@ -215,6 +225,7 @@ def test_lumina_latents_caching_strategy():
                 self.absolute_path = path
                 self.image = image
                 self.image_path = path
+                self.image_size = image_size
                 self.bucket_reso = image_size
                 self.resized_size = image_size
                 self.resize_interpolation = "lanczos"
@@ -242,3 +253,85 @@ def test_lumina_latents_caching_strategy():
         # Test loading from disk
         loaded_data = caching_strategy.load_latents_from_disk(cache_path_or_ref, image_size)
         assert len(loaded_data) == 5  # Check for 5 expected elements
+
+
+def test_lumina_latents_catalog_index_round_trip():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        abs_path = os.path.join(tmpdir, "test_image.png")
+        with open(abs_path, "wb") as handle:
+            handle.write(b"stub")
+
+        image_size = (64, 64)
+        test_image = np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8)
+
+        caching_strategy = LuminaLatentsCachingStrategy(cache_to_disk=True, batch_size=1, skip_disk_cache_validity_check=False)
+        caching_strategy._disk_cache_format = "safetensors"
+        caching_strategy._disk_cache_dtype = "fp16"
+
+        class MockVAE:
+            def __init__(self):
+                self.device = torch.device("cpu")
+                self.dtype = torch.float32
+
+            def encode(self, x):
+                encoded = torch.randn(1, 4, 8, 8, device=x.device)
+                return type("EncodedLatents", (), {"to": lambda *args, **kwargs: encoded})
+
+        class MockImageInfo:
+            def __init__(self, path, image):
+                self.absolute_path = path
+                self.image = image
+                self.image_path = path
+                self.image_size = image_size
+                self.bucket_reso = image_size
+                self.resized_size = image_size
+                self.resize_interpolation = "lanczos"
+                self.latents_disk_cache_ref = None
+                self.latents_npz = None
+
+        batch = [MockImageInfo(abs_path, test_image)]
+        caching_strategy.cache_batch_latents(MockVAE(), batch, flip_aug=False, alpha_mask=False, random_crop=False)
+        caching_strategy.finalize_caching()
+
+        cache_dir = caching_strategy._get_safetensors_cache_dir(tmpdir)
+        index_path = os.path.join(cache_dir, "_catalog.json")
+        assert os.path.exists(index_path)
+        assert batch[0].latents_disk_cache_ref is not None
+
+        reloaded = LuminaLatentsCachingStrategy(cache_to_disk=True, batch_size=1, skip_disk_cache_validity_check=False)
+        reloaded._disk_cache_format = "safetensors"
+        reloaded._disk_cache_dtype = "fp16"
+        reloaded.warm_source_stat_cache([batch[0]])
+
+        cache_ref = reloaded.find_existing_latents_disk_cache_ref(
+            abs_path,
+            image_size,
+            cache_root=tmpdir,
+            bucket_reso=image_size,
+            flip_aug=False,
+            alpha_mask=False,
+        )
+        assert cache_ref is not None
+        assert cache_ref.format == "safetensors"
+        assert cache_ref.entry_key is not None
+
+
+def test_lumina_latents_npz_cache_dtype_respects_fp16_setting():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        image_size = (64, 64)
+        npz_path = os.path.join(tmpdir, "test_image_0064x0064_lumina.npz")
+
+        caching_strategy = LuminaLatentsCachingStrategy(cache_to_disk=True, batch_size=1, skip_disk_cache_validity_check=False)
+        caching_strategy._disk_cache_format = "npz"
+        caching_strategy._disk_cache_dtype = "fp16"
+
+        latents = torch.randn(4, 8, 8, dtype=torch.float32)
+        caching_strategy.save_latents_to_disk(
+            npz_path,
+            latents,
+            original_size=image_size,
+            crop_ltrb=(0, 0, image_size[0], image_size[1]),
+        )
+
+        with np.load(npz_path, allow_pickle=False) as archive:
+            assert archive["latents"].dtype == np.float16

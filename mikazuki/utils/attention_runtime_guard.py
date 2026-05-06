@@ -68,7 +68,7 @@ def _has_importable_flashattention() -> bool:
 
 def resolve_anima_runtime_attention_backend(gpu_ids=None) -> str:
     runtime_mode = get_attention_runtime_mode()
-    if runtime_mode in {"sageattention", "sageattention2", "sagebwd-nvidia", "intel-xpu-sage"}:
+    if runtime_mode in {"sageattention", "sageattention2", "spargeattn2", "sagebwd-nvidia", "intel-xpu-sage"}:
         return "sageattn"
     if runtime_mode == "flashattention":
         return "flash" if _has_importable_flashattention() else "torch"
@@ -314,7 +314,7 @@ def apply_startup_attention_policy(config: dict, parse_boolish) -> Optional[str]
         return None
 
     runtime_mode = get_attention_runtime_mode()
-    if policy != "prefer_sage" or runtime_mode not in {"sageattention", "sageattention2", "sagebwd-nvidia", "intel-xpu-sage"}:
+    if policy != "prefer_sage" or runtime_mode not in {"sageattention", "sageattention2", "spargeattn2", "sagebwd-nvidia", "intel-xpu-sage"}:
         return None
 
     if parse_boolish(config.get("mem_eff_attn", False)):
@@ -344,6 +344,8 @@ def apply_startup_attention_policy(config: dict, parse_boolish) -> Optional[str]
             message = "启动器当前处于 SageBwd NVIDIA 实验模式。本次训练会先沿用现有 SageAttention 兼容路径，并为后续 SageBwd 接入预留运行时标记。"
         elif runtime_mode == "intel-xpu-sage":
             message = "启动器当前处于 Intel XPU Sage 实验模式，本次训练已自动优先尝试 SageAttention。若内核调用失败，运行时会自动回退到 SDPA。"
+        elif runtime_mode == "spargeattn2":
+            message = "启动器当前处于 SpargeAttn2 实验模式，本次训练已自动优先尝试 SpargeAttn2（通过 SageAttention 兼容层接入）。若内核调用失败，运行时会自动回退到 SDPA。"
         else:
             message = "启动器当前处于 SageAttention 默认模式，本次训练已自动优先使用 SageAttention。"
         log.info(message)
@@ -353,7 +355,7 @@ def apply_startup_attention_policy(config: dict, parse_boolish) -> Optional[str]
 
 def apply_sageattention_runtime_override(config: dict, parse_boolish) -> Optional[str]:
     runtime_mode = get_attention_runtime_mode()
-    if runtime_mode not in {"sageattention", "sageattention2", "sagebwd-nvidia"}:
+    if runtime_mode not in {"sageattention", "sageattention2", "spargeattn2", "sagebwd-nvidia"}:
         return None
 
     if parse_boolish(config.get("mem_eff_attn", False)):
@@ -385,6 +387,11 @@ def apply_sageattention_runtime_override(config: dict, parse_boolish) -> Optiona
                 "检测到当前为 SageBwd NVIDIA 实验运行时，已自动忽略 xformers，"
                 "本次训练会先沿用现有 SageAttention 兼容路径。"
             )
+        elif runtime_mode == "spargeattn2":
+            message = (
+                "检测到当前为 SpargeAttn2 实验运行时，已自动忽略 xformers，"
+                "本次训练将优先尝试 SpargeAttn2（通过 SageAttention 兼容层接入）。"
+            )
         else:
             message = (
                 "检测到当前为 SageAttention 专用运行时，已自动忽略 xformers，"
@@ -400,6 +407,11 @@ def apply_sageattention_runtime_override(config: dict, parse_boolish) -> Optiona
                 "检测到当前为 SageBwd NVIDIA 实验运行时，已自动忽略 xformers。"
                 "由于当前配置未启用 SageAttention 兼容路径，本次训练将改用 sdpa。"
             )
+        elif runtime_mode == "spargeattn2":
+            message = (
+                "检测到当前为 SpargeAttn2 实验运行时，已自动忽略 xformers。"
+                "由于当前配置未启用 SageAttention 兼容路径，本次训练将改用 sdpa。"
+            )
         else:
             message = (
                 "检测到当前为 SageAttention 专用运行时，已自动忽略 xformers。"
@@ -410,6 +422,11 @@ def apply_sageattention_runtime_override(config: dict, parse_boolish) -> Optiona
             message = (
                 "检测到当前为 SageBwd NVIDIA 实验运行时，已自动忽略 xformers。"
                 "若希望本次训练使用当前兼容路径，请启用 sageattn。"
+            )
+        elif runtime_mode == "spargeattn2":
+            message = (
+                "检测到当前为 SpargeAttn2 实验运行时，已自动忽略 xformers。"
+                "若希望本次训练使用 SpargeAttn2，请启用 sageattn。"
             )
         else:
             message = (

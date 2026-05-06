@@ -42,6 +42,7 @@ Schema.intersect([
         Schema.object({
             optimizer_type: Schema.union([
                 "AdamW8bit",
+                "AdamW8bitKahan",
                 "Lion",
             ]).default("AdamW8bit").description("优化器设置"),
         })
@@ -84,6 +85,8 @@ Schema.intersect([
         xformers: Schema.boolean().default(true).description("启用 xformers"),
         cache_latents: Schema.boolean().default(true).description("缓存图像 latent, 缓存 VAE 输出以减少 VRAM 使用"),
         latent_cache_disk_format: Schema.union(["safetensors", "npz"]).default("safetensors").description("latent 磁盘缓存格式。默认 safetensors；若已有旧缓存会自动兼容读取 npz"),
+        text_encoder_outputs_cache_disk_format: Schema.union(["safetensors", "npz"]).default("safetensors").description("文本编码器输出磁盘缓存格式。默认 safetensors；若已有旧缓存会自动兼容读取 npz"),
+        text_encoder_outputs_cache_dtype: Schema.union(["auto", "fp16", "bf16", "fp32"]).default("auto").description("文本编码器输出磁盘缓存保存精度。auto 会尽量保留运行时 dtype；fp16 / bf16 可减少缓存体积，fp32 兼容性最高"),
         experimental_attention_profile_enabled: Schema.boolean().default(false).description("步骤耗时窗口统计开关。默认关闭，仅在诊断训练速度/瓶颈时建议开启"),
         experimental_attention_profile_window: Schema.number().min(1).default(50).description("步骤耗时窗口统计间隔（每 N 个优化步输出一次聚合耗时摘要）")
     }).description("速度优化选项"),

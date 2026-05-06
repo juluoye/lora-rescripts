@@ -151,11 +151,14 @@ def _get_sageattention_runtime_name(tensor: torch.Tensor) -> str:
     if device_type == "cuda" and bool(getattr(torch.version, "hip", None)):
         return "rocm-amd"
 
+    if device_type == "cuda" and active_runtime == "spargeattn2":
+        return "spargeattn2"
+
     return device_type or "unknown"
 
 
 def _should_try_runtime_sageattention_fallback(tensor: torch.Tensor) -> bool:
-    return _get_sageattention_runtime_name(tensor) in {"intel-xpu", "intel-xpu-sage"}
+    return _get_sageattention_runtime_name(tensor) in {"intel-xpu", "intel-xpu-sage", "spargeattn2"}
 
 
 @lru_cache(maxsize=8)

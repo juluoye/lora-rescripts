@@ -143,6 +143,8 @@ def _get_tensor_runtime(q: torch.Tensor) -> str:
     if device_type == "cuda" and bool(getattr(torch.version, "hip", None)):
         return "rocm-amd"
     if device_type == "cuda":
+        if active_runtime in {"flashattention", "sageattention", "sageattention2", "spargeattn2", "blackwell", "sagebwd-nvidia"}:
+            return active_runtime
         return "cuda"
     return device_type
 
@@ -223,7 +225,7 @@ def _restore_sage_fixed_output(x: torch.Tensor, *, tensor_layout: str) -> torch.
 
 
 def _should_try_sageattention_fallback(q: torch.Tensor) -> bool:
-    return _get_tensor_runtime(q) == "intel-xpu"
+    return _get_tensor_runtime(q) in {"intel-xpu", "intel-xpu-sage", "spargeattn2"}
 
 
 def _clone_attention_params(attn_params: "AttentionParams", *, attn_mode: str) -> "AttentionParams":

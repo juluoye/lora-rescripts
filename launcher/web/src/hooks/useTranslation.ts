@@ -194,6 +194,22 @@ const BUILTIN_FALLBACKS: Record<string, { zh: string; en: string }> = {
     zh: '已回滚到上一份托管导入备份：{name}',
     en: 'Reverted to the previous managed import backup: {name}',
   },
+  runtime_uninstall_dialog_title: {
+    zh: '卸载运行时依赖',
+    en: 'Remove runtime dependencies',
+  },
+  runtime_uninstall_confirm: {
+    zh: '这会卸载 {runtime} 的训练依赖，但会保留本地 Python 骨架和 bootstrap。之后可以直接重新安装依赖。是否继续？',
+    en: 'This will remove the training dependencies for {runtime}, but keep the local Python skeleton and bootstrap packages. You can reinstall dependencies directly afterwards. Continue?',
+  },
+  runtime_uninstall_confirm_action: {
+    zh: '继续卸载',
+    en: 'Continue',
+  },
+  runtime_uninstall_cancel: {
+    zh: '先不卸载',
+    en: 'Not now',
+  },
 };
 
 export function useTranslation(translations: Translations, language: string) {

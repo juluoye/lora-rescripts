@@ -20,6 +20,8 @@ import prodigyopt
 import schedulefree as sf
 import transformers
 
+from library.adamw_8bit_kahan import AdamW8bitKahan
+from library.optimizer_offload_util import should_offload_optimizer_tensor
 
 def test_default_get_optimizer():
     with patch("sys.argv", [""]):
@@ -53,6 +55,11 @@ def test_all_supported_optimizers():
             "name": "bitsandbytes.optim.adamw.AdamW8bit",
             "alias": "AdamW8bit",
             "instance": bnb.optim.AdamW8bit,
+        },
+        {
+            "name": "library.adamw_8bit_kahan.AdamW8bitKahan",
+            "alias": "AdamW8bitKahan",
+            "instance": AdamW8bitKahan,
         },
         {
             "name": "lion_pytorch.lion_pytorch.Lion",
@@ -207,3 +214,34 @@ def test_full_bf16_optimizer_wraps_master_params():
         assert optimizer_name == "torch.optim.adamw.AdamW"
         assert isinstance(optimizer, FullBf16StochasticOptimizer)
         assert optimizer.param_groups[0]["params"][0].dtype == torch.float32
+
+
+def test_adamw8bitkahan_accepts_kahan_offload_args():
+    with patch(
+        "sys.argv",
+        [
+            "",
+            "--optimizer_type",
+            "AdamW8bitKahan",
+            "--optimizer_args",
+            "kahan_buffer_offload=True",
+            "optimizer_offload_mode='ndim_ge_2'",
+        ],
+    ):
+        parser = setup_parser()
+        args = parser.parse_args()
+        param = Parameter(torch.tensor([[1.5, 1.5], [1.0, 1.0]]))
+        optimizer_name, optimizer_args, optimizer = get_optimizer(args, [param])
+        assert optimizer_name == "library.adamw_8bit_kahan.AdamW8bitKahan"
+        assert "kahan_buffer_offload=True" in optimizer_args
+        assert isinstance(optimizer, AdamW8bitKahan)
+        assert optimizer.kahan_buffer_offload is True
+        assert optimizer.optimizer_offload_mode == "ndim_ge_2"
+
+
+def test_optimizer_offload_helper_uses_ndim_heuristic():
+    vector = Parameter(torch.tensor([1.0, 2.0]))
+    matrix = Parameter(torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
+    assert should_offload_optimizer_tensor(vector, mode="ndim_ge_2") is False
+    assert should_offload_optimizer_tensor(matrix, mode="ndim_ge_2") is True
+    assert should_offload_optimizer_tensor(vector, mode="all") is True

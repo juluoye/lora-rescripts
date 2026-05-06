@@ -5,6 +5,7 @@ from typing import Any, List, Optional, Tuple, Union
 import torch
 from transformers import AutoTokenizer, AutoModel, Gemma2Model, GemmaTokenizerFast
 from library import train_util
+from library.latents_disk_cache import LatentsDiskCacheRef
 from library.strategy_base import (
     LatentsCachingStrategy,
     TokenizeStrategy,
@@ -167,43 +168,28 @@ class LuminaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy)
             + LuminaTextEncoderOutputsCachingStrategy.LUMINA_TEXT_ENCODER_OUTPUTS_NPZ_SUFFIX
         )
 
+    @property
+    def cache_suffix(self) -> str:
+        return self.LUMINA_TEXT_ENCODER_OUTPUTS_NPZ_SUFFIX
+
+    def get_disk_cache_config_payload(self) -> dict[str, Any]:
+        payload = super().get_disk_cache_config_payload()
+        payload["arch"] = "lumina"
+        return payload
+
     def is_disk_cached_outputs_expected(self, npz_path: str) -> bool:
-        """
-        Args:
-            npz_path (str): Path to the npz file.
+        return super().is_disk_cached_outputs_expected(npz_path)
 
-        Returns:
-            bool: True if the npz file is expected to be cached.
-        """
-        if not self.cache_to_disk:
-            return False
-        if not os.path.exists(npz_path):
-            return False
-        if self.skip_disk_cache_validity_check:
-            return True
+    def is_legacy_outputs_archive_valid(self, archive: dict[str, np.ndarray]) -> bool:
+        return "hidden_state" in archive and "attention_mask" in archive and "input_ids" in archive
 
-        try:
-            npz = self._load_npz_archive(npz_path)
-            if "hidden_state" not in npz:
-                return False
-            if "attention_mask" not in npz:
-                return False
-            if "input_ids" not in npz:
-                return False
-        except Exception as e:
-            logger.error(f"Error loading file: {npz_path}")
-            raise e
+    def decode_loaded_text_cache_entry(self, values: dict[str, np.ndarray], metadata: dict[str, Any]) -> List[np.ndarray]:
+        return [values["hidden_state"], values["input_ids"], values["attention_mask"]]
 
-        return True
-
-    def load_outputs_npz(self, npz_path: str) -> List[np.ndarray]:
-        """
-        Load outputs from a npz file
-
-        Returns:
-            List[np.ndarray]: hidden_state, input_ids, attention_mask
-        """
-        data = self._load_npz_archive(npz_path)
+    def load_outputs_npz(self, npz_path_or_ref) -> List[np.ndarray]:
+        if isinstance(npz_path_or_ref, LatentsDiskCacheRef) and npz_path_or_ref.format == "safetensors":
+            return self._load_safetensors_outputs_entry(npz_path_or_ref)
+        data = self._load_npz_archive(str(npz_path_or_ref))
         hidden_state = data["hidden_state"]
         attention_mask = data["attention_mask"]
         input_ids = data["input_ids"]
@@ -252,10 +238,7 @@ class LuminaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy)
                 )
             )
 
-        if hidden_state.dtype != torch.float32:
-            hidden_state = hidden_state.float()
-
-        hidden_state = hidden_state.cpu().numpy()
+        hidden_state = self.prepare_value_for_cache(hidden_state)
         attention_mask = attention_masks.cpu().numpy() # (B, S)
         input_ids = input_ids.cpu().numpy() # (B, S) 
 
@@ -267,12 +250,25 @@ class LuminaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy)
 
             if self.cache_to_disk:
                 assert info.text_encoder_outputs_npz is not None, f"Text encoder cache outputs to disk not found for image {info.image_key}"
-                np.savez(
-                    info.text_encoder_outputs_npz,
-                    hidden_state=hidden_state_i,
-                    attention_mask=attention_mask_i,
-                    input_ids=input_ids_i,
-                )
+                if self.uses_safetensors_disk_cache:
+                    self.queue_safetensors_payload(
+                        info,
+                        {
+                            "values": {
+                                "hidden_state": self.ensure_safetensors_cache_tensor(hidden_state_i),
+                                "attention_mask": self.ensure_safetensors_cache_tensor(attention_mask_i),
+                                "input_ids": self.ensure_safetensors_cache_tensor(input_ids_i),
+                            },
+                            "metadata": {},
+                        },
+                    )
+                else:
+                    np.savez(
+                        info.text_encoder_outputs_npz,
+                        hidden_state=hidden_state_i,
+                        attention_mask=attention_mask_i,
+                        input_ids=input_ids_i,
+                    )
             else:
                 info.text_encoder_outputs = [
                     hidden_state_i,

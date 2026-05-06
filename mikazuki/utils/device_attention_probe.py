@@ -122,7 +122,7 @@ def build_attention_backend_summary(torch_module, xformers_info: dict, is_xpu_av
     preferred_backend = "torch"
     if runtime_mode == "flashattention" and flashattention_status["symbols_ok"] and torch_module.cuda.is_available():
         preferred_backend = "flashattn"
-    elif runtime_mode in {"sageattention", "sageattention2"} and sageattention_status["symbols_ok"] and torch_module.cuda.is_available():
+    elif runtime_mode in {"sageattention", "sageattention2", "spargeattn2"} and sageattention_status["symbols_ok"] and torch_module.cuda.is_available():
         preferred_backend = "sageattn"
     elif runtime_mode == "intel-xpu-sage" and sageattention_status["symbols_ok"] and is_xpu_available(torch_module):
         preferred_backend = "sageattn"
@@ -160,6 +160,15 @@ def build_attention_backend_summary(torch_module, xformers_info: dict, is_xpu_av
         detail_zh = (
             "当前为 SageAttention 专用运行时。显式启用 sageattn 的训练路由会使用 SageAttention；"
             "其他仍勾选 xformers 的配置在支持时会自动降级到 SDPA。"
+        )
+    elif runtime_mode == "spargeattn2" and preferred_backend == "sageattn":
+        detail = (
+            "SpargeAttn2 runtime active. The current build exposes it through the SageAttention compatibility path; "
+            "when a Sparge kernel cannot handle a route, training may fall back to SDPA automatically."
+        )
+        detail_zh = (
+            "当前为 SpargeAttn2 实验运行时。当前构建通过 SageAttention 兼容层接入它；"
+            "若某条 attention 路由不适合 Sparge 内核，训练会尽量自动回退到 SDPA。"
         )
     elif runtime_mode == "flashattention" and preferred_backend == "flashattn":
         detail = (

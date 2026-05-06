@@ -136,6 +136,7 @@ def recommend_runtime(statuses: Dict[str, RuntimeStatus], repo_root: Optional[Pa
                     "sageattention",
                     "flashattention",
                     "standard",
+                    "spargeattn2",
                 ]
                 preferred_runtime_id = candidates[0]
                 reason_zh = f"检测到 NVIDIA Blackwell GPU（{gpu_name}），优先推荐 Blackwell 专用线路。"
@@ -146,6 +147,7 @@ def recommend_runtime(statuses: Dict[str, RuntimeStatus], repo_root: Optional[Pa
                     "sageattention",
                     "flashattention",
                     "standard",
+                    "spargeattn2",
                 ]
                 preferred_runtime_id = candidates[0]
                 reason_zh = f"检测到 NVIDIA GPU（{gpu_name}），优先推荐 SageAttention / FlashAttention 加速线路。"

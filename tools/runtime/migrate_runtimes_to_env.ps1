@@ -21,6 +21,7 @@ $runtimeSpecs = @(
     [pscustomobject]@{ Name = "sagebwd-nvidia"; Primary = "python_sagebwd_nvidia"; Aliases = @("python_sagebwd_nvidia", "python-sagebwd-nvidia"); IncludeByDefault = $true },
     [pscustomobject]@{ Name = "sageattention"; Primary = "python-sageattention"; Aliases = @("python-sageattention", "python_sageattention"); IncludeByDefault = $true },
     [pscustomobject]@{ Name = "sageattention2"; Primary = "python-sageattention2"; Aliases = @("python-sageattention2", "python_sageattention2"); IncludeByDefault = $true },
+    [pscustomobject]@{ Name = "spargeattn2"; Primary = "python-spargeattn2"; Aliases = @("python-spargeattn2", "python_spargeattn2"); IncludeByDefault = $true },
     [pscustomobject]@{ Name = "venv"; Primary = "venv"; Aliases = @("venv"); IncludeByDefault = $false },
     [pscustomobject]@{ Name = "venv-tageditor"; Primary = "venv-tageditor"; Aliases = @("venv-tageditor"); IncludeByDefault = $false }
 )

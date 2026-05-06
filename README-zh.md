@@ -18,7 +18,7 @@
 
 _✨ 享受 Stable Diffusion 训练！ ✨_
 
-**v1.6.0**
+**v1.6.1**
 
 Fork from 秋葉 `aaaki/lora-scripts`  
 Modify By `Lulynx`

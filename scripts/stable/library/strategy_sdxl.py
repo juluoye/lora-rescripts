@@ -4,6 +4,7 @@ from typing import Any, List, Optional, Tuple, Union
 import numpy as np
 import torch
 from transformers import CLIPTokenizer, CLIPTextModel, CLIPTextModelWithProjection
+from library.latents_disk_cache import LatentsDiskCacheRef
 from library.strategy_base import TokenizeStrategy, TextEncodingStrategy, TextEncoderOutputsCachingStrategy
 
 
@@ -320,26 +321,31 @@ class SdxlTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
     def get_outputs_npz_path(self, image_abs_path: str) -> str:
         return os.path.splitext(image_abs_path)[0] + SdxlTextEncoderOutputsCachingStrategy.SDXL_TEXT_ENCODER_OUTPUTS_NPZ_SUFFIX
 
+    @property
+    def cache_suffix(self) -> str:
+        return self.SDXL_TEXT_ENCODER_OUTPUTS_NPZ_SUFFIX
+
+    def get_disk_cache_config_payload(self) -> dict[str, Any]:
+        payload = super().get_disk_cache_config_payload()
+        payload["arch"] = "sdxl"
+        return payload
+
     def is_disk_cached_outputs_expected(self, npz_path: str):
-        if not self.cache_to_disk:
-            return False
-        if not os.path.exists(npz_path):
-            return False
-        if self.skip_disk_cache_validity_check:
-            return True
+        return super().is_disk_cached_outputs_expected(npz_path)
 
-        try:
-            npz = self._load_npz_archive(npz_path)
-            if "hidden_state1" not in npz or "hidden_state2" not in npz or "pool2" not in npz:
-                return False
-        except Exception as e:
-            logger.error(f"Error loading file: {npz_path}")
-            raise e
+    def is_legacy_outputs_archive_valid(self, archive: dict[str, np.ndarray]) -> bool:
+        return "hidden_state1" in archive and "hidden_state2" in archive and "pool2" in archive
 
-        return True
+    def decode_loaded_text_cache_entry(self, values: dict[str, np.ndarray], metadata: dict[str, Any]) -> List[np.ndarray]:
+        hidden_state1 = values["hidden_state1"]
+        hidden_state2 = values["hidden_state2"]
+        pool2 = values["pool2"]
+        return [hidden_state1, hidden_state2, pool2]
 
-    def load_outputs_npz(self, npz_path: str) -> List[np.ndarray]:
-        data = self._load_npz_archive(npz_path)
+    def load_outputs_npz(self, npz_path_or_ref) -> List[np.ndarray]:
+        if isinstance(npz_path_or_ref, LatentsDiskCacheRef) and npz_path_or_ref.format == "safetensors":
+            return self._load_safetensors_outputs_entry(npz_path_or_ref)
+        data = self._load_npz_archive(str(npz_path_or_ref))
         hidden_state1 = data["hidden_state1"]
         hidden_state2 = data["hidden_state2"]
         pool2 = data["pool2"]
@@ -364,16 +370,9 @@ class SdxlTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
                     tokenize_strategy, models, [tokens1, tokens2]
                 )
 
-        if hidden_state1.dtype == torch.bfloat16:
-            hidden_state1 = hidden_state1.float()
-        if hidden_state2.dtype == torch.bfloat16:
-            hidden_state2 = hidden_state2.float()
-        if pool2.dtype == torch.bfloat16:
-            pool2 = pool2.float()
-
-        hidden_state1 = hidden_state1.cpu().numpy()
-        hidden_state2 = hidden_state2.cpu().numpy()
-        pool2 = pool2.cpu().numpy()
+        hidden_state1 = self.prepare_value_for_cache(hidden_state1)
+        hidden_state2 = self.prepare_value_for_cache(hidden_state2)
+        pool2 = self.prepare_value_for_cache(pool2)
 
         for i, info in enumerate(infos):
             hidden_state1_i = hidden_state1[i]
@@ -381,11 +380,24 @@ class SdxlTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
             pool2_i = pool2[i]
 
             if self.cache_to_disk:
-                np.savez(
-                    info.text_encoder_outputs_npz,
-                    hidden_state1=hidden_state1_i,
-                    hidden_state2=hidden_state2_i,
-                    pool2=pool2_i,
-                )
+                if self.uses_safetensors_disk_cache:
+                    self.queue_safetensors_payload(
+                        info,
+                        {
+                            "values": {
+                                "hidden_state1": self.ensure_safetensors_cache_tensor(hidden_state1_i),
+                                "hidden_state2": self.ensure_safetensors_cache_tensor(hidden_state2_i),
+                                "pool2": self.ensure_safetensors_cache_tensor(pool2_i),
+                            },
+                            "metadata": {},
+                        },
+                    )
+                else:
+                    np.savez(
+                        info.text_encoder_outputs_npz,
+                        hidden_state1=hidden_state1_i,
+                        hidden_state2=hidden_state2_i,
+                        pool2=pool2_i,
+                    )
             else:
                 info.text_encoder_outputs = [hidden_state1_i, hidden_state2_i, pool2_i]

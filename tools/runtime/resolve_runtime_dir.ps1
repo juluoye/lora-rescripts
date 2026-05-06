@@ -30,6 +30,7 @@ $aliasMap = @{
     "rocm-amd" = @{ Preferred = "python_rocm_amd"; Names = @("python_rocm_amd") }
     "sageattention" = @{ Preferred = "python-sageattention"; Names = @("python-sageattention", "python_sageattention") }
     "sageattention2" = @{ Preferred = "python-sageattention2"; Names = @("python-sageattention2", "python_sageattention2") }
+    "spargeattn2" = @{ Preferred = "python-spargeattn2"; Names = @("python-spargeattn2", "python_spargeattn2") }
     "sagebwd-nvidia" = @{ Preferred = "python_sagebwd_nvidia"; Names = @("python_sagebwd_nvidia", "python-sagebwd-nvidia") }
     "tageditor" = @{ Preferred = "python_tageditor"; Names = @("python_tageditor") }
     "python" = @{ Preferred = "python"; Names = @("python") }
@@ -44,6 +45,8 @@ $aliasMap = @{
     "python_sageattention" = @{ Preferred = "python-sageattention"; Names = @("python-sageattention", "python_sageattention") }
     "python-sageattention2" = @{ Preferred = "python-sageattention2"; Names = @("python-sageattention2", "python_sageattention2") }
     "python_sageattention2" = @{ Preferred = "python-sageattention2"; Names = @("python-sageattention2", "python_sageattention2") }
+    "python-spargeattn2" = @{ Preferred = "python-spargeattn2"; Names = @("python-spargeattn2", "python_spargeattn2") }
+    "python_spargeattn2" = @{ Preferred = "python-spargeattn2"; Names = @("python-spargeattn2", "python_spargeattn2") }
     "python_sagebwd_nvidia" = @{ Preferred = "python_sagebwd_nvidia"; Names = @("python_sagebwd_nvidia", "python-sagebwd-nvidia") }
     "python-sagebwd-nvidia" = @{ Preferred = "python_sagebwd_nvidia"; Names = @("python_sagebwd_nvidia", "python-sagebwd-nvidia") }
 }

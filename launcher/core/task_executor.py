@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import shutil
 import subprocess
@@ -42,6 +43,156 @@ def _now_iso() -> str:
 
 _TASK_LOG_LIMIT = 200
 _TASK_LOG_PERSIST_INTERVAL = 10
+
+_RUNTIME_BOOTSTRAP_SITE_PACKAGE_PATTERNS = (
+    "pip",
+    "pip-*.dist-info",
+    "setuptools",
+    "setuptools-*.dist-info",
+    "wheel",
+    "wheel-*.dist-info",
+    "_distutils_hack",
+    "pkg_resources",
+    "distutils-precedence.pth",
+)
+
+_RUNTIME_BOOTSTRAP_SCRIPT_PATTERNS = (
+    "pip.exe",
+    "pip*.exe",
+)
+
+
+def _matches_any_pattern(name: str, patterns: tuple[str, ...]) -> bool:
+    normalized = name.lower()
+    return any(fnmatch.fnmatchcase(normalized, pattern.lower()) for pattern in patterns)
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def _clear_directory_contents(directory: Path, *, keep_patterns: tuple[str, ...] = ()) -> Dict[str, int]:
+    removed = 0
+    kept = 0
+    if not directory.exists():
+        return {"removed": removed, "kept": kept}
+
+    for item in directory.iterdir():
+        if keep_patterns and _matches_any_pattern(item.name, keep_patterns):
+            kept += 1
+            continue
+        _remove_path(item)
+        removed += 1
+
+    return {"removed": removed, "kept": kept}
+
+
+def _soft_uninstall_runtime_environment(env_dir: Path) -> Dict[str, Any]:
+    details: Dict[str, Any] = {
+        "env_dir": str(env_dir),
+        "mode": "dependency_only",
+        "removed_markers": 0,
+        "removed_root_caches": 0,
+        "site_packages_removed": 0,
+        "site_packages_kept": 0,
+        "scripts_removed": 0,
+        "scripts_kept": 0,
+    }
+
+    deps_marker = env_dir / ".deps_installed"
+    if deps_marker.exists():
+        deps_marker.unlink()
+        details["removed_markers"] = 1
+
+    for cache_dir in (env_dir / "__pycache__", env_dir / "Lib" / "__pycache__", env_dir / "Scripts" / "__pycache__"):
+        if cache_dir.exists():
+            _remove_path(cache_dir)
+            details["removed_root_caches"] += 1
+
+    site_packages_result = _clear_directory_contents(
+        env_dir / "Lib" / "site-packages",
+        keep_patterns=_RUNTIME_BOOTSTRAP_SITE_PACKAGE_PATTERNS,
+    )
+    details["site_packages_removed"] = site_packages_result["removed"]
+    details["site_packages_kept"] = site_packages_result["kept"]
+
+    scripts_result = _clear_directory_contents(
+        env_dir / "Scripts",
+        keep_patterns=_RUNTIME_BOOTSTRAP_SCRIPT_PATTERNS,
+    )
+    details["scripts_removed"] = scripts_result["removed"]
+    details["scripts_kept"] = scripts_result["kept"]
+    details["python_preserved"] = bool((env_dir / "python.exe").exists())
+    return details
+
+
+def _collect_runtime_env_dirs(repo_root: Path, runtime_id: str, primary_env_dir: Optional[Path]) -> list[Path]:
+    runtime_def = RUNTIME_MAP.get(runtime_id)
+    candidates: list[Path] = []
+    seen: set[str] = set()
+
+    def _add_candidate(path: Optional[Path]) -> None:
+        if path is None:
+            return
+        try:
+            normalized = str(path.resolve(strict=False))
+        except Exception:
+            normalized = str(path)
+        key = normalized.lower()
+        if key in seen or not path.exists():
+            return
+        seen.add(key)
+        candidates.append(path)
+
+    _add_candidate(primary_env_dir)
+
+    if runtime_def is None:
+        return candidates
+
+    env_root = repo_root / "env"
+    for dir_name in runtime_def.env_dir_names:
+        _add_candidate(env_root / dir_name)
+        _add_candidate(repo_root / dir_name)
+
+    return candidates
+
+
+def _soft_uninstall_runtime_environment_group(repo_root: Path, runtime_id: str, primary_env_dir: Path) -> Dict[str, Any]:
+    env_dirs = _collect_runtime_env_dirs(repo_root, runtime_id, primary_env_dir)
+    if not env_dirs:
+        return {
+            "runtime_id": runtime_id,
+            "env_dir": str(primary_env_dir),
+            "env_dirs": [],
+            "mode": "dependency_only",
+            "removed_markers": 0,
+            "removed_root_caches": 0,
+            "site_packages_removed": 0,
+            "site_packages_kept": 0,
+            "scripts_removed": 0,
+            "scripts_kept": 0,
+            "python_preserved": False,
+            "env_count": 0,
+        }
+
+    details_list = [_soft_uninstall_runtime_environment(env_dir) for env_dir in env_dirs]
+    return {
+        "runtime_id": runtime_id,
+        "env_dir": str(env_dirs[0]),
+        "env_dirs": [str(env_dir) for env_dir in env_dirs],
+        "mode": "dependency_only",
+        "removed_markers": sum(int(item.get("removed_markers", 0)) for item in details_list),
+        "removed_root_caches": sum(int(item.get("removed_root_caches", 0)) for item in details_list),
+        "site_packages_removed": sum(int(item.get("site_packages_removed", 0)) for item in details_list),
+        "site_packages_kept": sum(int(item.get("site_packages_kept", 0)) for item in details_list),
+        "scripts_removed": sum(int(item.get("scripts_removed", 0)) for item in details_list),
+        "scripts_kept": sum(int(item.get("scripts_kept", 0)) for item in details_list),
+        "python_preserved": all(bool(item.get("python_preserved", False)) for item in details_list),
+        "env_count": len(env_dirs),
+    }
 
 
 def _read_stream_chunks(
@@ -1084,12 +1235,12 @@ class LauncherTaskExecutor:
         self._begin_task(
             "uninstall",
             "runtime_uninstall.request_received",
-            "已收到卸载请求",
-            "Uninstall request received",
+            "已收到依赖卸载请求",
+            "Dependency uninstall request received",
             runtime_id=runtime_id,
         )
         if self._installing:
-            message = "已有安装、初始化或卸载任务正在进行中。" if lang == "zh" else "Another install, initialization, or uninstall task is already in progress."
+            message = "已有安装、初始化或依赖卸载任务正在进行中。" if lang == "zh" else "Another install, initialization, or dependency uninstall task is already in progress."
             self._finish_task(
                 success=False,
                 stage_code="runtime_uninstall.already_running",
@@ -1162,29 +1313,35 @@ class LauncherTaskExecutor:
             success = False
             final_code = "runtime_uninstall.failed"
             error_message = None
+            final_details: Dict[str, Any] = {"runtime_id": runtime_id, "env_dir": str(env_dir), "mode": "dependency_only"}
             try:
                 self._advance_task(
-                    "runtime_uninstall.removing_directory",
-                    "正在删除运行时目录",
-                    "Removing runtime directory",
+                    "runtime_uninstall.removing_dependencies",
+                    "正在卸载运行时依赖",
+                    "Removing runtime dependencies",
                     details={"runtime_id": runtime_id, "env_dir": str(env_dir)},
                 )
                 self._append_task_log_line(
-                    f"[Launcher] Removing runtime directory: {env_dir}",
+                    f"[Launcher] Uninstalling runtime dependencies from: {env_dir}",
                     event_name="install_log",
                 )
-                shutil.rmtree(env_dir)
+                final_details = _soft_uninstall_runtime_environment_group(self._repo_root, runtime_id, env_dir)
                 success = True
                 final_code = "runtime_uninstall.completed"
                 self._append_task_log_line(
-                    f"[Launcher] Runtime directory removed: {env_dir}",
+                    (
+                        "[Launcher] Runtime dependencies removed while preserving the local Python skeleton: "
+                        f"{', '.join(final_details.get('env_dirs', [str(env_dir)]))} "
+                        f"(site-packages removed: {final_details.get('site_packages_removed', 0)}, "
+                        f"scripts removed: {final_details.get('scripts_removed', 0)})"
+                    ),
                     event_name="install_log",
                 )
             except Exception as exc:
                 final_code = "runtime_uninstall.execution_failed"
                 error_message = str(exc)
                 self._append_task_log_line(
-                    f"[Launcher] Runtime uninstall failed: {exc}",
+                    f"[Launcher] Runtime dependency uninstall failed: {exc}",
                     event_name="install_log",
                 )
             finally:
@@ -1193,26 +1350,28 @@ class LauncherTaskExecutor:
                     "runtime_id": runtime_id,
                     "success": success,
                     "action": "uninstall",
+                    "details": final_details,
                 }
                 if success:
+                    self._wait_for_runtime_detection(runtime_id, require_installed=False)
                     self._finish_task(
                         success=True,
                         stage_code="runtime_uninstall.completed",
-                        stage_label_zh="运行时已卸载",
-                        stage_label_en="Runtime uninstalled",
+                        stage_label_zh="运行时依赖已卸载",
+                        stage_label_en="Runtime dependencies removed",
                         result_code=final_code,
-                        details={"runtime_id": runtime_id, "env_dir": str(env_dir)},
+                        details=final_details,
                     )
                     payload["result_code"] = final_code
                 else:
                     self._finish_task(
                         success=False,
                         stage_code=final_code,
-                        stage_label_zh="运行时卸载失败",
-                        stage_label_en="Runtime uninstall failed",
+                        stage_label_zh="运行时依赖卸载失败",
+                        stage_label_en="Runtime dependency uninstall failed",
                         code=final_code,
                         error=error_message,
-                        details={"runtime_id": runtime_id, "env_dir": str(env_dir)},
+                        details=final_details,
                     )
                     payload["code"] = final_code
                     if error_message:

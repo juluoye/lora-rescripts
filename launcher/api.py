@@ -444,7 +444,7 @@ class Api:
         return self._executor.initialize_runtime(runtime_id)
 
     def uninstall_runtime(self, runtime_id: str) -> Dict[str, Any]:
-        """Remove the runtime environment directory for the selected runtime ID."""
+        """Uninstall runtime dependencies while preserving the local Python skeleton."""
         return self._executor.uninstall_runtime(runtime_id)
 
     def prefetch_runtime_dependencies(self, runtime_id: str) -> Dict[str, Any]:

@@ -98,6 +98,8 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_cache_latents_runtime_kwargs(args: argparse.Namespace) -> dict:
+    from library.strategy_base import normalize_latent_cache_disk_dtype
+
     raw_workers = getattr(args, "cache_latents_cpu_workers", None)
     try:
         resolved_workers = None if raw_workers in (None, "") else max(0, int(raw_workers))
@@ -110,10 +112,32 @@ def resolve_cache_latents_runtime_kwargs(args: argparse.Namespace) -> dict:
     except (TypeError, ValueError):
         resolved_prefetch = None
 
+    resolved_format = normalize_latents_disk_cache_format(getattr(args, "latent_cache_disk_format", None))
+    resolved_dtype = normalize_latent_cache_disk_dtype(getattr(args, "latent_cache_disk_dtype", None))
+    if resolved_dtype == "bf16" and resolved_format == "npz":
+        resolved_dtype = "fp32"
+
     return {
         "preprocess_workers": resolved_workers,
         "prefetch_batches": resolved_prefetch,
-        "disk_cache_format": normalize_latents_disk_cache_format(getattr(args, "latent_cache_disk_format", None)),
+        "disk_cache_format": resolved_format,
+        "disk_cache_dtype": resolved_dtype,
+    }
+
+
+def resolve_text_encoder_outputs_cache_runtime_kwargs(args: argparse.Namespace) -> dict:
+    from library.strategy_base import normalize_text_encoder_outputs_cache_dtype
+
+    resolved_dtype = normalize_text_encoder_outputs_cache_dtype(
+        getattr(args, "text_encoder_outputs_cache_dtype", None)
+    )
+    resolved_format = normalize_latents_disk_cache_format(getattr(args, "text_encoder_outputs_cache_disk_format", None))
+    if resolved_dtype != "auto" and resolved_format == "npz":
+        resolved_format = "safetensors"
+
+    return {
+        "disk_cache_format": resolved_format,
+        "disk_cache_dtype": resolved_dtype,
     }
 
 

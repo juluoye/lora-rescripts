@@ -119,6 +119,7 @@ def get_best_runtime(statuses: Dict[str, RuntimeStatus]) -> Optional[str]:
         "intel-xpu",
         "rocm-amd",
         "standard",
+        "spargeattn2",
     ]
     for rt_id in preference_order:
         if rt_id in statuses and statuses[rt_id].installed:

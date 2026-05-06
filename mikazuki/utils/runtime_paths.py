@@ -17,6 +17,7 @@ RUNTIME_DIRECTORY_ALIASES: dict[str, tuple[str, ...]] = {
     "sagebwd-nvidia": ("python_sagebwd_nvidia", "python-sagebwd-nvidia"),
     "sageattention": ("python-sageattention", "python_sageattention"),
     "sageattention2": ("python-sageattention2", "python_sageattention2"),
+    "spargeattn2": ("python-spargeattn2", "python_spargeattn2"),
     "tageditor": ("python_tageditor",),
     "venv": ("venv",),
     "venv-tageditor": ("venv-tageditor",),
@@ -31,6 +32,7 @@ PROJECT_LOCAL_MAIN_RUNTIME_NAMES: tuple[str, ...] = (
     "sagebwd-nvidia",
     "sageattention",
     "sageattention2",
+    "spargeattn2",
     "venv",
 )
 

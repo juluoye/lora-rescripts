@@ -78,7 +78,11 @@ def add_runtime_arguments(parser: argparse.ArgumentParser) -> None:
     add("--train_batch_size", type=int, default=1, help="batch size for training / 学習時のバッチサイズ")
     add("--max_token_length", type=int, default=None, choices=[None, 150, 225], help="max token length of text encoder (default for 75, 150 or 225) / text encoderのトークンの最大長（未指定で75、150または225が指定可）")
     add("--mem_eff_attn", action="store_true", help="use memory efficient attention for CrossAttention / CrossAttentionに省メモリ版attentionを使う")
-    add("--torch_compile", action="store_true", help="use torch.compile (requires PyTorch 2.0) / torch.compile を使う")
+    add(
+        "--torch_compile",
+        action="store_true",
+        help="use torch.compile (requires PyTorch 2.0) / 使用 torch.compile（需要 PyTorch 2.0） / torch.compile を使う",
+    )
     add("--dynamo_backend", type=str, default="inductor", choices=_DYNAMO_BACKENDS, help="dynamo backend type (default is inductor) / dynamoのbackendの種類（デフォルトは inductor）")
     add("--opt_channels_last", action="store_true", help="set channels last memory format for convolution-heavy training models / 畳み込み系モデルでchannels lastメモリ形式を使う / 为卷积型训练模型启用 channels_last 内存格式")
     add("--xformers", action="store_true", help="use xformers for CrossAttention / CrossAttentionにxformersを使う")
@@ -110,7 +114,11 @@ def add_runtime_arguments(parser: argparse.ArgumentParser) -> None:
     add("--gradient_accumulation_steps", type=int, default=1, help="Number of updates steps to accumulate before performing a backward/update pass / 学習時に逆伝播をする前に勾配を合計するステップ数")
     add("--mixed_precision", type=str, default="no", choices=["no", "fp16", "bf16"], help="use mixed precision / 混合精度を使う場合、その精度")
     add("--full_fp16", action="store_true", help="fp16 training including gradients, some models are not supported / 勾配も含めてfp16で学習する、一部のモデルではサポートされていません")
-    add("--full_bf16", action="store_true", help="bf16 training including gradients, some models are not supported / 勾配も含めてbf16で学習する、一部のモデルではサポートされていません")
+    add(
+        "--full_bf16",
+        action="store_true",
+        help="bf16 training including gradients, some models are not supported / 包括梯度在内都使用 bf16 训练，部分模型暂不支持 / 勾配も含めてbf16で学習する、一部のモデルではサポートされていません",
+    )
     add("--fp8_base", action="store_true", help="use fp8 for base model, some models are not supported / base modelにfp8を使う、一部のモデルではサポートされていません")
     add("--ddp_timeout", type=int, default=None, help="DDP timeout (min, None for default of accelerate) / DDPのタイムアウト（分、Noneでaccelerateのデフォルト）")
     add("--ddp_gradient_as_bucket_view", action="store_true", help="enable gradient_as_bucket_view for DDP / DDPでgradient_as_bucket_viewを有効にする")
@@ -147,10 +155,29 @@ def add_noise_loss_sampling_and_config_arguments(parser: argparse.ArgumentParser
     add("--huber_schedule", type=str, default="snr", choices=["constant", "exponential", "snr"], help="The scheduling method for Huber loss (constant, exponential, or SNR-based). Only used when loss_type is 'huber' or 'smooth_l1'. default is snr / Huber損失のスケジューリング方法（constant、exponential、またはSNRベース）。loss_typeが'huber'または'smooth_l1'の場合に有効、デフォルトは snr")
     add("--huber_c", type=float, default=0.1, help="The Huber loss decay parameter. Only used if one of the huber loss modes (huber or smooth l1) is selected with loss_type. default is 0.1 / Huber損失の減衰パラメータ。loss_typeがhuberまたはsmooth l1の場合に有効。デフォルトは0.1")
     add("--huber_scale", type=float, default=1.0, help="The Huber loss scale parameter. Only used if one of the huber loss modes (huber or smooth l1) is selected with loss_type. default is 1.0 / Huber損失のスケールパラメータ。loss_typeがhuberまたはsmooth l1の場合に有効。デフォルトは1.0")
-    add("--wavelet_loss_enabled", action="store_true", help="enable experimental additive wavelet-domain loss / 実験的な wavelet 補助損失を有効化する")
-    add("--wavelet_loss_weight", type=float, default=0.0, help="weight for additive wavelet-domain loss / wavelet 補助損失的权重")
-    add("--wavelet_loss_levels", type=int, default=1, help="number of wavelet pyramid levels to use / wavelet 金字塔层数")
-    add("--wavelet_loss_approx_weight", type=float, default=0.0, help="optional low-frequency (LL) wavelet loss weight on the last level / 最后一层低频 LL 分量的可选权重")
+    add(
+        "--wavelet_loss_enabled",
+        action="store_true",
+        help="enable experimental additive wavelet-domain loss / 启用实验性的额外 wavelet 域损失 / 実験的な wavelet 補助損失を有効化する",
+    )
+    add(
+        "--wavelet_loss_weight",
+        type=float,
+        default=0.0,
+        help="weight for additive wavelet-domain loss / wavelet 域额外损失的权重 / wavelet 補助損失的权重",
+    )
+    add(
+        "--wavelet_loss_levels",
+        type=int,
+        default=1,
+        help="number of wavelet pyramid levels to use / 使用的 wavelet 金字塔层数 / wavelet 金字塔层数",
+    )
+    add(
+        "--wavelet_loss_approx_weight",
+        type=float,
+        default=0.0,
+        help="optional low-frequency (LL) wavelet loss weight on the last level / 最后一层低频（LL）wavelet 损失的可选权重 / 最后一层低频 LL 分量的可选权重",
+    )
     add("--lowram", action="store_true", help="enable low RAM optimization. e.g. load models to VRAM instead of RAM (for machines which have bigger VRAM than RAM such as Colab and Kaggle) / メインメモリが少ない環境向け最適化を有効にする。たとえばVRAMにモデルを読み込む等（ColabやKaggleなどRAMに比べてVRAMが多い環境向け）")
     add("--highvram", action="store_true", help="disable low VRAM optimization. e.g. do not clear CUDA cache after each latent caching (for machines which have bigger VRAM) / VRAMが少ない環境向け最適化を無効にする。たとえば各latentのキャッシュ後のCUDAキャッシュクリアを行わない等（VRAMが多い環境向け）")
     add("--sample_every_n_steps", type=int, default=None, help="generate sample images every N steps / 学習中のモデルで指定ステップごとにサンプル出力する")

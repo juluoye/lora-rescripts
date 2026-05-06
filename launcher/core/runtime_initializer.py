@@ -29,6 +29,7 @@ _LIB_SKIP_NAMES = {
 _SOURCE_PRIORITY = [
     "standard",
     "flashattention",
+    "spargeattn2",
     "sageattention",
     "sageattention2",
     "blackwell",
@@ -37,6 +38,10 @@ _SOURCE_PRIORITY = [
     "intel-xpu-sage",
     "rocm-amd",
 ]
+
+_RUNTIMES_REQUIRING_MANUAL_PORTABLE_PYTHON = {
+    "spargeattn2",
+}
 
 
 @dataclass
@@ -148,6 +153,13 @@ def initialize_runtime_environment(
     python_path = target_dir / runtime_def.python_rel_path
     source_runtime_id: Optional[str] = None
     source_dir: Optional[Path] = None
+
+    if runtime_def.id in _RUNTIMES_REQUIRING_MANUAL_PORTABLE_PYTHON and not python_path.exists():
+        expected_locations = ", ".join(f".\\env\\{name}" for name in runtime_def.env_dir_names)
+        raise RuntimeError(
+            f"{runtime_def.name_zh} 不能直接复用其他运行时的 portable Python。"
+            f" 请先把匹配版本的 embeddable Python 手动放到 {expected_locations}，再重新初始化。"
+        )
 
     if not python_path.exists():
         source_runtime_id, source_status = _find_source_runtime(runtime_def.id, statuses)

@@ -1,6 +1,7 @@
 # Anima Strategy Classes
 
 import hashlib
+import json
 import os
 import random
 from typing import Any, List, Optional, Tuple, Union
@@ -212,6 +213,7 @@ class AnimaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
         self._written_shards_by_cache_root: dict[str, set[str]] = {}
         self._sequence_by_cache_root: dict[str, int] = {}
         self._max_pending_entries = max(64, max(1, int(batch_size or 1)) * 16)
+        self._source_stat_cache: dict[str, tuple[int, int]] = {}
 
     def get_outputs_npz_path(self, image_abs_path: str) -> str:
         return os.path.splitext(image_abs_path)[0] + self.ANIMA_TEXT_ENCODER_OUTPUTS_NPZ_SUFFIX
@@ -235,17 +237,132 @@ class AnimaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
     def _get_cache_dir(self, cache_root: str) -> str:
         return build_safetensors_cache_dir(cache_root, self.ANIMA_TEXT_ENCODER_NAMESPACE)
 
+    def _get_catalog_index_path(self, cache_root: str) -> str:
+        return os.path.join(self._get_cache_dir(os.path.abspath(cache_root)), "_catalog.json")
+
+    def _build_catalog_index_payload(self, cache_root: str, catalog: dict[str, dict[str, object]]) -> dict[str, object]:
+        normalized_cache_root = os.path.abspath(cache_root)
+        entries: list[dict[str, object]] = []
+        for cache_key, entry in sorted(catalog.items(), key=lambda item: item[0]):
+            shard_path = os.path.abspath(str(entry.get("path") or ""))
+            if not shard_path:
+                continue
+            try:
+                relative_shard_path = os.path.relpath(shard_path, self._get_cache_dir(normalized_cache_root)).replace("\\", "/")
+            except ValueError:
+                relative_shard_path = shard_path.replace("\\", "/")
+            entries.append(
+                {
+                    "cache_key": cache_key,
+                    "path": relative_shard_path,
+                    "entry_key": str(entry.get("entry_key") or ""),
+                    "source_mtime_ns": int(entry.get("source_mtime_ns", 0) or 0),
+                    "source_size": int(entry.get("source_size", 0) or 0),
+                }
+            )
+        return {
+            "format": "mikazuki_anima_text_catalog",
+            "format_version": self.CACHE_FORMAT_VERSION,
+            "namespace": self.ANIMA_TEXT_ENCODER_NAMESPACE,
+            "entry_count": len(entries),
+            "entries": entries,
+        }
+
+    def _write_catalog_index(self, cache_root: str, catalog: Optional[dict[str, dict[str, object]]] = None) -> None:
+        normalized_cache_root = os.path.abspath(cache_root)
+        resolved_catalog = catalog if catalog is not None else self._safetensors_catalog_cache.get(normalized_cache_root)
+        if resolved_catalog is None:
+            resolved_catalog = self._load_catalog(normalized_cache_root)
+        cache_dir = self._get_cache_dir(normalized_cache_root)
+        os.makedirs(cache_dir, exist_ok=True)
+        index_path = self._get_catalog_index_path(normalized_cache_root)
+        with open(index_path, "w", encoding="utf-8") as handle:
+            json.dump(
+                self._build_catalog_index_payload(normalized_cache_root, resolved_catalog),
+                handle,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+
+    def _load_catalog_from_index(self, cache_root: str) -> Optional[dict[str, dict[str, object]]]:
+        normalized_cache_root = os.path.abspath(cache_root)
+        index_path = self._get_catalog_index_path(normalized_cache_root)
+        if not os.path.exists(index_path):
+            return None
+
+        try:
+            with open(index_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except Exception as ex:
+            logger.warning(f"failed to load Anima text-cache catalog index {index_path}: {ex}")
+            return None
+
+        if str(payload.get("namespace") or "") != self.ANIMA_TEXT_ENCODER_NAMESPACE:
+            return None
+        if int(payload.get("format_version", 0) or 0) not in {0, self.CACHE_FORMAT_VERSION}:
+            return None
+
+        cache_dir = self._get_cache_dir(normalized_cache_root)
+        catalog: dict[str, dict[str, object]] = {}
+        for index_entry in payload.get("entries") or []:
+            cache_key = str(index_entry.get("cache_key") or "").strip()
+            entry_key = str(index_entry.get("entry_key") or "").strip()
+            shard_file = str(index_entry.get("path") or "").strip()
+            if not cache_key or not entry_key or not shard_file:
+                continue
+
+            shard_path = shard_file if os.path.isabs(shard_file) else os.path.join(cache_dir, shard_file)
+            shard_path = os.path.abspath(shard_path)
+            if not os.path.exists(shard_path):
+                return None
+
+            catalog[cache_key] = {
+                "path": shard_path,
+                "entry_key": entry_key,
+                "source_mtime_ns": int(index_entry.get("source_mtime_ns", 0) or 0),
+                "source_size": int(index_entry.get("source_size", 0) or 0),
+            }
+        return catalog
+
+    def _get_cached_source_stat(self, absolute_path: str) -> Optional[tuple[int, int]]:
+        normalized_path = os.path.abspath(absolute_path)
+        cached = self._source_stat_cache.get(normalized_path)
+        if cached is not None:
+            return cached
+        try:
+            source_stat = os.stat(normalized_path)
+        except OSError:
+            return None
+        resolved = (int(source_stat.st_mtime_ns), int(source_stat.st_size))
+        self._source_stat_cache[normalized_path] = resolved
+        return resolved
+
+    def warm_source_stat_cache(self, infos: List) -> None:
+        for info in infos:
+            absolute_path = getattr(info, "absolute_path", None)
+            if not absolute_path:
+                continue
+            self._get_cached_source_stat(str(absolute_path))
+
     def _load_catalog(self, cache_root: str) -> dict[str, dict[str, object]]:
         normalized_cache_root = os.path.abspath(cache_root)
         cached = self._safetensors_catalog_cache.get(normalized_cache_root)
         if cached is not None:
             return cached
 
+        indexed_catalog = self._load_catalog_from_index(normalized_cache_root)
+        if indexed_catalog is not None:
+            self._safetensors_catalog_cache[normalized_cache_root] = indexed_catalog
+            return indexed_catalog
+
         cache_dir = self._get_cache_dir(normalized_cache_root)
         catalog: dict[str, dict[str, object]] = {}
         if os.path.isdir(cache_dir):
             for entry in os.scandir(cache_dir):
                 if not entry.is_file() or not entry.name.lower().endswith(".json"):
+                    continue
+                if entry.name.lower() == "_catalog.json":
                     continue
                 try:
                     manifest = load_safetensors_shard_manifest(entry.path)
@@ -276,6 +393,11 @@ class AnimaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
                     }
 
         self._safetensors_catalog_cache[normalized_cache_root] = catalog
+        if os.path.isdir(cache_dir):
+            try:
+                self._write_catalog_index(normalized_cache_root, catalog)
+            except Exception as ex:
+                logger.warning(f"failed to rebuild Anima text-cache catalog index for {normalized_cache_root}: {ex}")
         return catalog
 
     def _register_written_shard(self, cache_root: str, shard_path: str) -> None:
@@ -360,13 +482,11 @@ class AnimaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
                 shard_path = str(entry.get("path") or "")
                 entry_key = str(entry.get("entry_key") or "")
                 if shard_path and entry_key and os.path.exists(shard_path):
-                    try:
-                        source_stat = os.stat(info.absolute_path)
-                    except OSError:
-                        source_stat = None
-                    if source_stat is not None:
-                        if int(entry.get("source_mtime_ns", 0) or 0) == int(source_stat.st_mtime_ns):
-                            if int(entry.get("source_size", 0) or 0) == int(source_stat.st_size):
+                    cached_source_stat = self._get_cached_source_stat(info.absolute_path)
+                    if cached_source_stat is not None:
+                        source_mtime_ns, source_size = cached_source_stat
+                        if int(entry.get("source_mtime_ns", 0) or 0) == source_mtime_ns:
+                            if int(entry.get("source_size", 0) or 0) == source_size:
                                 info.text_encoder_outputs_disk_cache_ref = LatentsDiskCacheRef(
                                     format="safetensors",
                                     path=shard_path,
@@ -482,13 +602,12 @@ class AnimaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
             caption_dropout_rate = float(entry["caption_dropout_rate"])
             info = entry["info"]
             cache_key = self._build_cache_key(info)
-            try:
-                source_stat = os.stat(info.absolute_path)
-                source_mtime_ns = int(source_stat.st_mtime_ns)
-                source_size = int(source_stat.st_size)
-            except OSError:
+            cached_source_stat = self._get_cached_source_stat(info.absolute_path)
+            if cached_source_stat is None:
                 source_mtime_ns = 0
                 source_size = 0
+            else:
+                source_mtime_ns, source_size = cached_source_stat
 
             tensors[f"prompt_embeds::{entry_key}"] = torch.from_numpy(prompt_embeds)
             tensors[f"attn_mask::{entry_key}"] = torch.from_numpy(attn_mask.astype(np.int32, copy=False))
@@ -598,6 +717,10 @@ class AnimaTextEncoderOutputsCachingStrategy(TextEncoderOutputsCachingStrategy):
         self._flush_pending_entries()
         for cache_root in list(self._safetensors_catalog_cache.keys()):
             self._prune_stale_shards(cache_root)
+            try:
+                self._write_catalog_index(cache_root)
+            except Exception as ex:
+                logger.warning(f"failed to write Anima text-cache catalog index for {cache_root}: {ex}")
 
 
 class AnimaLatentsCachingStrategy(LatentsCachingStrategy):

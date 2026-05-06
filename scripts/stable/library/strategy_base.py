@@ -3,6 +3,7 @@
 from collections import OrderedDict
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
+import hashlib
 import json
 import math
 import os
@@ -112,6 +113,12 @@ _LATENTS_CACHE_RUNTIME_DEFAULTS = {
     "preprocess_workers": None,
     "prefetch_batches": None,
     "disk_cache_format": None,
+    "disk_cache_dtype": None,
+}
+
+_TEXT_ENCODER_OUTPUTS_CACHE_RUNTIME_DEFAULTS = {
+    "disk_cache_format": None,
+    "disk_cache_dtype": None,
 }
 
 
@@ -120,11 +127,43 @@ def configure_latents_cache_runtime(
     preprocess_workers: Optional[Any] = None,
     prefetch_batches: Optional[Any] = None,
     disk_cache_format: Optional[Any] = None,
+    disk_cache_dtype: Optional[Any] = None,
 ) -> None:
     _LATENTS_CACHE_RUNTIME_DEFAULTS["preprocess_workers"] = _normalize_optional_int(preprocess_workers, minimum=0)
     _LATENTS_CACHE_RUNTIME_DEFAULTS["prefetch_batches"] = _normalize_optional_int(prefetch_batches, minimum=1)
     normalized_format = None if disk_cache_format in (None, "") else normalize_latents_disk_cache_format(disk_cache_format)
     _LATENTS_CACHE_RUNTIME_DEFAULTS["disk_cache_format"] = normalized_format
+    normalized_dtype = None if disk_cache_dtype in (None, "") else normalize_latent_cache_disk_dtype(disk_cache_dtype)
+    _LATENTS_CACHE_RUNTIME_DEFAULTS["disk_cache_dtype"] = normalized_dtype
+
+
+def normalize_latent_cache_disk_dtype(value: Optional[Any], *, default_value: str = "auto") -> str:
+    raw_value = str(value or "").strip().lower()
+    if not raw_value:
+        return default_value
+    if raw_value not in {"auto", "fp16", "bf16", "fp32"}:
+        return default_value
+    return raw_value
+
+
+def normalize_text_encoder_outputs_cache_dtype(value: Optional[Any], *, default_value: str = "auto") -> str:
+    raw_value = str(value or "").strip().lower()
+    if not raw_value:
+        return default_value
+    if raw_value not in {"auto", "fp16", "bf16", "fp32"}:
+        return default_value
+    return raw_value
+
+
+def configure_text_encoder_outputs_cache_runtime(
+    *,
+    disk_cache_format: Optional[Any] = None,
+    disk_cache_dtype: Optional[Any] = None,
+) -> None:
+    normalized_format = None if disk_cache_format in (None, "") else normalize_latents_disk_cache_format(disk_cache_format)
+    normalized_dtype = None if disk_cache_dtype in (None, "") else normalize_text_encoder_outputs_cache_dtype(disk_cache_dtype)
+    _TEXT_ENCODER_OUTPUTS_CACHE_RUNTIME_DEFAULTS["disk_cache_format"] = normalized_format
+    _TEXT_ENCODER_OUTPUTS_CACHE_RUNTIME_DEFAULTS["disk_cache_dtype"] = normalized_dtype
 
 
 @dataclass
@@ -143,6 +182,12 @@ class PendingSafetensorsLatentsEntry:
     crop_ltrb: Tuple[int, int, int, int]
     flipped_latents_tensor: Optional[torch.Tensor]
     alpha_mask_tensor: Optional[torch.Tensor]
+
+
+@dataclass
+class PendingSafetensorsTextOutputsEntry:
+    info: Any
+    payload: dict[str, Any]
 
 
 class TokenizeStrategy:
@@ -462,6 +507,23 @@ class TextEncoderOutputsCachingStrategy:
         self._is_weighted = is_weighted
         self._npz_cache_items = _resolve_npz_cache_items("MIKAZUKI_TEXT_NPZ_CACHE_ITEMS", 32)
         self._npz_cache: OrderedDict[tuple[str, int, int], dict[str, np.ndarray]] = OrderedDict()
+        self._disk_cache_format = normalize_latents_disk_cache_format(
+            _TEXT_ENCODER_OUTPUTS_CACHE_RUNTIME_DEFAULTS.get("disk_cache_format")
+            or os.environ.get("MIKAZUKI_TEXT_ENCODER_OUTPUTS_DISK_CACHE_FORMAT")
+            or "safetensors"
+        )
+        self._disk_cache_dtype = normalize_text_encoder_outputs_cache_dtype(
+            _TEXT_ENCODER_OUTPUTS_CACHE_RUNTIME_DEFAULTS.get("disk_cache_dtype")
+            or os.environ.get("MIKAZUKI_TEXT_ENCODER_OUTPUTS_DISK_CACHE_DTYPE")
+            or "auto"
+        )
+        self._safetensors_catalog_cache: dict[str, dict[str, dict[str, Any]]] = {}
+        self._pending_safetensors_entries: list[PendingSafetensorsTextOutputsEntry] = []
+        self._pending_safetensors_cache_root: Optional[str] = None
+        self._written_safetensors_shards_by_cache_root: dict[str, set[str]] = {}
+        self._safetensors_sequence_by_cache_root: dict[str, int] = {}
+        self._max_pending_safetensors_entries = max(64, max(1, int(batch_size or 1)) * 16)
+        self._source_stat_cache: dict[str, tuple[int, int]] = {}
 
     @classmethod
     def set_strategy(cls, strategy):
@@ -489,6 +551,554 @@ class TextEncoderOutputsCachingStrategy:
     def is_weighted(self):
         return self._is_weighted
 
+    @property
+    def disk_cache_format(self) -> str:
+        return self._disk_cache_format
+
+    @property
+    def disk_cache_dtype(self) -> str:
+        return self._disk_cache_dtype
+
+    @property
+    def uses_safetensors_disk_cache(self) -> bool:
+        return self._cache_to_disk and self._disk_cache_format == "safetensors"
+
+    @property
+    def uses_npz_disk_cache(self) -> bool:
+        return self._cache_to_disk and self._disk_cache_format == "npz"
+
+    @property
+    def cache_suffix(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def disk_cache_namespace(self) -> str:
+        cache_suffix = str(self.cache_suffix or "")
+        normalized = cache_suffix[:-4] if cache_suffix.endswith(".npz") else cache_suffix
+        normalized = normalized.strip("._")
+        return normalized or "text-encoder-outputs"
+
+    def get_disk_cache_config_payload(self) -> dict[str, Any]:
+        return {
+            "partial": bool(self.is_partial),
+            "weighted": bool(self.is_weighted),
+        }
+
+    def get_disk_cache_format_version(self) -> int:
+        return 1
+
+    def get_disk_cache_key(self, info) -> str:
+        cache_root = self.resolve_disk_cache_root_for_info(info)
+        try:
+            relative_path = os.path.relpath(os.path.abspath(info.absolute_path), cache_root).replace("\\", "/")
+        except ValueError:
+            relative_path = os.path.abspath(info.absolute_path).replace("\\", "/")
+
+        caption_value = str(getattr(info, "caption", "") or "")
+        caption_hash = hashlib.sha1(caption_value.encode("utf-8", errors="ignore")).hexdigest()[:16]
+        config_payload = json.dumps(self.get_disk_cache_config_payload(), sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+        config_hash = hashlib.sha1(config_payload.encode("utf-8", errors="ignore")).hexdigest()[:16]
+        return f"{relative_path}#caption={caption_hash}#config={config_hash}"
+
+    def resolve_disk_cache_root(self, absolute_path: str, dataset_root: Optional[str] = None) -> str:
+        return resolve_latents_cache_root(absolute_path, dataset_root)
+
+    def resolve_disk_cache_root_for_info(self, info) -> str:
+        explicit_root = str(getattr(info, "text_encoder_outputs_cache_root", "") or "").strip()
+        if explicit_root:
+            return os.path.abspath(explicit_root)
+        return self.resolve_disk_cache_root(info.absolute_path, None)
+
+    def _get_safetensors_cache_dir(self, cache_root: str) -> str:
+        return build_safetensors_cache_dir(os.path.abspath(cache_root), self.disk_cache_namespace)
+
+    def get_cached_source_stat(self, absolute_path: str) -> Optional[tuple[int, int]]:
+        normalized_path = os.path.abspath(absolute_path)
+        cached = self._source_stat_cache.get(normalized_path)
+        if cached is not None:
+            return cached
+        try:
+            source_stat = os.stat(normalized_path)
+        except OSError:
+            return None
+        resolved = (int(source_stat.st_mtime_ns), int(source_stat.st_size))
+        self._source_stat_cache[normalized_path] = resolved
+        return resolved
+
+    def warm_source_stat_cache(self, infos: List[Any]) -> None:
+        for info in infos:
+            absolute_path = getattr(info, "absolute_path", None)
+            if not absolute_path:
+                continue
+            self.get_cached_source_stat(str(absolute_path))
+
+    def _get_safetensors_catalog_index_path(self, cache_root: str) -> str:
+        return os.path.join(self._get_safetensors_cache_dir(cache_root), "_catalog.json")
+
+    def _build_safetensors_catalog_index_payload(self, cache_root: str, catalog: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        normalized_cache_root = os.path.abspath(cache_root)
+        entries = []
+        for cache_key, entry in sorted(catalog.items(), key=lambda item: item[0]):
+            shard_path = os.path.abspath(str(entry.get("path") or ""))
+            if not shard_path:
+                continue
+            try:
+                relative_shard_path = os.path.relpath(shard_path, self._get_safetensors_cache_dir(normalized_cache_root)).replace("\\", "/")
+            except ValueError:
+                relative_shard_path = shard_path.replace("\\", "/")
+            entries.append(
+                {
+                    "cache_key": cache_key,
+                    "path": relative_shard_path,
+                    "entry_key": str(entry.get("entry_key") or ""),
+                    "source_mtime_ns": int(entry.get("source_mtime_ns", 0) or 0),
+                    "source_size": int(entry.get("source_size", 0) or 0),
+                    "metadata": dict(entry.get("metadata") or {}),
+                }
+            )
+        return {
+            "format": "mikazuki_text_encoder_outputs_catalog",
+            "format_version": self.get_disk_cache_format_version(),
+            "namespace": self.disk_cache_namespace,
+            "entry_count": len(entries),
+            "entries": entries,
+        }
+
+    def _write_safetensors_catalog_index(self, cache_root: str, catalog: Optional[dict[str, dict[str, Any]]] = None) -> None:
+        normalized_cache_root = os.path.abspath(cache_root)
+        resolved_catalog = catalog if catalog is not None else self._safetensors_catalog_cache.get(normalized_cache_root)
+        if resolved_catalog is None:
+            resolved_catalog = self._load_safetensors_catalog(normalized_cache_root)
+
+        cache_dir = self._get_safetensors_cache_dir(normalized_cache_root)
+        os.makedirs(cache_dir, exist_ok=True)
+        index_path = self._get_safetensors_catalog_index_path(normalized_cache_root)
+        payload = self._build_safetensors_catalog_index_payload(normalized_cache_root, resolved_catalog)
+        with open(index_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+    def _load_safetensors_catalog_from_index(self, cache_root: str) -> Optional[dict[str, dict[str, Any]]]:
+        normalized_cache_root = os.path.abspath(cache_root)
+        index_path = self._get_safetensors_catalog_index_path(normalized_cache_root)
+        if not os.path.exists(index_path):
+            return None
+
+        try:
+            with open(index_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except Exception as ex:
+            logger.warning(f"failed to load text-cache catalog index {index_path}: {ex}")
+            return None
+
+        if str(payload.get("namespace") or self.disk_cache_namespace) != self.disk_cache_namespace:
+            return None
+        if int(payload.get("format_version", 0) or 0) not in {0, self.get_disk_cache_format_version()}:
+            return None
+
+        cache_dir = self._get_safetensors_cache_dir(normalized_cache_root)
+        catalog: dict[str, dict[str, Any]] = {}
+        for index_entry in payload.get("entries") or []:
+            cache_key = str(index_entry.get("cache_key") or "").strip()
+            entry_key = str(index_entry.get("entry_key") or "").strip()
+            shard_file = str(index_entry.get("path") or "").strip()
+            if not cache_key or not entry_key or not shard_file:
+                continue
+
+            shard_path = shard_file if os.path.isabs(shard_file) else os.path.join(cache_dir, shard_file)
+            shard_path = os.path.abspath(shard_path)
+            if not os.path.exists(shard_path):
+                return None
+
+            catalog[cache_key] = {
+                "path": shard_path,
+                "entry_key": entry_key,
+                "source_mtime_ns": int(index_entry.get("source_mtime_ns", 0) or 0),
+                "source_size": int(index_entry.get("source_size", 0) or 0),
+                "metadata": dict(index_entry.get("metadata") or {}),
+            }
+        return catalog
+
+    def resolve_disk_cache_dtype(self, tensor: torch.Tensor) -> torch.dtype:
+        if not torch.is_floating_point(tensor):
+            return tensor.dtype
+
+        configured = self.disk_cache_dtype
+        if configured == "fp16":
+            return torch.float16
+        if configured == "bf16":
+            return torch.bfloat16
+        if configured == "fp32":
+            return torch.float32
+        if tensor.dtype in {torch.float16, torch.bfloat16, torch.float32}:
+            return tensor.dtype
+        return torch.float32
+
+    def prepare_tensor_for_disk_cache(self, tensor: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+        if tensor is None:
+            return None
+        target_dtype = self.resolve_disk_cache_dtype(tensor)
+        return tensor.detach().to(device="cpu", dtype=target_dtype).contiguous()
+
+    def tensor_to_numpy_for_cache(self, tensor: Optional[torch.Tensor]) -> Optional[np.ndarray]:
+        if tensor is None:
+            return None
+        prepared = self.prepare_tensor_for_disk_cache(tensor)
+        if prepared is None:
+            return None
+        if prepared.dtype == torch.bfloat16:
+            if self.disk_cache_dtype == "bf16":
+                return prepared
+            prepared = prepared.float()
+        return prepared.numpy()
+
+    def prepare_value_for_cache(self, tensor: Optional[torch.Tensor]) -> Optional[Any]:
+        if tensor is None:
+            return None
+        if not self.cache_to_disk:
+            prepared = tensor.detach().to(device="cpu")
+            if prepared.dtype == torch.bfloat16:
+                prepared = prepared.float()
+            return prepared.contiguous().numpy()
+        if self.uses_safetensors_disk_cache:
+            return self.prepare_tensor_for_disk_cache(tensor)
+        return self.tensor_to_numpy_for_cache(tensor)
+
+    def ensure_safetensors_cache_tensor(self, value: Optional[Any]) -> Optional[torch.Tensor]:
+        if value is None:
+            return None
+        if isinstance(value, torch.Tensor):
+            return value.detach().to(device="cpu").contiguous()
+
+        array = np.asarray(value)
+        if not array.flags["C_CONTIGUOUS"]:
+            array = array.copy()
+        return torch.from_numpy(array)
+
+    def build_text_cache_manifest_entry(self, info, entry_key: str) -> dict[str, Any]:
+        cached_source_stat = self.get_cached_source_stat(info.absolute_path)
+        if cached_source_stat is None:
+            source_mtime_ns = 0
+            source_size = 0
+        else:
+            source_mtime_ns, source_size = cached_source_stat
+        return {
+            "cache_key": self.get_disk_cache_key(info),
+            "entry_key": entry_key,
+            "source_mtime_ns": source_mtime_ns,
+            "source_size": source_size,
+        }
+
+    def load_disk_cache_metadata(self, npz_path_or_ref, archive: Optional[dict[str, np.ndarray]] = None) -> dict[str, Any]:
+        if isinstance(npz_path_or_ref, LatentsDiskCacheRef) and npz_path_or_ref.format == "safetensors":
+            entry_key = str(npz_path_or_ref.entry_key or "")
+            if not entry_key:
+                return {}
+            with safe_open_torch_cpu(npz_path_or_ref.path) as handle:
+                metadata = {}
+                try:
+                    metadata_json = handle.get_tensor(f"meta::{entry_key}").numpy().tobytes().decode("utf-8")
+                    metadata = json.loads(metadata_json)
+                except Exception:
+                    metadata = {}
+                return metadata
+
+        data = archive if archive is not None else self._load_npz_archive(str(npz_path_or_ref))
+        if "cache_metadata_json" in data:
+            try:
+                raw_value = np.asarray(data["cache_metadata_json"]).reshape(()).item()
+                if isinstance(raw_value, bytes):
+                    raw_value = raw_value.decode("utf-8")
+                return json.loads(str(raw_value))
+            except Exception:
+                return {}
+        return {}
+
+    def is_legacy_outputs_archive_valid(self, archive: dict[str, np.ndarray]) -> bool:
+        return True
+
+    def is_safetensors_payload_valid(self, metadata: dict[str, Any]) -> bool:
+        return True
+
+    def get_text_cache_manifest_payload(self, info, payload: dict[str, Any]) -> dict[str, Any]:
+        return {}
+
+    def _load_safetensors_catalog(self, cache_root: str) -> dict[str, dict[str, Any]]:
+        normalized_cache_root = os.path.abspath(cache_root)
+        cached_catalog = self._safetensors_catalog_cache.get(normalized_cache_root)
+        if cached_catalog is not None:
+            return cached_catalog
+
+        indexed_catalog = self._load_safetensors_catalog_from_index(normalized_cache_root)
+        if indexed_catalog is not None:
+            self._safetensors_catalog_cache[normalized_cache_root] = indexed_catalog
+            return indexed_catalog
+
+        cache_dir = self._get_safetensors_cache_dir(normalized_cache_root)
+        catalog: dict[str, dict[str, Any]] = {}
+        if os.path.isdir(cache_dir):
+            for entry in os.scandir(cache_dir):
+                if not entry.is_file() or not entry.name.lower().endswith(".json"):
+                    continue
+                if entry.name.lower() == "_catalog.json":
+                    continue
+
+                try:
+                    manifest = load_safetensors_shard_manifest(entry.path)
+                except Exception as ex:
+                    logger.warning(f"failed to load text-cache manifest {entry.path}: {ex}")
+                    continue
+
+                if str(manifest.get("namespace") or self.disk_cache_namespace) != self.disk_cache_namespace:
+                    continue
+
+                shard_file = str(manifest.get("shard_file") or "")
+                if shard_file:
+                    shard_path = shard_file if os.path.isabs(shard_file) else os.path.join(cache_dir, shard_file)
+                else:
+                    shard_path = os.path.splitext(entry.path)[0] + ".safetensors"
+                shard_path = os.path.abspath(shard_path)
+                if not os.path.exists(shard_path):
+                    continue
+
+                for manifest_entry in manifest.get("entries") or []:
+                    cache_key = str(manifest_entry.get("cache_key") or "").strip()
+                    entry_key = str(manifest_entry.get("entry_key") or "").strip()
+                    if not cache_key or not entry_key:
+                        continue
+                    catalog[cache_key] = {
+                        "path": shard_path,
+                        "entry_key": entry_key,
+                        "source_mtime_ns": int(manifest_entry.get("source_mtime_ns", 0) or 0),
+                        "source_size": int(manifest_entry.get("source_size", 0) or 0),
+                        "metadata": dict(manifest_entry.get("metadata") or {}),
+                    }
+
+        self._safetensors_catalog_cache[normalized_cache_root] = catalog
+        if os.path.isdir(cache_dir):
+            try:
+                self._write_safetensors_catalog_index(normalized_cache_root, catalog)
+            except Exception as ex:
+                logger.warning(f"failed to rebuild text-cache catalog index for {normalized_cache_root}: {ex}")
+        return catalog
+
+    def _register_written_safetensors_shard(self, cache_root: str, shard_path: str) -> None:
+        normalized_cache_root = os.path.abspath(cache_root)
+        written_paths = self._written_safetensors_shards_by_cache_root.setdefault(normalized_cache_root, set())
+        written_paths.add(os.path.abspath(shard_path))
+
+    def _prune_stale_safetensors_shards(self, cache_root: str) -> None:
+        normalized_cache_root = os.path.abspath(cache_root)
+        cache_dir = self._get_safetensors_cache_dir(normalized_cache_root)
+        if not os.path.isdir(cache_dir):
+            return
+
+        catalog = self._load_safetensors_catalog(normalized_cache_root)
+        live_shards = {
+            os.path.abspath(str(entry.get("path") or ""))
+            for entry in catalog.values()
+            if str(entry.get("path") or "").strip()
+        }
+        written_shards = self._written_safetensors_shards_by_cache_root.get(normalized_cache_root)
+        if written_shards:
+            live_shards.update(written_shards)
+
+        for entry in os.scandir(cache_dir):
+            if not entry.is_file() or not entry.name.lower().endswith(".safetensors"):
+                continue
+            shard_path = os.path.abspath(entry.path)
+            if shard_path in live_shards:
+                continue
+
+            sidecar_path = build_safetensors_sidecar_path(shard_path)
+            try:
+                os.remove(shard_path)
+            except OSError as ex:
+                logger.warning(f"failed to remove stale text-cache shard {shard_path}: {ex}")
+            try:
+                if os.path.exists(sidecar_path):
+                    os.remove(sidecar_path)
+            except OSError as ex:
+                logger.warning(f"failed to remove stale text-cache sidecar {sidecar_path}: {ex}")
+
+    def is_disk_cached_outputs_expected(self, npz_path: str) -> bool:
+        if not self.cache_to_disk:
+            return False
+        if not os.path.exists(npz_path):
+            return False
+        if self.skip_disk_cache_validity_check:
+            return True
+        archive = self._load_npz_archive(npz_path)
+        metadata = self.load_disk_cache_metadata(npz_path, archive=archive)
+        format_version = int(metadata.get("format_version", 0) or 0) if metadata else 0
+        if format_version > 0 and format_version != self.get_disk_cache_format_version():
+            return False
+        return self.is_legacy_outputs_archive_valid(archive)
+
+    def is_disk_cached_outputs_expected_for_info(self, npz_path: str, info=None) -> bool:
+        if not self.cache_to_disk:
+            return False
+
+        if info is not None and self.uses_safetensors_disk_cache:
+            cache_root = self.resolve_disk_cache_root_for_info(info)
+            cache_key = self.get_disk_cache_key(info)
+            catalog = self._load_safetensors_catalog(cache_root)
+            entry = catalog.get(cache_key)
+            if entry is not None:
+                shard_path = str(entry.get("path") or "")
+                entry_key = str(entry.get("entry_key") or "")
+                if shard_path and entry_key and os.path.exists(shard_path):
+                    cached_source_stat = self.get_cached_source_stat(info.absolute_path)
+                    if cached_source_stat is not None:
+                        source_mtime_ns, source_size = cached_source_stat
+                        if int(entry.get("source_mtime_ns", 0) or 0) == source_mtime_ns:
+                            if int(entry.get("source_size", 0) or 0) == source_size:
+                                metadata = dict(entry.get("metadata") or {})
+                                if self.is_safetensors_payload_valid(metadata):
+                                    info.text_encoder_outputs_disk_cache_ref = LatentsDiskCacheRef(
+                                        format="safetensors",
+                                        path=shard_path,
+                                        entry_key=entry_key,
+                                    )
+                                    return True
+
+        return self.is_disk_cached_outputs_expected(npz_path)
+
+    def load_outputs_npz(self, npz_path_or_ref) -> List[np.ndarray]:
+        raise NotImplementedError
+
+    def build_safetensors_payload_for_info(self, info, payload: dict[str, Any]) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
+        tensors: dict[str, torch.Tensor] = {}
+        metadata = dict(payload.get("metadata") or {})
+        for field_name, value in (payload.get("values") or {}).items():
+            if value is None:
+                metadata.setdefault("present", {})[field_name] = False
+                continue
+
+            metadata.setdefault("present", {})[field_name] = True
+            if isinstance(value, torch.Tensor):
+                tensors[field_name] = self.prepare_tensor_for_disk_cache(value)
+            else:
+                array = np.asarray(value)
+                tensors[field_name] = torch.from_numpy(array.copy() if not array.flags["C_CONTIGUOUS"] else array)
+        return tensors, metadata
+
+    def decode_loaded_text_cache_entry(self, values: dict[str, np.ndarray], metadata: dict[str, Any]) -> List[np.ndarray]:
+        raise NotImplementedError
+
+    def _load_safetensors_outputs_entry(self, cache_ref: LatentsDiskCacheRef) -> List[np.ndarray]:
+        entry_key = str(cache_ref.entry_key or "")
+        if not entry_key:
+            raise ValueError(f"text-cache entry key is missing for {cache_ref.path}")
+
+        metadata = self.load_disk_cache_metadata(cache_ref)
+        present_map = dict(metadata.get("present") or {})
+        values: dict[str, Any] = {}
+        with safe_open_torch_cpu(cache_ref.path) as handle:
+            for field_name, is_present in present_map.items():
+                if not is_present:
+                    values[field_name] = None
+                    continue
+                loaded_tensor = handle.get_tensor(f"{field_name}::{entry_key}")
+                if loaded_tensor.dtype == torch.bfloat16:
+                    values[field_name] = loaded_tensor
+                else:
+                    values[field_name] = loaded_tensor.numpy()
+        return self.decode_loaded_text_cache_entry(values, metadata)
+
+    def _flush_pending_safetensors_entries(self) -> None:
+        if not self._pending_safetensors_entries or self._pending_safetensors_cache_root is None:
+            return
+
+        cache_root = os.path.abspath(self._pending_safetensors_cache_root)
+        entries = list(self._pending_safetensors_entries)
+        self._pending_safetensors_entries = []
+        self._pending_safetensors_cache_root = None
+
+        cache_dir = self._get_safetensors_cache_dir(cache_root)
+        os.makedirs(cache_dir, exist_ok=True)
+
+        sequence_no = self._safetensors_sequence_by_cache_root.get(cache_root, 0) + 1
+        self._safetensors_sequence_by_cache_root[cache_root] = sequence_no
+        shard_stem = build_safetensors_shard_stem(
+            (0, 0),
+            flip_aug=False,
+            alpha_mask=False,
+            sequence_no=sequence_no,
+            image_count=len(entries),
+            unique_suffix=f"text_cache_{sequence_no:04d}_{os.getpid()}",
+        ).replace("__bucket_0x0", "__text")
+        shard_path = os.path.join(cache_dir, shard_stem + ".safetensors")
+        sidecar_path = build_safetensors_sidecar_path(shard_path)
+
+        tensors: dict[str, torch.Tensor] = {}
+        manifest_entries: list[dict[str, Any]] = []
+
+        for entry_index, entry in enumerate(entries):
+            entry_key = f"{entry_index:08d}"
+            field_tensors, metadata = self.build_safetensors_payload_for_info(entry.info, entry.payload)
+            for field_name, tensor in field_tensors.items():
+                tensors[f"{field_name}::{entry_key}"] = tensor
+
+            metadata_blob = dict(metadata or {})
+            metadata_blob.setdefault("format_version", self.get_disk_cache_format_version())
+            metadata_blob.setdefault("cache_dtype", self.disk_cache_dtype)
+            metadata_blob.setdefault("strategy", self.get_disk_cache_config_payload())
+            metadata_json = json.dumps(metadata_blob, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+            tensors[f"meta::{entry_key}"] = torch.tensor(list(metadata_json.encode("utf-8")), dtype=torch.uint8)
+
+            entry.info.text_encoder_outputs_disk_cache_ref = LatentsDiskCacheRef(format="safetensors", path=shard_path, entry_key=entry_key)
+
+            manifest_entry = self.build_text_cache_manifest_entry(entry.info, entry_key)
+            manifest_entry["metadata"] = {
+                "format_version": self.get_disk_cache_format_version(),
+                "cache_dtype": self.disk_cache_dtype,
+                **self.get_text_cache_manifest_payload(entry.info, entry.payload),
+            }
+            manifest_entries.append(manifest_entry)
+            self._load_safetensors_catalog(cache_root)[manifest_entry["cache_key"]] = {
+                "path": shard_path,
+                "entry_key": entry_key,
+                "source_mtime_ns": int(manifest_entry.get("source_mtime_ns", 0) or 0),
+                "source_size": int(manifest_entry.get("source_size", 0) or 0),
+                "metadata": dict(manifest_entry.get("metadata") or {}),
+            }
+
+        mem_eff_save_file(
+            tensors,
+            shard_path,
+            metadata={
+                "format": "mikazuki_text_encoder_outputs_safetensors_shard",
+                "format_version": str(self.get_disk_cache_format_version()),
+                "namespace": self.disk_cache_namespace,
+                "sequence_no": str(sequence_no),
+                "entry_count": str(len(entries)),
+                "cache_dtype": self.disk_cache_dtype,
+            },
+        )
+        save_safetensors_shard_manifest(
+            sidecar_path,
+            {
+                "format": "mikazuki_text_encoder_outputs_safetensors_shard",
+                "format_version": self.get_disk_cache_format_version(),
+                "namespace": self.disk_cache_namespace,
+                "shard_file": os.path.basename(shard_path),
+                "sequence_no": sequence_no,
+                "image_count": len(entries),
+                "entries": manifest_entries,
+            },
+        )
+        self._register_written_safetensors_shard(cache_root, shard_path)
+
+    def queue_safetensors_payload(self, info, payload: dict[str, Any]) -> None:
+        cache_root = self.resolve_disk_cache_root_for_info(info)
+        if self._pending_safetensors_cache_root is not None and self._pending_safetensors_cache_root != cache_root:
+            self._flush_pending_safetensors_entries()
+        if self._pending_safetensors_cache_root is None:
+            self._pending_safetensors_cache_root = cache_root
+        self._pending_safetensors_entries.append(PendingSafetensorsTextOutputsEntry(info=info, payload=payload))
+        if len(self._pending_safetensors_entries) >= self._max_pending_safetensors_entries:
+            self._flush_pending_safetensors_entries()
+
     def _load_npz_archive(self, npz_path: str) -> dict[str, np.ndarray]:
         cache_identity = None
         if self._npz_cache_items > 0:
@@ -512,22 +1122,19 @@ class TextEncoderOutputsCachingStrategy:
     def get_outputs_npz_path(self, image_abs_path: str) -> str:
         raise NotImplementedError
 
-    def load_outputs_npz(self, npz_path_or_ref) -> List[np.ndarray]:
-        raise NotImplementedError
-
-    def is_disk_cached_outputs_expected(self, npz_path: str) -> bool:
-        raise NotImplementedError
-
-    def is_disk_cached_outputs_expected_for_info(self, npz_path: str, info=None) -> bool:
-        return self.is_disk_cached_outputs_expected(npz_path)
-
     def cache_batch_outputs(
         self, tokenize_strategy: TokenizeStrategy, models: List[Any], text_encoding_strategy: TextEncodingStrategy, batch: List
     ):
         raise NotImplementedError
 
     def finalize_caching(self) -> None:
-        return
+        self._flush_pending_safetensors_entries()
+        for cache_root in list(self._safetensors_catalog_cache.keys()):
+            self._prune_stale_safetensors_shards(cache_root)
+            try:
+                self._write_safetensors_catalog_index(cache_root)
+            except Exception as ex:
+                logger.warning(f"failed to write text-cache catalog index for {cache_root}: {ex}")
 
 
 class LatentsCachingStrategy:
@@ -543,6 +1150,11 @@ class LatentsCachingStrategy:
             _LATENTS_CACHE_RUNTIME_DEFAULTS.get("disk_cache_format")
             or os.environ.get("MIKAZUKI_LATENTS_DISK_CACHE_FORMAT")
             or "safetensors"
+        )
+        self._disk_cache_dtype = normalize_latent_cache_disk_dtype(
+            _LATENTS_CACHE_RUNTIME_DEFAULTS.get("disk_cache_dtype")
+            or os.environ.get("MIKAZUKI_LATENTS_DISK_CACHE_DTYPE")
+            or "auto"
         )
         self._npz_cache_items = _resolve_npz_cache_items("MIKAZUKI_LATENTS_NPZ_CACHE_ITEMS", 16)
         self._npz_cache: OrderedDict[tuple[str, int, int], dict[str, np.ndarray]] = OrderedDict()
@@ -594,6 +1206,7 @@ class LatentsCachingStrategy:
         self._max_pending_safetensors_entries = max(64, max(1, self.max_batch_size) * 16)
         self._safetensors_written_shards_by_cache_root: dict[str, set[str]] = {}
         self._safetensors_sequence_by_context: dict[tuple[str, Tuple[int, int], bool, bool], int] = {}
+        self._source_stat_cache: dict[str, tuple[int, int]] = {}
 
     @classmethod
     def set_strategy(cls, strategy):
@@ -618,6 +1231,10 @@ class LatentsCachingStrategy:
         return self._disk_cache_format
 
     @property
+    def disk_cache_dtype(self) -> str:
+        return self._disk_cache_dtype
+
+    @property
     def uses_safetensors_disk_cache(self) -> bool:
         return self._cache_to_disk and self._disk_cache_format == "safetensors"
 
@@ -630,6 +1247,27 @@ class LatentsCachingStrategy:
         if self._dynamic_batch_enabled:
             return max(self._batch_size, self._dynamic_batch_max_size)
         return self._batch_size
+
+    def resolve_latents_disk_cache_dtype(self, tensor: torch.Tensor) -> torch.dtype:
+        if not torch.is_floating_point(tensor):
+            return tensor.dtype
+
+        configured = self.disk_cache_dtype
+        if configured == "fp16":
+            return torch.float16
+        if configured == "bf16":
+            return torch.bfloat16
+        if configured == "fp32":
+            return torch.float32
+        if tensor.dtype in {torch.float16, torch.bfloat16, torch.float32}:
+            return tensor.dtype
+        return torch.float32
+
+    def prepare_latents_tensor_for_disk_cache(self, tensor: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+        if tensor is None:
+            return None
+        target_dtype = self.resolve_latents_disk_cache_dtype(tensor)
+        return tensor.detach().to(device="cpu", dtype=target_dtype).contiguous()
 
     @property
     def preprocess_workers(self) -> int:
@@ -692,17 +1330,138 @@ class LatentsCachingStrategy:
         normalized_cache_root = os.path.abspath(cache_root)
         return build_safetensors_cache_dir(normalized_cache_root, self.disk_cache_namespace)
 
+    def get_cached_source_stat(self, absolute_path: str) -> Optional[tuple[int, int]]:
+        normalized_path = os.path.abspath(absolute_path)
+        cached = self._source_stat_cache.get(normalized_path)
+        if cached is not None:
+            return cached
+        try:
+            source_stat = os.stat(normalized_path)
+        except OSError:
+            return None
+        resolved = (int(source_stat.st_mtime_ns), int(source_stat.st_size))
+        self._source_stat_cache[normalized_path] = resolved
+        return resolved
+
+    def warm_source_stat_cache(self, infos: List[Any]) -> None:
+        for info in infos:
+            absolute_path = getattr(info, "absolute_path", None)
+            if not absolute_path:
+                continue
+            self.get_cached_source_stat(str(absolute_path))
+
+    def _get_safetensors_catalog_index_path(self, cache_root: str) -> str:
+        return os.path.join(self._get_safetensors_cache_dir(cache_root), "_catalog.json")
+
+    def _build_safetensors_catalog_index_payload(self, cache_root: str, catalog: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        normalized_cache_root = os.path.abspath(cache_root)
+        entries = []
+        for image_key, entry in sorted(catalog.items(), key=lambda item: item[0]):
+            shard_path = os.path.abspath(str(entry.get("path") or ""))
+            if not shard_path:
+                continue
+            try:
+                relative_shard_path = os.path.relpath(shard_path, self._get_safetensors_cache_dir(normalized_cache_root)).replace(
+                    "\\", "/"
+                )
+            except ValueError:
+                relative_shard_path = shard_path.replace("\\", "/")
+            entries.append(
+                {
+                    "image_key": image_key,
+                    "path": relative_shard_path,
+                    "entry_key": str(entry.get("entry_key") or ""),
+                    "image_size": list(tuple(entry.get("image_size") or ())),
+                    "bucket_reso": list(tuple(entry.get("bucket_reso") or ())),
+                    "flip_aug": bool(entry.get("flip_aug")),
+                    "alpha_mask": bool(entry.get("alpha_mask")),
+                    "source_mtime_ns": int(entry.get("source_mtime_ns", 0) or 0),
+                    "source_size": int(entry.get("source_size", 0) or 0),
+                }
+            )
+        return {
+            "format": "mikazuki_latents_catalog",
+            "format_version": 1,
+            "namespace": self.disk_cache_namespace,
+            "entry_count": len(entries),
+            "entries": entries,
+        }
+
+    def _write_safetensors_catalog_index(self, cache_root: str, catalog: Optional[dict[str, dict[str, Any]]] = None) -> None:
+        normalized_cache_root = os.path.abspath(cache_root)
+        resolved_catalog = catalog if catalog is not None else self._safetensors_catalog_cache.get(normalized_cache_root)
+        if resolved_catalog is None:
+            resolved_catalog = self._load_safetensors_catalog(normalized_cache_root)
+
+        cache_dir = self._get_safetensors_cache_dir(normalized_cache_root)
+        os.makedirs(cache_dir, exist_ok=True)
+        index_path = self._get_safetensors_catalog_index_path(normalized_cache_root)
+        payload = self._build_safetensors_catalog_index_payload(normalized_cache_root, resolved_catalog)
+        with open(index_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+    def _load_safetensors_catalog_from_index(self, cache_root: str) -> Optional[dict[str, dict[str, Any]]]:
+        normalized_cache_root = os.path.abspath(cache_root)
+        index_path = self._get_safetensors_catalog_index_path(normalized_cache_root)
+        if not os.path.exists(index_path):
+            return None
+
+        try:
+            with open(index_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except Exception as ex:
+            logger.warning(f"failed to load latent-cache catalog index {index_path}: {ex}")
+            return None
+
+        if str(payload.get("namespace") or self.disk_cache_namespace) != self.disk_cache_namespace:
+            return None
+        if int(payload.get("format_version", 0) or 0) not in {0, 1}:
+            return None
+
+        cache_dir = self._get_safetensors_cache_dir(normalized_cache_root)
+        catalog: dict[str, dict[str, Any]] = {}
+        for index_entry in payload.get("entries") or []:
+            image_key = str(index_entry.get("image_key") or "").strip()
+            entry_key = str(index_entry.get("entry_key") or "").strip()
+            shard_file = str(index_entry.get("path") or "").strip()
+            if not image_key or not entry_key or not shard_file:
+                continue
+
+            shard_path = shard_file if os.path.isabs(shard_file) else os.path.join(cache_dir, shard_file)
+            shard_path = os.path.abspath(shard_path)
+            if not os.path.exists(shard_path):
+                return None
+
+            catalog[image_key] = {
+                "path": shard_path,
+                "entry_key": entry_key,
+                "image_size": tuple(index_entry.get("image_size") or ()),
+                "bucket_reso": tuple(index_entry.get("bucket_reso") or ()),
+                "flip_aug": bool(index_entry.get("flip_aug")),
+                "alpha_mask": bool(index_entry.get("alpha_mask")),
+                "source_mtime_ns": int(index_entry.get("source_mtime_ns", 0) or 0),
+                "source_size": int(index_entry.get("source_size", 0) or 0),
+            }
+        return catalog
+
     def _load_safetensors_catalog(self, cache_root: str) -> dict[str, dict[str, Any]]:
         normalized_cache_root = os.path.abspath(cache_root)
         cached_catalog = self._safetensors_catalog_cache.get(normalized_cache_root)
         if cached_catalog is not None:
             return cached_catalog
 
+        indexed_catalog = self._load_safetensors_catalog_from_index(normalized_cache_root)
+        if indexed_catalog is not None:
+            self._safetensors_catalog_cache[normalized_cache_root] = indexed_catalog
+            return indexed_catalog
+
         cache_dir = self._get_safetensors_cache_dir(normalized_cache_root)
         catalog: dict[str, dict[str, Any]] = {}
         if os.path.isdir(cache_dir):
             for entry in os.scandir(cache_dir):
                 if not entry.is_file() or not entry.name.lower().endswith(".json"):
+                    continue
+                if entry.name.lower() == "_catalog.json":
                     continue
 
                 try:
@@ -741,6 +1500,11 @@ class LatentsCachingStrategy:
                     }
 
         self._safetensors_catalog_cache[normalized_cache_root] = catalog
+        if os.path.isdir(cache_dir):
+            try:
+                self._write_safetensors_catalog_index(normalized_cache_root, catalog)
+            except Exception as ex:
+                logger.warning(f"failed to rebuild latent-cache catalog index for {normalized_cache_root}: {ex}")
         return catalog
 
     def _update_safetensors_catalog_entry(
@@ -863,13 +1627,11 @@ class LatentsCachingStrategy:
                         shard_path = str(entry.get("path") or "")
                         entry_key = str(entry.get("entry_key") or "")
                         if shard_path and entry_key and os.path.exists(shard_path):
-                            try:
-                                source_stat = os.stat(absolute_path)
-                            except OSError:
-                                source_stat = None
-                            if source_stat is not None:
-                                if int(entry.get("source_mtime_ns", 0) or 0) == int(source_stat.st_mtime_ns):
-                                    if int(entry.get("source_size", 0) or 0) == int(source_stat.st_size):
+                            cached_source_stat = self.get_cached_source_stat(absolute_path)
+                            if cached_source_stat is not None:
+                                source_mtime_ns, source_size = cached_source_stat
+                                if int(entry.get("source_mtime_ns", 0) or 0) == source_mtime_ns:
+                                    if int(entry.get("source_size", 0) or 0) == source_size:
                                         return LatentsDiskCacheRef(format="safetensors", path=shard_path, entry_key=entry_key)
 
         npz_path = self.get_latents_npz_path(absolute_path, image_size)
@@ -943,6 +1705,10 @@ class LatentsCachingStrategy:
             self._npz_write_executor = None
         for cache_root in list(self._safetensors_catalog_cache.keys()):
             self._prune_stale_safetensors_shards(cache_root)
+            try:
+                self._write_safetensors_catalog_index(cache_root)
+            except Exception as ex:
+                logger.warning(f"failed to write latent-cache catalog index for {cache_root}: {ex}")
 
     def flush_pending_disk_cache(self) -> None:
         self._flush_pending_safetensors_entries()
@@ -1015,12 +1781,12 @@ class LatentsCachingStrategy:
 
         for entry_index, entry in enumerate(entries):
             entry_key = f"{entry_index:08d}"
-            tensors[f"latents::{entry_key}"] = entry.latents_tensor.detach().cpu().contiguous()
+            tensors[f"latents::{entry_key}"] = self.prepare_latents_tensor_for_disk_cache(entry.latents_tensor)
             tensors[f"original_size::{entry_key}"] = torch.tensor(entry.original_size, dtype=torch.int32)
             tensors[f"crop_ltrb::{entry_key}"] = torch.tensor(entry.crop_ltrb, dtype=torch.int32)
 
             if entry.flipped_latents_tensor is not None:
-                tensors[f"latents_flipped::{entry_key}"] = entry.flipped_latents_tensor.detach().cpu().contiguous()
+                tensors[f"latents_flipped::{entry_key}"] = self.prepare_latents_tensor_for_disk_cache(entry.flipped_latents_tensor)
             if entry.alpha_mask_tensor is not None:
                 tensors[f"alpha_mask::{entry_key}"] = entry.alpha_mask_tensor.detach().cpu().contiguous()
 
@@ -1033,13 +1799,12 @@ class LatentsCachingStrategy:
                 flip_aug=bool(context["flip_aug"]),
                 alpha_mask=bool(context["alpha_mask"]),
             )
-            try:
-                source_stat = os.stat(entry.info.absolute_path)
-                source_mtime_ns = int(source_stat.st_mtime_ns)
-                source_size = int(source_stat.st_size)
-            except OSError:
+            cached_source_stat = self.get_cached_source_stat(entry.info.absolute_path)
+            if cached_source_stat is None:
                 source_mtime_ns = 0
                 source_size = 0
+            else:
+                source_mtime_ns, source_size = cached_source_stat
 
             sidecar_entries.append(
                 {
@@ -1081,6 +1846,7 @@ class LatentsCachingStrategy:
                 "alpha_mask": "1" if context["alpha_mask"] else "0",
                 "sequence_no": str(sequence_no),
                 "entry_count": str(len(entries)),
+                "cache_dtype": self.disk_cache_dtype,
             },
         )
         save_safetensors_shard_manifest(
@@ -1095,16 +1861,21 @@ class LatentsCachingStrategy:
                 "alpha_mask": bool(context["alpha_mask"]),
                 "sequence_no": sequence_no,
                 "image_count": len(entries),
+                "cache_dtype": self.disk_cache_dtype,
                 "entries": sidecar_entries,
             },
         )
         self._register_written_safetensors_shard(cache_root, shard_path)
 
-    @staticmethod
-    def _latents_to_numpy_array(latents: Union[torch.Tensor, np.ndarray]) -> np.ndarray:
+    def _latents_to_numpy_array(self, latents: Union[torch.Tensor, np.ndarray]) -> np.ndarray:
         if isinstance(latents, np.ndarray):
             return latents
-        return latents.float().cpu().numpy()
+        prepared = self.prepare_latents_tensor_for_disk_cache(latents)
+        if prepared is None:
+            raise ValueError("Latents tensor cannot be None when writing disk cache.")
+        if prepared.dtype == torch.bfloat16:
+            return prepared.float().numpy()
+        return prepared.numpy()
 
     @staticmethod
     def _optional_mask_to_numpy(alpha_mask: Optional[Union[torch.Tensor, np.ndarray]]) -> Optional[np.ndarray]:

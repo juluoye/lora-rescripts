@@ -64,6 +64,7 @@ Schema.intersect([
             optimizer_type: Schema.union([
                 "AdamW",
                 "AdamW8bit",
+                "AdamW8bitKahan",
                 "PagedAdamW8bit",
                 "RAdamScheduleFree",
                 "Lion",

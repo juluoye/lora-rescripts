@@ -182,7 +182,7 @@ function Ensure-EmbeddablePythonDevFiles {
         throw "Could not determine Python runtime version for $RuntimeDir."
     }
 
-    $pythonLibName = "python$($versionInfo.abi_tag).lib"
+    $pythonLibName = "python$($versionInfo.major)$($versionInfo.minor).lib"
     $runtimeIncludeDir = Join-Path $RuntimeDir "Include"
     $runtimeLibDir = Join-Path $RuntimeDir "libs"
     $runtimePythonHeader = Join-Path $runtimeIncludeDir "Python.h"
@@ -223,7 +223,14 @@ function Ensure-EmbeddablePythonDevFiles {
     }
 
     if (-not (Test-Path $sourceIncludeDir) -or -not (Test-Path $sourcePythonLib)) {
-        throw "Downloaded CPython dev package does not contain the expected Include or $pythonLibName files."
+        $availableLibs = @()
+        $libsDir = Join-Path $extractDir "tools\libs"
+        if (Test-Path $libsDir) {
+            $availableLibs = Get-ChildItem -Path $libsDir -Filter "python*.lib" -File -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty Name
+        }
+        $availableLibsText = if ($availableLibs.Count -gt 0) { $availableLibs -join ", " } else { "<none>" }
+        throw "Downloaded CPython dev package does not contain the expected Include or $pythonLibName files. Available python import libs: $availableLibsText"
     }
 
     if (-not (Test-Path $runtimeIncludeDir)) {

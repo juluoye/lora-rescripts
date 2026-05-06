@@ -40,8 +40,9 @@ from library.strategy_base import (
     TextEncoderOutputsCachingStrategy,
     TextEncodingStrategy,
     configure_latents_cache_runtime,
+    configure_text_encoder_outputs_cache_runtime,
 )
-from library.train_util import resolve_cache_latents_runtime_kwargs
+from library.train_util import resolve_cache_latents_runtime_kwargs, resolve_text_encoder_outputs_cache_runtime_kwargs
 from library.latents_disk_cache import normalize_latents_disk_cache_format
 from mikazuki.utils.runtime_sageattention import load_runtime_sageattention_symbols
 from mikazuki.utils.runtime_mode import infer_attention_runtime_mode, is_amd_rocm_runtime, is_intel_xpu_runtime
@@ -393,7 +394,16 @@ def prepare_dataset_args(args: argparse.Namespace, support_metadata: bool):
         args.cache_latents_prefetch_batches = cache_latents_runtime["prefetch_batches"]
     if hasattr(args, "latent_cache_disk_format"):
         args.latent_cache_disk_format = cache_latents_runtime["disk_cache_format"]
+    if hasattr(args, "latent_cache_disk_dtype"):
+        args.latent_cache_disk_dtype = cache_latents_runtime["disk_cache_dtype"]
     configure_latents_cache_runtime(**cache_latents_runtime)
+
+    text_outputs_cache_runtime = resolve_text_encoder_outputs_cache_runtime_kwargs(args)
+    if hasattr(args, "text_encoder_outputs_cache_disk_format"):
+        args.text_encoder_outputs_cache_disk_format = text_outputs_cache_runtime["disk_cache_format"]
+    if hasattr(args, "text_encoder_outputs_cache_dtype"):
+        args.text_encoder_outputs_cache_dtype = text_outputs_cache_runtime["disk_cache_dtype"]
+    configure_text_encoder_outputs_cache_runtime(**text_outputs_cache_runtime)
 
     if hasattr(args, "bucket_selection_mode") and args.bucket_selection_mode is not None:
         args.bucket_selection_mode = str(args.bucket_selection_mode).strip().lower()

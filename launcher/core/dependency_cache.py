@@ -21,6 +21,7 @@ from launcher.core.subprocess_utils import hidden_subprocess_kwargs
 
 _FLASHATTENTION_RELEASE_TAG = "v0.7.13"
 _FLASHATTENTION_VERSION = "2.8.3"
+_SPARGEATTN2_VERSION = "0.1.0"
 _BLACKWELL_XFORMERS_WHEEL_URL = (
     "https://huggingface.co/czmahi/xformers-windows-torch2.8-cu128-py312/resolve/main/"
     "latest-torch2.8-python3.12-xformers-comfyui-windows/"
@@ -147,6 +148,14 @@ def _flashattention_default_url() -> str:
     )
 
 
+def _spargeattn2_default_url() -> str:
+    file_name = f"spas_sage_attn-{_SPARGEATTN2_VERSION}-cp311-cp311-win_amd64.whl"
+    return (
+        "https://github.com/WhitecrowAurora/lora-rescripts/releases/download/"
+        f"spargeattn2-wheels/{urllib.parse.quote(file_name)}"
+    )
+
+
 def build_runtime_dependency_plan(runtime_id: str) -> List[DependencyPlanItem]:
     common_requirements = DependencyPlanItem(
         item_id="requirements",
@@ -241,6 +250,38 @@ def build_runtime_dependency_plan(runtime_id: str) -> List[DependencyPlanItem]:
         kind="url",
         url=_flashattention_default_url(),
     )
+    sparge_torch = DependencyPlanItem(
+        item_id="torch_stack",
+        label_zh="PyTorch 与 TorchVision",
+        label_en="PyTorch and TorchVision",
+        kind="pip",
+        pip_args=(
+            "torch==2.10.0+cu128",
+            "torchvision==0.25.0+cu128",
+            "--extra-index-url",
+            "https://download.pytorch.org/whl/cu128",
+        ),
+    )
+    sparge_requirements = DependencyPlanItem(
+        item_id="requirements",
+        label_zh="SpargeAttn2 项目依赖",
+        label_en="SpargeAttn2 project requirements",
+        kind="pip",
+        pip_args=(
+            "--prefer-binary",
+            "-r",
+            "requirements_spargeattn2_extra.txt",
+        ),
+        note_zh="缓存 SpargeAttn2 requirements 中除 torch 之外的依赖轮子",
+        note_en="Cache non-torch wheels required by SpargeAttn2 requirements",
+    )
+    sparge_wheel = DependencyPlanItem(
+        item_id="spargeattn2_wheel",
+        label_zh="SpargeAttn2 预编译轮子",
+        label_en="SpargeAttn2 prebuilt wheel",
+        kind="url",
+        url=_spargeattn2_default_url(),
+    )
     blackwell_xformers = DependencyPlanItem(
         item_id="blackwell_xformers",
         label_zh="Blackwell xformers 轮子",
@@ -252,6 +293,7 @@ def build_runtime_dependency_plan(runtime_id: str) -> List[DependencyPlanItem]:
     plan_map: Dict[str, List[DependencyPlanItem]] = {
         "standard": [standard_torch, standard_xformers, common_requirements, triton_runtime_default],
         "flashattention": [standard_torch, common_requirements, triton_runtime_default, flash_wheel],
+        "spargeattn2": [sparge_torch, sparge_requirements, triton_runtime_default, sparge_wheel],
         "sageattention": [sage_torch, common_requirements, triton_runtime, sage_pkg],
         "sageattention2": [sage2_torch, common_requirements, triton_runtime, sage2_pkg],
         "blackwell": [standard_torch, common_requirements, triton_runtime_default, blackwell_xformers],

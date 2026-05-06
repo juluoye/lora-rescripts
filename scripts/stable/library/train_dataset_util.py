@@ -1511,6 +1511,9 @@ class BaseDataset(torch.utils.data.Dataset):
         logger.info("caching latents with caching strategy.")
         caching_strategy = LatentsCachingStrategy.get_strategy()
         image_infos = list(self.image_data.values())
+        warm_source_stat_cache = getattr(caching_strategy, "warm_source_stat_cache", None)
+        if caching_strategy.cache_to_disk and callable(warm_source_stat_cache):
+            warm_source_stat_cache(image_infos)
 
         # sort by resolution
         image_infos.sort(key=lambda info: info.bucket_reso[0] * info.bucket_reso[1])
@@ -1834,6 +1837,9 @@ class BaseDataset(torch.utils.data.Dataset):
 
         logger.info("caching Text Encoder outputs with caching strategy.")
         image_infos = list(self.image_data.values())
+        warm_source_stat_cache = getattr(caching_strategy, "warm_source_stat_cache", None)
+        if caching_strategy.cache_to_disk and callable(warm_source_stat_cache):
+            warm_source_stat_cache(image_infos)
 
         # split by resolution
         batches = []
@@ -1884,6 +1890,17 @@ class BaseDataset(torch.utils.data.Dataset):
         finalize_caching = getattr(caching_strategy, "finalize_caching", None)
         if callable(finalize_caching):
             finalize_caching()
+        if caching_strategy.cache_to_disk:
+            accelerator.wait_for_everyone()
+            if getattr(caching_strategy, "uses_safetensors_disk_cache", False):
+                for info in image_infos:
+                    if info.text_encoder_outputs_disk_cache_ref is not None:
+                        continue
+                    subset = self.image_to_subset[info.image_key]
+                    info.text_encoder_outputs_cache_root = getattr(subset, "image_dir", None)
+                    te_out_npz = caching_strategy.get_outputs_npz_path(info.absolute_path)
+                    info.text_encoder_outputs_npz = te_out_npz
+                    caching_strategy.is_disk_cached_outputs_expected_for_info(te_out_npz, info=info)
 
     # if weight_dtype is specified, Text Encoder itself and output will be converted to the dtype
     # this method is only for SDXL, but it should be implemented here because it needs to be a method of dataset
@@ -1929,6 +1946,11 @@ class BaseDataset(torch.utils.data.Dataset):
         logger.info("caching text encoder outputs.")
 
         tokenize_strategy = TokenizeStrategy.get_strategy()
+        caching_strategy = TextEncoderOutputsCachingStrategy.get_strategy()
+        if cache_to_disk and caching_strategy is None:
+            raise RuntimeError(
+                "TextEncoderOutputsCachingStrategy is not configured. Please use the new cache pipeline or set the strategy explicitly."
+            )
 
         if batch_size is None:
             batch_size = self.batch_size
@@ -1948,7 +1970,7 @@ class BaseDataset(torch.utils.data.Dataset):
                 if not is_main_process:  # store to info only
                     continue
 
-                if caching_strategy.is_disk_cached_outputs_expected_for_info(te_out_npz, info=info):
+                if caching_strategy is not None and caching_strategy.is_disk_cached_outputs_expected_for_info(te_out_npz, info=info):
                     # TODO check varidity of cache here
                     continue
 
@@ -3206,8 +3228,8 @@ class ControlNetDataset(BaseDataset):
     def new_cache_latents(self, model: Any, accelerator: Accelerator):
         return self.dreambooth_dataset_delegate.new_cache_latents(model, accelerator)
 
-    def new_cache_text_encoder_outputs(self, models: List[Any], is_main_process: bool):
-        return self.dreambooth_dataset_delegate.new_cache_text_encoder_outputs(models, is_main_process)
+    def new_cache_text_encoder_outputs(self, models: List[Any], accelerator: Accelerator):
+        return self.dreambooth_dataset_delegate.new_cache_text_encoder_outputs(models, accelerator)
 
     def __len__(self):
         return self.dreambooth_dataset_delegate.__len__()
@@ -3925,11 +3947,21 @@ def cache_batch_text_encoder_outputs_sd3(
 
 
 def save_text_encoder_outputs_to_disk(npz_path, hidden_state1, hidden_state2, pool2):
+    caching_strategy = TextEncoderOutputsCachingStrategy.get_strategy()
+    if caching_strategy is not None:
+        hidden_state1 = caching_strategy.tensor_to_numpy_for_cache(hidden_state1)
+        hidden_state2 = caching_strategy.tensor_to_numpy_for_cache(hidden_state2)
+        pool2 = caching_strategy.tensor_to_numpy_for_cache(pool2)
+    else:
+        hidden_state1 = hidden_state1.cpu().float().numpy()
+        hidden_state2 = hidden_state2.cpu().float().numpy()
+        pool2 = pool2.cpu().float().numpy()
+
     np.savez(
         npz_path,
-        hidden_state1=hidden_state1.cpu().float().numpy(),
-        hidden_state2=hidden_state2.cpu().float().numpy(),
-        pool2=pool2.cpu().float().numpy(),
+        hidden_state1=hidden_state1,
+        hidden_state2=hidden_state2,
+        pool2=pool2,
     )
 
 

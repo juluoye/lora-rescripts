@@ -583,21 +583,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setConsoleLines((prev) => [
         ...prev,
         '',
-        data.success
-          ? action === 'initialize'
-            ? `[Launcher] Runtime '${data.runtime_id}' initialization completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
-            : action === 'uninstall'
-              ? `[Launcher] Runtime '${data.runtime_id}' uninstall completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
-              : action === 'cache'
-                ? `[Launcher] Runtime '${data.runtime_id}' dependency cache completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
-              : `[Launcher] Runtime '${data.runtime_id}' installation completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
-          : action === 'initialize'
-            ? `[Launcher] Runtime '${data.runtime_id}' initialization failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`
-            : action === 'uninstall'
-              ? `[Launcher] Runtime '${data.runtime_id}' uninstall failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`
-              : action === 'cache'
-                ? `[Launcher] Runtime '${data.runtime_id}' dependency cache failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`
-              : `[Launcher] Runtime '${data.runtime_id}' installation failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`,
+          data.success
+            ? action === 'initialize'
+              ? `[Launcher] Runtime '${data.runtime_id}' initialization completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
+              : action === 'uninstall'
+                ? `[Launcher] Runtime '${data.runtime_id}' dependency uninstall completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
+                : action === 'cache'
+                  ? `[Launcher] Runtime '${data.runtime_id}' dependency cache completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
+                : `[Launcher] Runtime '${data.runtime_id}' installation completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
+            : action === 'initialize'
+              ? `[Launcher] Runtime '${data.runtime_id}' initialization failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`
+              : action === 'uninstall'
+                ? `[Launcher] Runtime '${data.runtime_id}' dependency uninstall failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`
+                : action === 'cache'
+                  ? `[Launcher] Runtime '${data.runtime_id}' dependency cache failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`
+                : `[Launcher] Runtime '${data.runtime_id}' installation failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`,
       ]);
 
       if (action === 'cache') {
