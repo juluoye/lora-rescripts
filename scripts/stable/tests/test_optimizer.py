@@ -1,5 +1,9 @@
 from unittest.mock import patch
+import logging
 from library.train_util import get_optimizer
+from library.optimizer_util import parse_optimizer_kwargs
+from library.full_bf16_stochastic_util import FullBf16StochasticOptimizer
+from library.lulynx_optimizer_compat import Compass, CompassPlus, FARMScrop, FCompass, FishMonger
 from train_network import setup_parser
 import torch
 from torch.nn import Parameter
@@ -151,3 +155,55 @@ def test_all_supported_optimizers():
             instance = opt.get("instance")
             assert instance is not None
             assert isinstance(optimizer, instance)
+
+
+def test_parse_optimizer_kwargs_sanitizes_invalid_numeric_values():
+    with patch(
+        "sys.argv",
+        [
+            "",
+            "--optimizer_type",
+            "pytorch_optimizer.Compass",
+            "--optimizer_args",
+            "eps=0",
+            "weight_decay=-0.1",
+            "betas=(1.2, 0.999)",
+        ],
+    ):
+        parser = setup_parser()
+        args = parser.parse_args()
+        kwargs = parse_optimizer_kwargs(args, logging.getLogger("test"))
+        assert kwargs["eps"] > 0
+        assert kwargs["weight_decay"] == 0.0
+        assert "betas" not in kwargs
+        assert kwargs["amp_fac"] == 2.0
+
+
+def test_compat_optimizer_aliases_can_be_created():
+    compat_optimizers = [
+        ("pytorch_optimizer.Compass", Compass),
+        ("pytorch_optimizer.FCompass", FCompass),
+        ("pytorch_optimizer.FishMonger", FishMonger),
+        ("pytorch_optimizer.FARMScrop", FARMScrop),
+        ("pytorch_optimizer.CompassPlus", CompassPlus),
+    ]
+
+    for alias, instance_type in compat_optimizers:
+        with patch("sys.argv", ["", "--optimizer_type", alias, "--max_train_steps", "32"]):
+            parser = setup_parser()
+            args = parser.parse_args()
+            param = Parameter(torch.tensor([1.5, 1.5]))
+            optimizer_name, _, optimizer = get_optimizer(args, [param])
+            assert optimizer_name.endswith(instance_type.__name__)
+            assert isinstance(optimizer, instance_type)
+
+
+def test_full_bf16_optimizer_wraps_master_params():
+    with patch("sys.argv", ["", "--full_bf16", "--mixed_precision", "bf16"]):
+        parser = setup_parser()
+        args = parser.parse_args()
+        param = Parameter(torch.tensor([1.5, 1.5], dtype=torch.bfloat16))
+        optimizer_name, _, optimizer = get_optimizer(args, [param])
+        assert optimizer_name == "torch.optim.adamw.AdamW"
+        assert isinstance(optimizer, FullBf16StochasticOptimizer)
+        assert optimizer.param_groups[0]["params"][0].dtype == torch.float32

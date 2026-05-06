@@ -5,6 +5,7 @@ import math
 from typing import Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 
 from library import custom_train_functions
 from library.utils import setup_logging
@@ -215,6 +216,91 @@ def conditional_loss(
     return loss
 
 
+def _wavelet_detail_components(tensor: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ll = F.avg_pool2d(tensor, kernel_size=2, stride=2)
+    upsampled_ll = F.interpolate(ll, scale_factor=2, mode="nearest")
+    residual = tensor - upsampled_ll
+    lh = residual[:, :, 0::2, 1::2]
+    hl = residual[:, :, 1::2, 0::2]
+    hh = residual[:, :, 1::2, 1::2]
+    return ll, lh, hl, hh
+
+
+def compute_wavelet_loss(
+    model_pred: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    levels: int = 1,
+    detail_weight: float = 1.0,
+    approx_weight: float = 0.0,
+    reduction: str = "none",
+) -> torch.Tensor:
+    if levels <= 0:
+        raise ValueError("levels must be >= 1")
+
+    pred_current = model_pred
+    target_current = target
+    total_loss = None
+
+    for level_index in range(levels):
+        min_spatial = min(pred_current.shape[-2], pred_current.shape[-1], target_current.shape[-2], target_current.shape[-1])
+        if min_spatial < 2:
+            break
+
+        pred_ll, pred_lh, pred_hl, pred_hh = _wavelet_detail_components(pred_current)
+        target_ll, target_lh, target_hl, target_hh = _wavelet_detail_components(target_current)
+
+        level_loss = (
+            F.l1_loss(pred_lh, target_lh, reduction="none")
+            + F.l1_loss(pred_hl, target_hl, reduction="none")
+            + F.l1_loss(pred_hh, target_hh, reduction="none")
+        ) / 3.0
+        level_loss = level_loss * float(detail_weight)
+
+        if approx_weight > 0 and level_index == levels - 1:
+            approx_loss = F.l1_loss(pred_ll, target_ll, reduction="none") * float(approx_weight)
+            level_loss = level_loss + approx_loss
+
+        level_loss = F.interpolate(level_loss, size=model_pred.shape[-2:], mode="nearest")
+        total_loss = level_loss if total_loss is None else (total_loss + level_loss)
+
+        pred_current = pred_ll
+        target_current = target_ll
+
+    if total_loss is None:
+        total_loss = torch.zeros_like(model_pred)
+
+    if reduction == "mean":
+        return torch.mean(total_loss)
+    if reduction == "sum":
+        return torch.sum(total_loss)
+    return total_loss
+
+
+def apply_wavelet_loss(
+    base_loss: torch.Tensor,
+    model_pred: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    enabled: bool,
+    weight: float,
+    levels: int,
+    approx_weight: float = 0.0,
+) -> torch.Tensor:
+    if not enabled or weight <= 0:
+        return base_loss
+
+    wavelet_loss = compute_wavelet_loss(
+        model_pred.float(),
+        target.float(),
+        levels=levels,
+        detail_weight=1.0,
+        approx_weight=approx_weight,
+        reduction="none",
+    )
+    return base_loss + (wavelet_loss * float(weight))
+
+
 def append_step_loss_to_logs(logs, *, current_loss=None, average_loss=None):
     if current_loss is not None:
         current_loss = float(current_loss)
@@ -226,8 +312,10 @@ def append_step_loss_to_logs(logs, *, current_loss=None, average_loss=None):
 
 
 __all__ = [
+    "apply_wavelet_loss",
     "append_step_loss_to_logs",
     "conditional_loss",
+    "compute_wavelet_loss",
     "cosine_optimal_transport",
     "get_huber_threshold_if_needed",
     "get_noise_noisy_latents_and_timesteps",

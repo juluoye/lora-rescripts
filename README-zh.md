@@ -18,7 +18,7 @@
 
 _✨ 享受 Stable Diffusion 训练！ ✨_
 
-**v1.5.9**
+**v1.6.0**
 
 Fork from 秋葉 `aaaki/lora-scripts`  
 Modify By `Lulynx`
@@ -260,6 +260,7 @@ VITE_API_URL=https://你的域名.example/api npm run build
 - [Akegarasu/lora-scripts](https://github.com/Akegarasu/lora-scripts)：早期脚本工作流与 GUI 形态的重要基础。
 - [kohya-ss/sd-scripts](https://github.com/kohya-ss/sd-scripts)：本项目所使用的核心训练后端。
 - [kozistr/pytorch_optimizer](https://github.com/kozistr/pytorch_optimizer)：本项目扩展优化器与调度器选项所使用的核心集合来源。
+- [67372a/LoRA_Easy_Training_Scripts](https://github.com/67372a/LoRA_Easy_Training_Scripts)：本项目若干高级训练路线思路与实验方向的重要参考来源。
 
 ## 鸣谢
 

@@ -5,11 +5,13 @@ import ast
 import importlib
 import inspect
 import logging
+import math
 from typing import Any
 
 import torch
 import transformers
 
+from library import lulynx_optimizer_compat
 from mikazuki.utils.runtime_mode import infer_attention_runtime_mode, is_amd_rocm_runtime, is_intel_xpu_runtime
 
 
@@ -79,6 +81,185 @@ def validate_optimizer_choice(args: argparse.Namespace, optimizer_type: str) -> 
         ), "fused_backward_pass does not work with gradient_accumulation_steps > 1 / fused_backward_passはgradient_accumulation_steps>1では機能しません / fused_backward_pass 不支持 gradient_accumulation_steps > 1"
 
 
+_EPSILON_KEYS = frozenset({"eps", "eps2", "eps_floor", "epsilon"})
+_WEIGHT_DECAY_KEYS = frozenset({"weight_decay", "stable_weight_decay"})
+_BETA_KEYS = frozenset({"betas"})
+_SAFE_MIN_EPS = float(torch.finfo(torch.float32).tiny)
+_AGGRESSIVE_CLIP_KEYS = frozenset({"adaptive_clip", "clip_threshold"})
+_DEFAULT_EXPERIMENTAL_PYTORCH_OPTIMIZER_ARGS: dict[str, dict[str, Any]] = {
+    "compass": {
+        "amp_fac": 2.0,
+        "eps": _SAFE_MIN_EPS,
+    },
+    "fcompass": {
+        "amp_fac": 1.5,
+        "eps": _SAFE_MIN_EPS,
+        "weight_decouple": True,
+    },
+    "fishmonger": {
+        "eps": _SAFE_MIN_EPS,
+        "weight_decouple": True,
+    },
+    "farmscrop": {
+        "eps": _SAFE_MIN_EPS,
+        "theta": 0.999,
+    },
+    "compassplus": {
+        "amp_fac": 2.0,
+        "eps": _SAFE_MIN_EPS,
+        "centralize_gradients": True,
+    },
+    "ranger21": {
+        "eps": _SAFE_MIN_EPS,
+    },
+    "ademamix": {
+        "eps": _SAFE_MIN_EPS,
+    },
+}
+
+
+def _normalize_optimizer_base_name(raw_optimizer_type: str) -> str:
+    value = str(raw_optimizer_type or "").strip()
+    if not value:
+        return ""
+    return value.rsplit(".", 1)[-1].lower()
+
+
+def _coerce_finite_float(
+    value: Any,
+    *,
+    logger: logging.Logger,
+    key: str,
+    optimizer_label: str,
+) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"Ignoring non-numeric optimizer arg {key}={value!r} for {optimizer_label}. "
+            "Please pass a finite numeric value."
+        )
+        return None
+
+    if not math.isfinite(parsed):
+        logger.warning(
+            f"Ignoring non-finite optimizer arg {key}={value!r} for {optimizer_label}. "
+            "Please pass a finite numeric value."
+        )
+        return None
+
+    return parsed
+
+
+def _sanitize_optimizer_kwargs(
+    optimizer_kwargs: dict[str, Any],
+    *,
+    optimizer_type: str,
+    logger: logging.Logger,
+) -> dict[str, Any]:
+    sanitized = dict(optimizer_kwargs)
+    optimizer_label = optimizer_type or "optimizer"
+    optimizer_base = _normalize_optimizer_base_name(optimizer_type)
+
+    defaults = _DEFAULT_EXPERIMENTAL_PYTORCH_OPTIMIZER_ARGS.get(optimizer_base)
+    if defaults:
+        for key, value in defaults.items():
+            if key not in sanitized:
+                sanitized[key] = value
+                logger.info(f"{optimizer_label}: auto-injected {key}={value} for safer default behavior.")
+
+    for key in list(sanitized.keys()):
+        value = sanitized[key]
+
+        if key in _EPSILON_KEYS:
+            parsed = _coerce_finite_float(value, logger=logger, key=key, optimizer_label=optimizer_label)
+            if parsed is None or parsed <= 0:
+                if parsed is not None:
+                    logger.warning(
+                        f"{optimizer_label}: {key}={value!r} is not positive. "
+                        f"Automatically overriding to float32 tiny ({_SAFE_MIN_EPS})."
+                    )
+                sanitized[key] = _SAFE_MIN_EPS
+            else:
+                sanitized[key] = max(parsed, _SAFE_MIN_EPS)
+            continue
+
+        if key in _WEIGHT_DECAY_KEYS:
+            parsed = _coerce_finite_float(value, logger=logger, key=key, optimizer_label=optimizer_label)
+            if parsed is None:
+                sanitized.pop(key, None)
+                continue
+            if parsed < 0:
+                logger.warning(
+                    f"{optimizer_label}: {key}={value!r} is negative. Automatically clamping it to 0.0."
+                )
+                parsed = 0.0
+            sanitized[key] = parsed
+            continue
+
+        if key in _AGGRESSIVE_CLIP_KEYS:
+            parsed = _coerce_finite_float(value, logger=logger, key=key, optimizer_label=optimizer_label)
+            if parsed is None:
+                sanitized.pop(key, None)
+                continue
+            if parsed <= 0:
+                logger.warning(
+                    f"{optimizer_label}: {key}={value!r} must be positive. Removing this optimizer arg."
+                )
+                sanitized.pop(key, None)
+                continue
+            sanitized[key] = parsed
+            continue
+
+        if key in _BETA_KEYS:
+            if not isinstance(value, (list, tuple)) or len(value) != 2:
+                logger.warning(
+                    f"{optimizer_label}: betas={value!r} is invalid. Expected a pair like (0.9, 0.999). "
+                    "Removing this optimizer arg."
+                )
+                sanitized.pop(key, None)
+                continue
+
+            beta_values: list[float] = []
+            valid = True
+            for index, beta_value in enumerate(value):
+                parsed = _coerce_finite_float(
+                    beta_value,
+                    logger=logger,
+                    key=f"{key}[{index}]",
+                    optimizer_label=optimizer_label,
+                )
+                if parsed is None:
+                    valid = False
+                    break
+                if parsed < 0 or parsed >= 1:
+                    logger.warning(
+                        f"{optimizer_label}: betas[{index}]={beta_value!r} is outside the valid range [0, 1). "
+                        "Removing this optimizer arg."
+                    )
+                    valid = False
+                    break
+                beta_values.append(parsed)
+
+            if not valid:
+                sanitized.pop(key, None)
+                continue
+
+            sanitized[key] = tuple(beta_values)
+            continue
+
+        if isinstance(value, (int, float)):
+            if isinstance(value, bool):
+                continue
+            if not math.isfinite(float(value)):
+                logger.warning(
+                    f"{optimizer_label}: removing non-finite optimizer arg {key}={value!r}."
+                )
+                sanitized.pop(key, None)
+
+    return sanitized
+
+
 def parse_optimizer_kwargs(args: argparse.Namespace, logger: logging.Logger) -> dict[str, Any]:
     optimizer_kwargs: dict[str, Any] = {}
     if args.optimizer_args is not None and len(args.optimizer_args) > 0:
@@ -95,7 +276,7 @@ def parse_optimizer_kwargs(args: argparse.Namespace, logger: logging.Logger) -> 
                 f"Ignoring invalid weight_decay value: {configured_weight_decay}. "
                 "Please pass a numeric value (for example 0.01)."
             )
-    return optimizer_kwargs
+    return _sanitize_optimizer_kwargs(optimizer_kwargs, optimizer_type=getattr(args, "optimizer_type", ""), logger=logger)
 
 
 def _build_lion_optimizer(trainable_params, optimizer_kwargs: dict[str, Any], lr, logger: logging.Logger):
@@ -471,6 +652,17 @@ def build_optimizer(
     lr,
     logger: logging.Logger,
 ):
+    if lulynx_optimizer_compat.is_supported_optimizer_name(getattr(args, "optimizer_type", "")):
+        compat_result = lulynx_optimizer_compat.build_optimizer(
+            args,
+            trainable_params,
+            optimizer_kwargs,
+            lr,
+            logger,
+        )
+        if compat_result is not None:
+            return compat_result
+
     if optimizer_type == "Lion".lower():
         return _build_lion_optimizer(trainable_params, optimizer_kwargs, lr, logger)
 

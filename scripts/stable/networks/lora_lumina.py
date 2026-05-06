@@ -14,6 +14,7 @@ from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 from transformers import CLIPTextModel
 import torch
 from torch import Tensor, nn
+from library import network_vram_swap_util
 from library.utils import setup_logging
 
 setup_logging()
@@ -115,7 +116,10 @@ class LoRAModule(torch.nn.Module):
                 return org_forwarded
 
         if self.split_dims is None:
-            lx = self.lora_down(x)
+            if network_vram_swap_util.module_uses_vram_swap(self):
+                lx = network_vram_swap_util.forward_supported_module(self.lora_down, x)
+            else:
+                lx = self.lora_down(x)
 
             # normal dropout
             if self.dropout is not None and self.training:
@@ -136,11 +140,17 @@ class LoRAModule(torch.nn.Module):
             else:
                 scale = self.scale
 
-            lx = self.lora_up(lx)
+            if network_vram_swap_util.module_uses_vram_swap(self):
+                lx = network_vram_swap_util.forward_supported_module(self.lora_up, lx)
+            else:
+                lx = self.lora_up(lx)
 
             return org_forwarded + lx * self.multiplier * scale
         else:
-            lxs = [lora_down(x) for lora_down in self.lora_down]
+            if network_vram_swap_util.module_uses_vram_swap(self):
+                lxs = [network_vram_swap_util.forward_supported_module(lora_down, x) for lora_down in self.lora_down]
+            else:
+                lxs = [lora_down(x) for lora_down in self.lora_down]
 
             # normal dropout
             if self.dropout is not None and self.training:
@@ -161,7 +171,13 @@ class LoRAModule(torch.nn.Module):
             else:
                 scale = self.scale
 
-            lxs = [lora_up(lx) for lora_up, lx in zip(self.lora_up, lxs)]
+            if network_vram_swap_util.module_uses_vram_swap(self):
+                lxs = [
+                    network_vram_swap_util.forward_supported_module(lora_up, lx)
+                    for lora_up, lx in zip(self.lora_up, lxs)
+                ]
+            else:
+                lxs = [lora_up(lx) for lora_up, lx in zip(self.lora_up, lxs)]
 
             return org_forwarded + torch.cat(lxs, dim=-1) * self.multiplier * scale
 
@@ -287,12 +303,23 @@ class LoRAInfModule(LoRAModule):
     def default_forward(self, x):
         # logger.info(f"default_forward {self.lora_name} {x.size()}")
         if self.split_dims is None:
-            lx = self.lora_down(x)
-            lx = self.lora_up(lx)
+            if network_vram_swap_util.module_uses_vram_swap(self):
+                lx = network_vram_swap_util.forward_supported_module(self.lora_down, x)
+                lx = network_vram_swap_util.forward_supported_module(self.lora_up, lx)
+            else:
+                lx = self.lora_down(x)
+                lx = self.lora_up(lx)
             return self.org_forward(x) + lx * self.multiplier * self.scale
         else:
-            lxs = [lora_down(x) for lora_down in self.lora_down]
-            lxs = [lora_up(lx) for lora_up, lx in zip(self.lora_up, lxs)]
+            if network_vram_swap_util.module_uses_vram_swap(self):
+                lxs = [network_vram_swap_util.forward_supported_module(lora_down, x) for lora_down in self.lora_down]
+                lxs = [
+                    network_vram_swap_util.forward_supported_module(lora_up, lx)
+                    for lora_up, lx in zip(self.lora_up, lxs)
+                ]
+            else:
+                lxs = [lora_down(x) for lora_down in self.lora_down]
+                lxs = [lora_up(lx) for lora_up, lx in zip(self.lora_up, lxs)]
             return self.org_forward(x) + torch.cat(lxs, dim=-1) * self.multiplier * self.scale
 
     def forward(self, x):

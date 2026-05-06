@@ -14,6 +14,7 @@ from transformers import CLIPTextModel
 import numpy as np
 import torch
 import re
+from library import network_vram_swap_util
 from library.utils import setup_logging
 from library.sdxl_original_unet import SdxlUNet2DConditionModel
 
@@ -137,7 +138,10 @@ class LoRAModule(torch.nn.Module):
             if torch.rand(1) < self.module_dropout:
                 return None
 
-        lx = self.lora_down(x)
+        if network_vram_swap_util.module_uses_vram_swap(self):
+            lx = network_vram_swap_util.forward_supported_module(self.lora_down, x)
+        else:
+            lx = self.lora_down(x)
 
         # normal dropout
         if self.dropout is not None and self.training:
@@ -158,7 +162,10 @@ class LoRAModule(torch.nn.Module):
         else:
             scale = self.scale
 
-        lx = self.lora_up(lx)
+        if network_vram_swap_util.module_uses_vram_swap(self):
+            lx = network_vram_swap_util.forward_supported_module(self.lora_up, lx)
+        else:
+            lx = self.lora_up(lx)
         return lx * self.multiplier * scale
 
     def forward(self, x):

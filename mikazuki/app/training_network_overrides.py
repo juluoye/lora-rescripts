@@ -46,6 +46,18 @@ PISSA_STALE_NETWORK_ARG_PREFIXES = (
     "pissa_export_mode=",
 )
 
+ANIMA_DORA_STALE_NETWORK_ARG_PREFIXES = (
+    "dora_wd=",
+    "bypass_mode=",
+)
+
+ANIMA_ADAPTER_ROUTE_TYPES = {
+    "anima-lora",
+    "anima-ileco",
+    "anima-addift",
+    "anima-multi-addift",
+}
+
 
 def normalize_network_args(*values) -> list[str]:
     items = []
@@ -197,16 +209,33 @@ def apply_anima_ui_overrides(config: dict) -> None:
         normalized_sample_sampler = "euler"
     config["sample_sampler"] = normalized_sample_sampler
 
+    if model_train_type not in ANIMA_ADAPTER_ROUTE_TYPES:
+        return
+
     lora_type = str(config.pop("lora_type", "")).strip().lower()
     network_args = pop_network_args(config)
     raw_train_norm = config.pop("train_norm", None)
+    raw_dora_wd = config.pop("dora_wd", None)
+    raw_bypass_mode = config.pop("bypass_mode", None)
     if raw_train_norm is None:
         existing_train_norm = get_network_arg_value(network_args, "train_norm")
         train_norm_enabled = parse_boolish(existing_train_norm) if existing_train_norm is not None else None
     else:
         train_norm_enabled = parse_boolish(raw_train_norm)
 
-    if model_train_type == "anima-lora" and not lora_type:
+    existing_dora_wd = get_network_arg_value(network_args, "dora_wd")
+    if raw_dora_wd is None:
+        dora_enabled = parse_boolish(existing_dora_wd) if existing_dora_wd is not None else False
+    else:
+        dora_enabled = parse_boolish(raw_dora_wd)
+
+    existing_bypass_mode = get_network_arg_value(network_args, "bypass_mode")
+    if raw_bypass_mode is None:
+        bypass_mode = parse_boolish(existing_bypass_mode) if existing_bypass_mode is not None else False
+    else:
+        bypass_mode = parse_boolish(raw_bypass_mode)
+
+    if not lora_type:
         legacy_network_module = str(config.get("network_module", "")).strip().lower()
         legacy_adapter_type = str(get_network_arg_value(network_args, "anima_adapter_type") or "").strip().lower()
         if legacy_network_module == "networks.tlora_anima":
@@ -220,13 +249,15 @@ def apply_anima_ui_overrides(config: dict) -> None:
         else:
             lora_type = "lora"
 
-    if model_train_type == "anima-lora" and lora_type:
+    if lora_type:
         config["lora_type"] = lora_type
         config.pop("lycoris_algo", None)
 
         if lora_type == "lokr":
             config["network_module"] = "networks.lora_anima"
             config["anima_adapter_type"] = "lokr"
+            config["dora_wd"] = False
+            config["bypass_mode"] = False
             legacy_factor = get_network_arg_value(network_args, "factor")
             if legacy_factor not in (None, "") and "lokr_factor" not in config:
                 config["lokr_factor"] = legacy_factor
@@ -253,6 +284,7 @@ def apply_anima_ui_overrides(config: dict) -> None:
                 "tlora_min_rank=",
                 "tlora_rank_schedule=",
                 "tlora_orthogonal_init=",
+                *ANIMA_DORA_STALE_NETWORK_ARG_PREFIXES,
                 *PISSA_STALE_NETWORK_ARG_PREFIXES,
             )
             network_args = filter_network_args(network_args, stale_prefixes)
@@ -260,6 +292,8 @@ def apply_anima_ui_overrides(config: dict) -> None:
         elif lora_type == "tlora":
             config["network_module"] = "networks.tlora_anima"
             config["anima_adapter_type"] = "tlora"
+            config["dora_wd"] = False
+            config["bypass_mode"] = False
             stale_prefixes = (
                 "algo=",
                 "factor=",
@@ -271,6 +305,7 @@ def apply_anima_ui_overrides(config: dict) -> None:
                 "tlora_min_rank=",
                 "tlora_rank_schedule=",
                 "tlora_orthogonal_init=",
+                *ANIMA_DORA_STALE_NETWORK_ARG_PREFIXES,
                 *PISSA_STALE_NETWORK_ARG_PREFIXES,
             )
             network_args = filter_network_args(network_args, stale_prefixes)
@@ -283,6 +318,8 @@ def apply_anima_ui_overrides(config: dict) -> None:
         elif lora_type == "lora_fa":
             config["network_module"] = "networks.lora_anima"
             config["anima_adapter_type"] = "lora_fa"
+            config["dora_wd"] = False
+            config["bypass_mode"] = False
             network_args = upsert_network_arg(network_args, "anima_adapter_type", "lora_fa")
             network_args = [
                 item
@@ -293,6 +330,7 @@ def apply_anima_ui_overrides(config: dict) -> None:
                         "tlora_min_rank=",
                         "tlora_rank_schedule=",
                         "tlora_orthogonal_init=",
+                        *ANIMA_DORA_STALE_NETWORK_ARG_PREFIXES,
                     )
                 )
             ]
@@ -303,7 +341,34 @@ def apply_anima_ui_overrides(config: dict) -> None:
         elif lora_type == "vera":
             config["network_module"] = "networks.lora_anima"
             config["anima_adapter_type"] = "vera"
+            config["dora_wd"] = False
+            config["bypass_mode"] = False
             network_args = upsert_network_arg(network_args, "anima_adapter_type", "vera")
+            network_args = [
+                item
+                for item in network_args
+                if not str(item).startswith(
+                    (
+                        "lokr_factor=",
+                        "tlora_min_rank=",
+                        "tlora_rank_schedule=",
+                        "tlora_orthogonal_init=",
+                        *ANIMA_DORA_STALE_NETWORK_ARG_PREFIXES,
+                    )
+                )
+            ]
+            network_args = filter_network_args(network_args, PISSA_STALE_NETWORK_ARG_PREFIXES)
+            config["pissa_init"] = False
+            for key in ("lokr_factor", "conv_dim", "conv_alpha", "dropout"):
+                config.pop(key, None)
+        else:
+            config["network_module"] = "networks.lora_anima"
+            config["anima_adapter_type"] = "lora"
+            if dora_enabled:
+                bypass_mode = False
+            config["dora_wd"] = dora_enabled
+            config["bypass_mode"] = bypass_mode
+            network_args = upsert_network_arg(network_args, "anima_adapter_type", "lora")
             network_args = [
                 item
                 for item in network_args
@@ -316,22 +381,14 @@ def apply_anima_ui_overrides(config: dict) -> None:
                     )
                 )
             ]
-            network_args = filter_network_args(network_args, PISSA_STALE_NETWORK_ARG_PREFIXES)
-            config["pissa_init"] = False
-            for key in ("lokr_factor", "conv_dim", "conv_alpha", "dropout"):
-                config.pop(key, None)
-        else:
-            config["network_module"] = "networks.lora_anima"
-            config["anima_adapter_type"] = "lora"
-            network_args = upsert_network_arg(network_args, "anima_adapter_type", "lora")
-            network_args = [
-                item
-                for item in network_args
-                if not str(item).startswith(
-                    ("lokr_factor=", "tlora_min_rank=", "tlora_rank_schedule=", "tlora_orthogonal_init=")
-                )
-            ]
-            network_args = apply_pissa_overrides(config, network_args)
+            network_args = filter_network_args(network_args, ANIMA_DORA_STALE_NETWORK_ARG_PREFIXES)
+            if dora_enabled:
+                network_args = filter_network_args(network_args, PISSA_STALE_NETWORK_ARG_PREFIXES)
+                config["pissa_init"] = False
+            else:
+                network_args = apply_pissa_overrides(config, network_args)
+            network_args = upsert_network_arg(network_args, "dora_wd", "True" if dora_enabled else None)
+            network_args = upsert_network_arg(network_args, "bypass_mode", "True" if bypass_mode else "False")
             for key in ("lokr_factor", "conv_dim", "conv_alpha", "dropout"):
                 config.pop(key, None)
 

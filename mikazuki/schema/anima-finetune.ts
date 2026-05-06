@@ -182,7 +182,7 @@ Schema.intersect([
             fp8_base: Schema.boolean().default(false).description("对基础模型使用 FP8 精度"),
             fp8_base_unet: Schema.boolean().default(false).description("仅对 DiT / U-Net 使用 FP8 精度"),
             cache_text_encoder_outputs: Schema.boolean().default(true).description("缓存文本编码器的输出，减少显存使用。使用时需要关闭 shuffle_caption"),
-            cache_text_encoder_outputs_to_disk: Schema.boolean().default(true).description("缓存文本编码器的输出到磁盘"),
+            cache_text_encoder_outputs_to_disk: Schema.boolean().default(false).description("缓存文本编码器的输出到磁盘。Anima 的文本缓存体积可能很大；只有在确实需要反复复用同一批文本缓存时再开启更稳"),
             text_encoder_batch_size: Schema.number().min(1).description("文本编码器缓存批量大小"),
             disable_mmap_load_safetensors: Schema.boolean().default(false).description("禁用 safetensors 的 mmap 加载"),
             blocks_to_swap: Schema.number().min(1).description("在 CPU/GPU 间交换的 Transformer block 数量，用于进一步省显存。数值越大通常越慢；能正常跑就不要开"),

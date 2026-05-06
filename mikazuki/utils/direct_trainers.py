@@ -283,6 +283,85 @@ def validate_newbie_runtime_config(config: dict) -> Optional[str]:
     return None
 
 
+def validate_concept_edit_runtime_config(config: dict) -> Optional[str]:
+    training_type = str(config.get("model_train_type", "") or "").strip().lower()
+    mode = ""
+    if training_type.endswith("-ileco"):
+        mode = "ileco"
+    elif training_type.endswith("-multi-addift"):
+        mode = "multi-addift"
+    elif training_type.endswith("-addift"):
+        mode = "addift"
+    else:
+        return None
+
+    raw_train_unet_only = config.get("network_train_unet_only")
+    raw_train_text_encoder_only = config.get("network_train_text_encoder_only")
+    train_unet_only = True if raw_train_unet_only in (None, "", "null") else parse_boolish(raw_train_unet_only)
+    train_text_encoder_only = parse_boolish(raw_train_text_encoder_only)
+    if not train_unet_only or train_text_encoder_only:
+        return (
+            "当前 concept edit 首版仅支持 U-Net / DiT only 训练。"
+            "请保持 network_train_unet_only=true，且不要启用 network_train_text_encoder_only。"
+        )
+
+    original_prompt = str(config.get("original_prompt", "") or "").strip()
+    target_prompt = str(config.get("target_prompt", "") or "").strip()
+    if not original_prompt:
+        return "概念编辑训练必须填写 original_prompt。"
+    if mode in {"addift", "multi-addift"} and not target_prompt:
+        return "ADDifT / Multi-ADDifT 必须填写 target_prompt。"
+
+    if mode == "addift":
+        original_image_path = _resolve_project_path(config.get("original_image_path"))
+        target_image_path = _resolve_project_path(config.get("target_image_path"))
+        if not original_image_path.exists() or not original_image_path.is_file():
+            return f"ADDifT 原始图像不存在: {original_image_path}"
+        if not target_image_path.exists() or not target_image_path.is_file():
+            return f"ADDifT 目标图像不存在: {target_image_path}"
+        return None
+
+    if mode == "multi-addift":
+        concept_edit_data_dir = _resolve_project_path(config.get("concept_edit_data_dir"))
+        if not concept_edit_data_dir.exists() or not concept_edit_data_dir.is_dir():
+            return f"Multi-ADDifT 配对图像目录不存在: {concept_edit_data_dir}"
+
+        diff_target_name = str(config.get("diff_target_name", "") or "").strip()
+        if not diff_target_name:
+            return "Multi-ADDifT 必须填写 diff_target_name。"
+
+        matched_pair_count = 0
+        for file_path in concept_edit_data_dir.rglob("*"):
+            if not file_path.is_file():
+                continue
+            suffix_lower = file_path.suffix.lower()
+            if suffix_lower not in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
+                continue
+            if file_path.stem.endswith(diff_target_name):
+                continue
+            target_path = file_path.with_name(f"{file_path.stem}{diff_target_name}{file_path.suffix}")
+            if target_path.exists() and target_path.is_file():
+                matched_pair_count += 1
+                break
+        if matched_pair_count == 0:
+            return (
+                "Multi-ADDifT 在 concept_edit_data_dir 中没有找到任何可配对图像。"
+                "请检查 diff_target_name 后缀是否正确。"
+            )
+    return None
+
+
+def build_concept_edit_start_warnings(config: dict) -> list[str]:
+    warnings: list[str] = []
+    if parse_boolish(config.get("cache_latents")) or parse_boolish(config.get("cache_latents_to_disk")):
+        warnings.append("概念编辑首版会自动忽略通用 latent cache 选项，改用运行时内存复用。")
+    if parse_boolish(config.get("cache_text_encoder_outputs")):
+        warnings.append("概念编辑首版会自动忽略通用 text encoder 输出缓存。")
+    if config.get("max_train_epochs") not in (None, "", "null"):
+        warnings.append("概念编辑首版优先按 max_train_steps 控制训练时长，max_train_epochs 会被忽略。")
+    return warnings
+
+
 def build_newbie_start_warnings(config: dict) -> list[str]:
     warnings: list[str] = [
         "Newbie 训练会直接复用当前 GUI 所在运行时，不会切换到独立 Newbie Python 环境。"

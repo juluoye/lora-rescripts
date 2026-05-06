@@ -512,16 +512,22 @@ class TextEncoderOutputsCachingStrategy:
     def get_outputs_npz_path(self, image_abs_path: str) -> str:
         raise NotImplementedError
 
-    def load_outputs_npz(self, npz_path: str) -> List[np.ndarray]:
+    def load_outputs_npz(self, npz_path_or_ref) -> List[np.ndarray]:
         raise NotImplementedError
 
     def is_disk_cached_outputs_expected(self, npz_path: str) -> bool:
         raise NotImplementedError
 
+    def is_disk_cached_outputs_expected_for_info(self, npz_path: str, info=None) -> bool:
+        return self.is_disk_cached_outputs_expected(npz_path)
+
     def cache_batch_outputs(
         self, tokenize_strategy: TokenizeStrategy, models: List[Any], text_encoding_strategy: TextEncodingStrategy, batch: List
     ):
         raise NotImplementedError
+
+    def finalize_caching(self) -> None:
+        return
 
 
 class LatentsCachingStrategy:
@@ -586,6 +592,8 @@ class LatentsCachingStrategy:
         self._pending_safetensors_entries: List[PendingSafetensorsLatentsEntry] = []
         self._pending_safetensors_context: Optional[dict[str, Any]] = None
         self._max_pending_safetensors_entries = max(64, max(1, self.max_batch_size) * 16)
+        self._safetensors_written_shards_by_cache_root: dict[str, set[str]] = {}
+        self._safetensors_sequence_by_context: dict[tuple[str, Tuple[int, int], bool, bool], int] = {}
 
     @classmethod
     def set_strategy(cls, strategy):
@@ -762,6 +770,45 @@ class LatentsCachingStrategy:
             "source_size": int(source_size),
         }
 
+    def _register_written_safetensors_shard(self, cache_root: str, shard_path: str) -> None:
+        normalized_cache_root = os.path.abspath(cache_root)
+        written_paths = self._safetensors_written_shards_by_cache_root.setdefault(normalized_cache_root, set())
+        written_paths.add(os.path.abspath(shard_path))
+
+    def _prune_stale_safetensors_shards(self, cache_root: str) -> None:
+        normalized_cache_root = os.path.abspath(cache_root)
+        cache_dir = self._get_safetensors_cache_dir(normalized_cache_root)
+        if not os.path.isdir(cache_dir):
+            return
+
+        catalog = self._load_safetensors_catalog(normalized_cache_root)
+        live_shards = {
+            os.path.abspath(str(entry.get("path") or ""))
+            for entry in catalog.values()
+            if str(entry.get("path") or "").strip()
+        }
+        written_shards = self._safetensors_written_shards_by_cache_root.get(normalized_cache_root)
+        if written_shards:
+            live_shards.update(written_shards)
+
+        for entry in os.scandir(cache_dir):
+            if not entry.is_file() or not entry.name.lower().endswith(".safetensors"):
+                continue
+            shard_path = os.path.abspath(entry.path)
+            if shard_path in live_shards:
+                continue
+
+            sidecar_path = build_safetensors_sidecar_path(shard_path)
+            try:
+                os.remove(shard_path)
+            except OSError as ex:
+                logger.warning(f"failed to remove stale latent-cache shard {shard_path}: {ex}")
+            try:
+                if os.path.exists(sidecar_path):
+                    os.remove(sidecar_path)
+            except OSError as ex:
+                logger.warning(f"failed to remove stale latent-cache sidecar {sidecar_path}: {ex}")
+
     @property
     def cache_suffix(self):
         raise NotImplementedError
@@ -894,6 +941,8 @@ class LatentsCachingStrategy:
         if self._npz_write_executor is not None:
             self._npz_write_executor.shutdown(wait=True)
             self._npz_write_executor = None
+        for cache_root in list(self._safetensors_catalog_cache.keys()):
+            self._prune_stale_safetensors_shards(cache_root)
 
     def flush_pending_disk_cache(self) -> None:
         self._flush_pending_safetensors_entries()
@@ -942,10 +991,21 @@ class LatentsCachingStrategy:
         cache_dir = self._get_safetensors_cache_dir(cache_root)
         os.makedirs(cache_dir, exist_ok=True)
 
+        context_key = (
+            os.path.abspath(cache_root),
+            tuple(context["bucket_reso"]),
+            bool(context["flip_aug"]),
+            bool(context["alpha_mask"]),
+        )
+        sequence_no = self._safetensors_sequence_by_context.get(context_key, 0) + 1
+        self._safetensors_sequence_by_context[context_key] = sequence_no
+
         shard_stem = build_safetensors_shard_stem(
             tuple(context["bucket_reso"]),
             flip_aug=bool(context["flip_aug"]),
             alpha_mask=bool(context["alpha_mask"]),
+            sequence_no=sequence_no,
+            image_count=len(entries),
         )
         shard_path = os.path.join(cache_dir, shard_stem + ".safetensors")
         sidecar_path = build_safetensors_sidecar_path(shard_path)
@@ -1019,6 +1079,7 @@ class LatentsCachingStrategy:
                 "bucket_reso": json.dumps(list(tuple(context["bucket_reso"]))),
                 "flip_aug": "1" if context["flip_aug"] else "0",
                 "alpha_mask": "1" if context["alpha_mask"] else "0",
+                "sequence_no": str(sequence_no),
                 "entry_count": str(len(entries)),
             },
         )
@@ -1032,9 +1093,12 @@ class LatentsCachingStrategy:
                 "bucket_reso": list(tuple(context["bucket_reso"])),
                 "flip_aug": bool(context["flip_aug"]),
                 "alpha_mask": bool(context["alpha_mask"]),
+                "sequence_no": sequence_no,
+                "image_count": len(entries),
                 "entries": sidecar_entries,
             },
         )
+        self._register_written_safetensors_shard(cache_root, shard_path)
 
     @staticmethod
     def _latents_to_numpy_array(latents: Union[torch.Tensor, np.ndarray]) -> np.ndarray:
@@ -1378,15 +1442,19 @@ class LatentsCachingStrategy:
             raise ValueError(f"safetensors latent cache entry key is missing for {cache_ref.path}")
 
         with safe_open_torch_cpu(cache_ref.path) as handle:
-            latents = handle.get_tensor(f"latents::{entry_key}")
+            latents = handle.get_tensor(f"latents::{entry_key}").clone()
             original_size = handle.get_tensor(f"original_size::{entry_key}").tolist()
             crop_ltrb = handle.get_tensor(f"crop_ltrb::{entry_key}").tolist()
             flipped_latents = (
-                handle.get_tensor(f"latents_flipped::{entry_key}")
+                handle.get_tensor(f"latents_flipped::{entry_key}").clone()
                 if f"latents_flipped::{entry_key}" in handle.keys()
                 else None
             )
-            alpha_mask = handle.get_tensor(f"alpha_mask::{entry_key}") if f"alpha_mask::{entry_key}" in handle.keys() else None
+            alpha_mask = (
+                handle.get_tensor(f"alpha_mask::{entry_key}").clone()
+                if f"alpha_mask::{entry_key}" in handle.keys()
+                else None
+            )
 
         return latents, original_size, crop_ltrb, flipped_latents, alpha_mask
 

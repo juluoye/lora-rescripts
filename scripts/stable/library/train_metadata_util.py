@@ -13,6 +13,89 @@ class PreparedMetadataBundle(NamedTuple):
     minimum_metadata: dict[str, str]
 
 
+def _metadata_boolish(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def infer_training_algo(args, net_kwargs: Mapping[str, Any] | None = None) -> str | None:
+    net_kwargs = net_kwargs or {}
+    network_module = str(getattr(args, "network_module", "") or "").strip().lower()
+
+    if "algo" in net_kwargs and net_kwargs["algo"] not in (None, ""):
+        return str(net_kwargs["algo"]).strip()
+
+    adapter_variant = str(net_kwargs.get("adapter_type", "") or "").strip().lower()
+    if adapter_variant:
+        return adapter_variant
+
+    anima_adapter_type = str(net_kwargs.get("anima_adapter_type", "") or "").strip().lower()
+    if anima_adapter_type:
+        return anima_adapter_type
+
+    if network_module == "lycoris.kohya":
+        return "lycoris"
+    if network_module.startswith("networks.lora_fa"):
+        return "lora_fa"
+    if network_module.startswith("networks.vera"):
+        return "vera"
+    if network_module.startswith("networks.tlora"):
+        return "tlora"
+    if network_module.startswith("networks.dylora"):
+        return "dylora"
+    if network_module.startswith("networks.oft"):
+        return "oft"
+    if network_module.startswith("networks.lokr"):
+        return "lokr"
+    if network_module.startswith("networks.lora"):
+        return "lora"
+    return None
+
+
+def build_compatibility_metadata(args, net_kwargs: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    net_kwargs = dict(net_kwargs or {})
+    network_module = str(getattr(args, "network_module", "") or "").strip()
+    normalized_network_module = network_module.lower()
+    training_algo = infer_training_algo(args, net_kwargs)
+
+    metadata: dict[str, Any] = {
+        "ss_training_network_module": network_module,
+    }
+
+    if net_kwargs:
+        metadata["ss_training_network_args"] = json.dumps(net_kwargs, ensure_ascii=False)
+
+    if training_algo:
+        metadata["ss_training_algo"] = training_algo
+
+    if normalized_network_module == "lycoris.kohya":
+        metadata["ss_training_is_lycoris"] = True
+        lycoris_algo = str(net_kwargs.get("algo", "") or "").strip()
+        if lycoris_algo:
+            metadata["ss_lycoris_algo"] = lycoris_algo
+            metadata["ss_training_lycoris_algo"] = lycoris_algo
+
+    if "dora_wd" in net_kwargs:
+        metadata["ss_dora_enabled"] = _metadata_boolish(net_kwargs.get("dora_wd"))
+
+    if "train_norm" in net_kwargs:
+        metadata["ss_train_norm_enabled"] = _metadata_boolish(net_kwargs.get("train_norm"))
+
+    if training_algo in {"loha", "lokr", "glora", "diag-oft", "boft", "dylora", "ia3"}:
+        metadata["ss_network_type"] = training_algo
+    elif normalized_network_module == "lycoris.kohya":
+        metadata["ss_network_type"] = str(net_kwargs.get("algo", "") or "lycoris")
+    elif training_algo:
+        metadata["ss_network_type"] = training_algo
+
+    return metadata
+
+
 def build_base_metadata(
     args,
     *,
@@ -83,6 +166,10 @@ def build_base_metadata(
         "ss_huber_schedule": args.huber_schedule,
         "ss_huber_scale": args.huber_scale,
         "ss_huber_c": args.huber_c,
+        "ss_wavelet_loss_enabled": bool(getattr(args, "wavelet_loss_enabled", False)),
+        "ss_wavelet_loss_weight": getattr(args, "wavelet_loss_weight", 0.0),
+        "ss_wavelet_loss_levels": getattr(args, "wavelet_loss_levels", 1),
+        "ss_wavelet_loss_approx_weight": getattr(args, "wavelet_loss_approx_weight", 0.0),
         "ss_fp8_base": bool(args.fp8_base),
         "ss_fp8_base_unet": bool(args.fp8_base_unet),
         "ss_validation_seed": args.validation_seed,
@@ -241,6 +328,7 @@ def build_legacy_dataset_metadata(
 def add_runtime_metadata(metadata, args, net_kwargs, extra_metadata: Mapping[str, Any] | None = None):
     if args.network_args:
         metadata["ss_network_args"] = json.dumps(net_kwargs)
+    metadata.update(build_compatibility_metadata(args, net_kwargs))
     if extra_metadata is not None:
         metadata.update(extra_metadata)
 

@@ -25,6 +25,8 @@ def mock_args():
     args.ae = "test_ae_path"
     args.cache_text_encoder_outputs = True
     args.cache_text_encoder_outputs_to_disk = False
+    args.cache_latents_to_disk = True
+    args.vae_batch_size = 1
     args.network_train_unet_only = False
     return args
 

@@ -286,7 +286,7 @@ def simulate_attention_backend_fallback_warning(config: dict, gpu_ids) -> Option
         return None
 
     xformers_info = get_xformers_status(gpu_ids)
-    if xformers_info.get("selected_supported", xformers_info.get("supported", False)):
+    if xformers_info.get("selected_verified", xformers_info.get("verified", False)):
         return None
 
     if "sdpa" in config:

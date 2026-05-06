@@ -40,11 +40,11 @@ For more technical details, please refer to the original pull request: [PR #1903
 
 ### Enabling Validation
 
-There are two primary ways to enable validation:
+There are three primary ways to enable validation:
 
 1.  **Using a Dataset Config File (Recommended)**: You can specify a validation set directly within your dataset `.toml` file. This method offers the most control, allowing you to designate entire directories as validation sets or split a percentage of a specific subset for validation.
 
-    To use a whole directory for validation, add a subset and set `validation_split = 1.0`.
+    To use a whole directory for validation, add a subset and set `is_val = true`.
 
     **Example: Separate Validation Set**
     ```toml
@@ -57,10 +57,10 @@ There are two primary ways to enable validation:
       # Validation subset
       [[datasets.subsets]]
         image_dir = "path/to/validation_images"
-        validation_split = 1.0  # Use this entire subset for validation
+        is_val = true  # Use this entire subset for validation
     ```
 
-    To use a fraction of a subset for validation, set `validation_split` to a value between 0.0 and 1.0.
+2.  **Using `validation_split` in a Subset**: To use a fraction of a subset for validation, set `validation_split` to a value between 0.0 and 1.0. Validation subsets created this way automatically disable random subset behaviors such as caption shuffling, random crop, flip, and dropout-style caption randomization.
 
     **Example: Splitting a Subset**
     ```toml
@@ -71,7 +71,7 @@ There are two primary ways to enable validation:
         validation_split = 0.1  # Use 10% of this subset for validation
     ```
 
-2.  **Using a Command-Line Argument**: For a simpler setup, you can use the `--validation_split` argument. This will take a random percentage of your *entire* training dataset for validation. This method is ignored if `validation_split` is defined in your dataset config file.
+3.  **Using a Command-Line Argument**: For a simpler setup, you can use the `--validation_split` argument. This will take a random percentage of your *entire* training dataset for validation. This method is ignored if `validation_split` is defined in your dataset config file.
 
     **Example Command:**
     ```bash
@@ -84,11 +84,11 @@ There are two primary ways to enable validation:
 
 ### 検証を有効にする
 
-検証を有効にする主な方法は2つあります。
+検証を有効にする主な方法は3つあります。
 
 1.  **データセット設定ファイルを使用する（推奨）**: データセットの`.toml`ファイル内で直接検証セットを指定できます。この方法は最も制御性が高く、ディレクトリ全体を検証セットとして指定したり、特定のサブセットのパーセンテージを検証用に分割したりすることができます。
 
-    ディレクトリ全体を検証に使用するには、サブセットを追加して`validation_split = 1.0`と設定します。
+    ディレクトリ全体を検証に使用するには、サブセットを追加して`is_val = true`と設定します。
 
     **例：個別の検証セット**
     ```toml
@@ -101,10 +101,10 @@ There are two primary ways to enable validation:
       # Validation subset
       [[datasets.subsets]]
         image_dir = "path/to/validation_images"
-        validation_split = 1.0  # このサブセット全体を検証に使用します
+        is_val = true  # このサブセット全体を検証に使用します
     ```
 
-    サブセットの一部を検証に使用するには、`validation_split`を0.0から1.0の間の値に設定します。
+2.  **サブセットで`validation_split`を使う**: サブセットの一部を検証に使用するには、`validation_split`を0.0から1.0の間の値に設定します。この方法で作られた検証サブセットでは、キャプションシャッフル、ランダムクロップ、反転、ドロップアウト系のランダム化は自動的に無効化されます。
 
     **例：サブセットの分割**
     ```toml
@@ -115,7 +115,7 @@ There are two primary ways to enable validation:
         validation_split = 0.1  # このサブセットの10%を検証に使用します
     ```
 
-2.  **コマンドライン引数を使用する**: より簡単な設定のために、`--validation_split`引数を使用できます。これにより、*全*学習データセットのランダムなパーセンテージが検証に使用されます。この方法は、データセット設定ファイルで`validation_split`が定義されている場合は無視されます。
+3.  **コマンドライン引数を使用する**: より簡単な設定のために、`--validation_split`引数を使用できます。これにより、*全*学習データセットのランダムなパーセンテージが検証に使用されます。この方法は、データセット設定ファイルで`validation_split`が定義されている場合は無視されます。
 
     **コマンド例:**
     ```bash
@@ -130,6 +130,7 @@ There are two primary ways to enable validation:
 | Argument                    | TOML Option         | Description                                                                                                                            |
 | --------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `--validation_split`        | `validation_split`  | The fraction of the dataset to use for validation. The command-line argument applies globally, while the TOML option applies per-subset. The TOML setting takes precedence. |
+|                            | `is_val`            | Marks a subset as validation-only. The full subset is routed to the validation dataset and validation-only deterministic subset behavior is applied automatically. |
 | `--validate_every_n_steps`  |                     | Run validation every N steps.                                                                                                          |
 | `--validate_every_n_epochs` |                     | Run validation every N epochs. If not specified, validation runs once per epoch by default.                                            |
 | `--max_validation_steps`    |                     | The maximum number of batches to use for a single validation run. If not set, the entire validation dataset is used.                     |
@@ -143,6 +144,7 @@ There are two primary ways to enable validation:
 | 引数                        | TOMLオプション      | 説明                                                                                                                                   |
 | --------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `--validation_split`        | `validation_split`  | 検証に使用するデータセットの割合。コマンドライン引数は全体に適用され、TOMLオプションはサブセットごとに適用されます。TOML設定が優先されます。 |
+|                            | `is_val`            | サブセットを検証専用として扱います。サブセット全体が検証データセットに回され、検証用の決定論的なサブセット挙動が自動的に適用されます。 |
 | `--validate_every_n_steps`  |                     | Nステップごとに検証を実行します。                                                                                                      |
 | `--validate_every_n_epochs` |                     | Nエポックごとに検証を実行します。指定しない場合、デフォルトでエポックごとに1回検証が実行されます。                                       |
 | `--max_validation_steps`    |                     | 1回の検証実行に使用するバッチの最大数。設定しない場合、検証データセット全体が使用されます。                                            |
@@ -186,7 +188,7 @@ batch_size = 2
   [[datasets.subsets]]
   image_dir = 'path/to/your_validation_images'
   caption_extension = '.txt'
-  validation_split = 1.0 # Use this entire subset for validation
+  is_val = true # Use this entire subset for validation
 ```
 
 **2. Run the training command:**
@@ -235,7 +237,7 @@ batch_size = 2
   [[datasets.subsets]]
   image_dir = 'path/to/your_validation_images'
   caption_extension = '.txt'
-  validation_split = 1.0 # このサブセット全体を検証に使用します
+  is_val = true # このサブセット全体を検証に使用します
 ```
 
 **2. 学習コマンドを実行します:**

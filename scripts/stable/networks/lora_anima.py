@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Type, Union
 import torch
 import torch.nn.functional as F
+from library import network_vram_swap_util
 from library.utils import setup_logging
 from networks.lora_flux import LoRAModule, LoRAInfModule
 from torch.nn.modules.module import _IncompatibleKeys
@@ -305,6 +306,204 @@ class LoRAFAModule(LoRAModule):
         return self
 
 
+class DoRALoRAModule(LoRAModule):
+    def __init__(
+        self,
+        lora_name,
+        org_module: torch.nn.Module,
+        multiplier=1.0,
+        lora_dim=4,
+        alpha=1,
+        dropout=None,
+        rank_dropout=None,
+        module_dropout=None,
+        bypass_mode: bool = False,
+        **kwargs,
+    ):
+        super().__init__(
+            lora_name,
+            org_module,
+            multiplier=multiplier,
+            lora_dim=lora_dim,
+            alpha=alpha,
+            dropout=dropout,
+            rank_dropout=rank_dropout,
+            module_dropout=module_dropout,
+            **kwargs,
+        )
+        self.org_module_ref = [org_module]
+        self.bypass_mode = _parse_bool_arg(bypass_mode, default=False)
+        self.enabled = True
+        magnitude = self._compute_weight_norm(org_module.weight.detach().to(dtype=torch.float32))
+        self.dora_magnitude = torch.nn.Parameter(magnitude.to(dtype=torch.float32))
+
+    @staticmethod
+    def _compute_weight_norm(weight: torch.Tensor) -> torch.Tensor:
+        flat = weight.reshape(weight.shape[0], -1)
+        return torch.linalg.norm(flat, dim=1).clamp_min(1e-6)
+
+    def apply_to(self):
+        self.org_forward = self.org_module.forward
+        self.org_module.forward = self.forward
+        del self.org_module
+
+    def _get_delta_weight(self, multiplier=None, rank_dropout_mask: Optional[torch.Tensor] = None):
+        if multiplier is None:
+            multiplier = self.multiplier
+
+        if isinstance(self.lora_down, torch.nn.ModuleList):
+            raise NotImplementedError("DoRA does not support split_dims adapters in Anima.")
+
+        if network_vram_swap_util.module_uses_vram_swap(self):
+            work_device = self.org_module_ref[0].weight.device
+            work_dtype = self.org_module_ref[0].weight.dtype
+            down_weight = self.lora_down.weight.to(device=work_device, dtype=work_dtype)
+            up_weight = self.lora_up.weight.to(device=work_device, dtype=work_dtype)
+        else:
+            down_weight = self.lora_down.weight
+            up_weight = self.lora_up.weight
+            work_dtype = up_weight.dtype
+            work_device = up_weight.device
+
+        if rank_dropout_mask is not None:
+            mask = rank_dropout_mask.to(device=work_device, dtype=work_dtype)
+            if down_weight.ndim == 2:
+                down_weight = down_weight * mask.unsqueeze(1)
+                up_weight = up_weight * mask.unsqueeze(0)
+            else:
+                down_weight = down_weight * mask.view(-1, 1, 1, 1)
+                up_weight = up_weight * mask.view(1, -1, 1, 1)
+
+        if down_weight.ndim == 2:
+            delta = up_weight @ down_weight
+        elif tuple(down_weight.shape[2:]) == (1, 1):
+            delta = (up_weight.squeeze(3).squeeze(2) @ down_weight.squeeze(3).squeeze(2)).unsqueeze(2).unsqueeze(3)
+        else:
+            delta = torch.nn.functional.conv2d(down_weight.permute(1, 0, 2, 3), up_weight).permute(1, 0, 2, 3)
+
+        return delta * (float(multiplier) * float(self.scale))
+
+    def _get_bias_view(self, bias: Optional[torch.Tensor], out: torch.Tensor):
+        if bias is None:
+            return None
+        if out.ndim < 2:
+            raise ValueError(f"Unsupported DoRA output ndim: {out.ndim}")
+
+        org_module = self.org_module_ref[0]
+        if org_module.__class__.__name__ == "Conv2d":
+            return bias.view(1, -1, *([1] * (out.ndim - 2)))
+
+        return bias.view(*([1] * (out.ndim - 1)), -1)
+
+    def _get_scale_view(self, out: torch.Tensor, dtype: torch.dtype, device: torch.device):
+        scale = (self.dora_magnitude.to(device=device, dtype=dtype) / self._merged_weight_norm(device, dtype)).clamp_min(1e-6)
+        if out.ndim < 2:
+            raise ValueError(f"Unsupported DoRA output ndim: {out.ndim}")
+
+        org_module = self.org_module_ref[0]
+        if org_module.__class__.__name__ == "Conv2d":
+            return scale.view(1, -1, *([1] * (out.ndim - 2)))
+
+        return scale.view(*([1] * (out.ndim - 1)), -1)
+
+    def _merged_weight_norm(self, device: torch.device, dtype: torch.dtype):
+        org_weight = self.org_module_ref[0].weight.to(device=device, dtype=dtype)
+        delta = self._get_delta_weight().to(device=device, dtype=dtype)
+        merged = org_weight + delta
+        return self._compute_weight_norm(merged).detach()
+
+    def _compute_merged_weight(self, device: torch.device, dtype: torch.dtype, multiplier=None):
+        org_weight = self.org_module_ref[0].weight.to(device=device, dtype=dtype)
+        delta = self._get_delta_weight(multiplier=multiplier).to(device=device, dtype=dtype)
+        merged = org_weight + delta
+        row_scale = (self.dora_magnitude.to(device=device, dtype=dtype) / self._compute_weight_norm(merged).detach()).clamp_min(1e-6)
+        view_shape = [merged.shape[0]] + [1] * (merged.ndim - 1)
+        return merged * row_scale.view(*view_shape)
+
+    def get_weight(self, multiplier=None):
+        org_weight = self.org_module_ref[0].weight.to(torch.float32)
+        merged_weight = self._compute_merged_weight(org_weight.device, torch.float32, multiplier=multiplier)
+        return merged_weight - org_weight
+
+    def merge_to(self, sd, dtype, device):
+        org_module = self.org_module_ref[0]
+        org_sd = org_module.state_dict()
+        org_weight = org_sd["weight"]
+        org_dtype = org_weight.dtype
+        org_device = org_weight.device
+
+        if dtype is None:
+            dtype = org_dtype
+        if device is None:
+            device = org_device
+
+        down_weight = sd["lora_down.weight"].to(torch.float32).to(device)
+        up_weight = sd["lora_up.weight"].to(torch.float32).to(device)
+        magnitude = sd["dora_magnitude"].to(torch.float32).to(device)
+
+        if down_weight.ndim == 2:
+            delta = up_weight @ down_weight
+        elif tuple(down_weight.shape[2:]) == (1, 1):
+            delta = (up_weight.squeeze(3).squeeze(2) @ down_weight.squeeze(3).squeeze(2)).unsqueeze(2).unsqueeze(3)
+        else:
+            delta = torch.nn.functional.conv2d(down_weight.permute(1, 0, 2, 3), up_weight).permute(1, 0, 2, 3)
+
+        merged = org_weight.to(torch.float32).to(device) + delta * self.scale * self.multiplier
+        row_scale = (magnitude / self._compute_weight_norm(merged).detach()).clamp_min(1e-6)
+        view_shape = [merged.shape[0]] + [1] * (merged.ndim - 1)
+        org_sd["weight"] = (merged * row_scale.view(*view_shape)).to(dtype)
+        org_module.load_state_dict(org_sd)
+
+    def _forward_delta(self, x: torch.Tensor, rank_dropout_mask: Optional[torch.Tensor] = None):
+        if network_vram_swap_util.module_uses_vram_swap(self):
+            lx = network_vram_swap_util.forward_supported_module(self.lora_down, x)
+        else:
+            lx = self.lora_down(x)
+        if self.dropout is not None and self.training:
+            lx = F.dropout(lx, p=self.dropout)
+        if rank_dropout_mask is not None:
+            mask = rank_dropout_mask.to(device=lx.device, dtype=lx.dtype)
+            if self.lora_up.__class__.__name__ == "Conv2d":
+                mask = mask.view(1, -1, *([1] * (lx.ndim - 2)))
+            else:
+                mask = mask.view(*([1] * (lx.ndim - 1)), -1)
+            lx = lx * mask
+            scale = self.scale * (1.0 / (1.0 - self.rank_dropout))
+        else:
+            scale = self.scale
+        if network_vram_swap_util.module_uses_vram_swap(self):
+            return network_vram_swap_util.forward_supported_module(self.lora_up, lx) * self.multiplier * scale
+        return self.lora_up(lx) * self.multiplier * scale
+
+    def forward(self, x):
+        if not self.enabled:
+            return self.org_forward(x)
+
+        org_module = self.org_module_ref[0]
+        org_forwarded = self.org_forward(x)
+
+        if self.module_dropout is not None and self.training:
+            if torch.rand(1, device=x.device) < self.module_dropout:
+                return org_forwarded
+
+        rank_dropout_mask = None
+        if self.rank_dropout is not None and self.training:
+            rank_dropout_mask = (torch.rand(self.lora_dim, device=x.device) > self.rank_dropout).to(dtype=torch.float32)
+
+        delta_out = self._forward_delta(x, rank_dropout_mask=rank_dropout_mask)
+        bias_view = self._get_bias_view(org_module.bias, org_forwarded)
+        if bias_view is None:
+            base_without_bias = org_forwarded
+        else:
+            base_without_bias = org_forwarded - bias_view.to(device=org_forwarded.device, dtype=org_forwarded.dtype)
+
+        row_scale = self._get_scale_view(org_forwarded, dtype=org_forwarded.dtype, device=org_forwarded.device)
+        adapted = (base_without_bias + delta_out.to(dtype=org_forwarded.dtype)) * row_scale
+        if bias_view is not None:
+            adapted = adapted + bias_view.to(device=org_forwarded.device, dtype=org_forwarded.dtype)
+        return adapted
+
+
 class VeraModule(torch.nn.Module):
     def __init__(
         self,
@@ -581,8 +780,10 @@ def create_network(
     use_lokr = adapter_type == "lokr"
     use_lora_fa = adapter_type == "lora_fa"
     use_vera = adapter_type == "vera"
+    use_dora = adapter_type == "lora" and _parse_bool_arg(kwargs.get("dora_wd", None), default=False)
     lokr_factor = int(kwargs.get("lokr_factor", kwargs.get("factor", 8)) or 8)
     train_norm = _parse_bool_arg(kwargs.get("train_norm", None), default=False)
+    bypass_mode = _parse_bool_arg(kwargs.get("bypass_mode", None), default=False)
     pissa_init = _parse_bool_arg(kwargs.get("pissa_init", None), default=False)
     pissa_method = _normalize_pissa_method(kwargs.get("pissa_method", "rsvd"))
     pissa_niter = int(kwargs.get("pissa_niter", 2) or 2)
@@ -667,8 +868,16 @@ def create_network(
         logger.warning("PiSSA is not supported with Anima LoRA-FA / VeRA. Disabling pissa_init automatically.")
         pissa_init = False
 
-    module_class = LoKrModule if use_lokr else (VeraModule if use_vera else (LoRAFAModule if use_lora_fa else LoRAModule))
-    if not use_lokr and not use_lora_fa and not use_vera and pissa_init:
+    if use_dora and bypass_mode:
+        logger.warning("Anima DoRA does not support bypass_mode. Forcing bypass_mode=False.")
+        bypass_mode = False
+
+    if use_dora and pissa_init:
+        logger.warning("PiSSA is not supported together with Anima DoRA. Disabling pissa_init automatically.")
+        pissa_init = False
+
+    module_class = LoKrModule if use_lokr else (VeraModule if use_vera else (LoRAFAModule if use_lora_fa else (DoRALoRAModule if use_dora else LoRAModule)))
+    if not use_lokr and not use_lora_fa and not use_vera and not use_dora and pissa_init:
         module_class = partial(
             PiSSAModule,
             pissa_method=pissa_method,
@@ -699,6 +908,8 @@ def create_network(
         adapter_type=adapter_type,
         vera_projection_prng_key=vera_projection_prng_key,
         vera_d_initial=vera_d_initial,
+        use_dora=use_dora,
+        bypass_mode=bypass_mode,
     )
     network.pissa_export_mode = pissa_export_mode
 
@@ -728,6 +939,7 @@ def create_network_from_weights(multiplier, file, ae, text_encoders, unet, weigh
     modules_factor = {}
     train_llm_adapter = False
     is_lokr = False
+    is_dora = False
     train_norm = False
     requested_adapter_type = str(
         kwargs.get("anima_adapter_type", kwargs.get("adapter_type", ""))
@@ -765,6 +977,8 @@ def create_network_from_weights(multiplier, file, ae, text_encoders, unet, weigh
         elif "lora_down" in key:
             dim = value.size()[0]
             modules_dim[lora_name] = dim
+        elif "dora_magnitude" in key:
+            is_dora = True
 
         if "llm_adapter" in lora_name:
             train_llm_adapter = True
@@ -772,7 +986,9 @@ def create_network_from_weights(multiplier, file, ae, text_encoders, unet, weigh
     if is_lokr:
         module_class = LoKrInfModule if for_inference else LoKrModule
     else:
-        if for_inference:
+        if is_dora:
+            module_class = DoRALoRAModule
+        elif for_inference:
             module_class = LoRAInfModule
         elif requested_adapter_type == "lora_fa":
             module_class = LoRAFAModule
@@ -793,7 +1009,8 @@ def create_network_from_weights(multiplier, file, ae, text_encoders, unet, weigh
         lokr_factor=next(iter(modules_factor.values())) if modules_factor else 8,
         modules_factor=modules_factor if is_lokr else None,
         train_norm=train_norm,
-        adapter_type=("lokr" if is_lokr else requested_adapter_type),
+        adapter_type=("lokr" if is_lokr else ("lora" if is_dora else requested_adapter_type)),
+        use_dora=is_dora,
     )
     return network, weights_sd
 
@@ -835,6 +1052,8 @@ class LoRANetwork(torch.nn.Module):
         adapter_type: Optional[str] = None,
         vera_projection_prng_key: int = 0,
         vera_d_initial: float = 0.1,
+        use_dora: bool = False,
+        bypass_mode: bool = False,
     ) -> None:
         super().__init__()
         self.multiplier = multiplier
@@ -853,6 +1072,8 @@ class LoRANetwork(torch.nn.Module):
         self.vera_d_initial = float(vera_d_initial)
         normalized_adapter_type = str(adapter_type or ("lokr" if self.use_lokr else "lora")).strip().lower()
         self.adapter_type = "lokr" if self.use_lokr else (normalized_adapter_type or "lora")
+        self.use_dora = bool(use_dora) and self.adapter_type == "lora"
+        self.bypass_mode = bool(bypass_mode) if not self.use_dora else False
         self.train_norm = bool(train_norm)
 
         self.loraplus_lr_ratio = None
@@ -1522,6 +1743,35 @@ class LoRANetwork(torch.nn.Module):
 
         return state_dict, metadata
 
+    def _prepare_dora_export_metadata(self, metadata):
+        if not self.use_dora:
+            return metadata
+
+        metadata = {} if metadata is None else dict(metadata)
+        metadata["ss_anima_adapter_type"] = "lora"
+        metadata["ss_adapter_variant"] = "dora"
+        metadata["ss_dora_compatible_export"] = "true"
+
+        raw_network_args = metadata.get("ss_network_args")
+        if raw_network_args:
+            try:
+                parsed = json.loads(raw_network_args)
+                if isinstance(parsed, dict):
+                    parsed["dora_wd"] = True
+                    parsed["bypass_mode"] = False
+                elif isinstance(parsed, list):
+                    parsed = [
+                        item
+                        for item in parsed
+                        if not str(item).startswith(("dora_wd=", "bypass_mode="))
+                    ]
+                    parsed.append("dora_wd=True")
+                    parsed.append("bypass_mode=False")
+                metadata["ss_network_args"] = json.dumps(parsed, ensure_ascii=False)
+            except Exception:
+                pass
+        return metadata
+
     def save_weights(self, file, dtype, metadata):
         if metadata is not None and len(metadata) == 0:
             metadata = None
@@ -1529,6 +1779,7 @@ class LoRANetwork(torch.nn.Module):
         state_dict = self.state_dict()
         state_dict, metadata = self._prepare_vera_export_for_save(state_dict, metadata)
         metadata = self._prepare_adapter_export_metadata(metadata)
+        metadata = self._prepare_dora_export_metadata(metadata)
         state_dict, metadata = self._prepare_pissa_export_for_save(state_dict, metadata)
 
         if dtype is not None:
@@ -1606,7 +1857,7 @@ class LoRANetwork(torch.nn.Module):
         return state_dict, metadata
 
     def backup_weights(self):
-        loras: List[LoRAInfModule] = self.text_encoder_loras + self.unet_loras
+        loras = self.text_encoder_loras + self.unet_loras
         for lora in loras:
             org_module = lora.org_module_ref[0]
             if not hasattr(org_module, "_lora_org_weight"):
@@ -1615,7 +1866,7 @@ class LoRANetwork(torch.nn.Module):
                 org_module._lora_restored = True
 
     def restore_weights(self):
-        loras: List[LoRAInfModule] = self.text_encoder_loras + self.unet_loras
+        loras = self.text_encoder_loras + self.unet_loras
         for lora in loras:
             org_module = lora.org_module_ref[0]
             if not org_module._lora_restored:
@@ -1625,7 +1876,7 @@ class LoRANetwork(torch.nn.Module):
                 org_module._lora_restored = True
 
     def pre_calculation(self):
-        loras: List[LoRAInfModule] = self.text_encoder_loras + self.unet_loras
+        loras = self.text_encoder_loras + self.unet_loras
         for lora in loras:
             org_module = lora.org_module_ref[0]
             sd = org_module.state_dict()
@@ -1667,6 +1918,9 @@ class LoRANetwork(torch.nn.Module):
             if not norms:
                 return 0, 0, 0
             return keys_scaled, sum(norms) / len(norms), max(norms)
+
+        if self.use_dora:
+            return 0, 0, 0
 
         if self.use_lokr:
             return 0, 0, 0

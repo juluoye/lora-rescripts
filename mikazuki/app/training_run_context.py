@@ -83,6 +83,24 @@ def _apply_model_specific_launch_defaults(config: dict, model_train_type: str) -
         config.setdefault("max_data_loader_n_workers", 0)
         config.setdefault("persistent_data_loader_workers", False)
 
+    if model_train_type in {
+        "sd-ileco",
+        "sd-addift",
+        "sd-multi-addift",
+        "sdxl-ileco",
+        "sdxl-addift",
+        "sdxl-multi-addift",
+        "anima-ileco",
+        "anima-addift",
+        "anima-multi-addift",
+    }:
+        if model_train_type.startswith("anima-"):
+            config.setdefault("dataset_class", "library.anima_concept_edit_util.AnimaConceptEditDataset")
+        else:
+            config.setdefault("dataset_class", "library.concept_edit_util.ConceptEditDataset")
+        config.setdefault("max_data_loader_n_workers", 0)
+        config.setdefault("persistent_data_loader_workers", False)
+
 
 def _build_training_run_context(
     *,

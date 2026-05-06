@@ -26,6 +26,9 @@ _PYTORCH_OPTIMIZER_PREFIX = "pytorch_optimizer."
 
 _SUPPORTED_INTEL_ANIMA_TRAINING_TYPES = {
     "anima-lora",
+    "anima-ileco",
+    "anima-addift",
+    "anima-multi-addift",
     "sdxl-lora",
     "sdxl-finetune",
 }

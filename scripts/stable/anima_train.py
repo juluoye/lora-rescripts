@@ -837,6 +837,15 @@ def train(args):
 
                         huber_c = train_util.get_huber_threshold_if_needed(args, timesteps, None)
                         loss = train_util.conditional_loss(model_pred.float(), target.float(), args.loss_type, "none", huber_c)
+                        loss = train_util.apply_wavelet_loss(
+                            loss,
+                            model_pred,
+                            target,
+                            enabled=bool(getattr(args, "wavelet_loss_enabled", False)),
+                            weight=float(getattr(args, "wavelet_loss_weight", 0.0) or 0.0),
+                            levels=max(1, int(getattr(args, "wavelet_loss_levels", 1) or 1)),
+                            approx_weight=float(getattr(args, "wavelet_loss_approx_weight", 0.0) or 0.0),
+                        )
                         if args.masked_loss or ("alpha_masks" in batch and batch["alpha_masks"] is not None):
                             loss = apply_masked_loss(loss, batch)
                         loss = loss.mean([1, 2, 3])  # (B, C, H, W) -> (B,)

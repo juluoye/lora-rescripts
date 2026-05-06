@@ -4,6 +4,7 @@ import time
 from typing import NamedTuple
 
 from library.device_utils import clean_memory_on_device
+from library import full_bf16_stochastic_util
 from lulynx.experimental_core import build_peak_vram_micro_batch_plan, iter_training_micro_batches
 from mikazuki.plugins.training_hooks import (
     apply_modify_loss_event,
@@ -246,10 +247,20 @@ def execute_train_step(
                     break
 
                 if accelerator.sync_gradients:
+                    full_bf16_optimizer = full_bf16_stochastic_util.unwrap_full_bf16_optimizer(optimizer)
+                    if full_bf16_optimizer is not None:
+                        full_bf16_optimizer.sync_model_grads_to_master()
                     trainer.all_reduce_network(accelerator, network)
+                    if full_bf16_optimizer is not None:
+                        full_bf16_stochastic_util.sync_master_grads_to_model_if_needed(optimizer)
                     if args.max_grad_norm != 0.0:
-                        params_to_clip = accelerator.unwrap_model(network).get_trainable_params()
+                        params_to_clip = full_bf16_stochastic_util.get_params_for_grad_clipping(
+                            accelerator.unwrap_model(network).get_trainable_params(),
+                            optimizer,
+                        )
                         accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+                        if full_bf16_optimizer is not None:
+                            full_bf16_stochastic_util.sync_master_grads_to_model_if_needed(optimizer)
 
                     if hasattr(network, "update_grad_norms"):
                         network.update_grad_norms()

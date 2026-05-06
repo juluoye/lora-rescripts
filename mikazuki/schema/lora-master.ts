@@ -102,6 +102,7 @@ Schema.intersect([
             dim_from_weights: Schema.boolean().default(false).description("从已有 network_weights 自动推断 rank / dim"),
             scale_weight_norms: Schema.number().step(0.01).min(0).description("最大范数正则化。如果使用，推荐为 1"),
             dora_wd: Schema.boolean().default(false).description('启用 DoRA 训练'),
+            vram_swap_to_ram: Schema.boolean().default(false).description("实验性显存兜底项：让原生 LoRA / LoRA-FA / T-LoRA / VeRA 适配器权重常驻 CPU RAM，并在前向时按需拉回训练设备。通常会更慢；暂不支持 DeepSpeed、多进程、full_fp16/full_bf16 与部分 8bit/paged 优化器"),
             network_args_custom: Schema.array(String).role('table').description('自定义 network_args，一行一个'),
             enable_block_weights: Schema.boolean().default(false).description('启用分层学习率训练（只支持网络模块 networks.lora）'),
             enable_base_weight: Schema.boolean().default(false).description('启用基础权重（差异炼丹）'),

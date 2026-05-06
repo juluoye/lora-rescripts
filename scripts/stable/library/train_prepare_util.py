@@ -12,6 +12,7 @@ import logging
 import pathlib
 import re
 import shutil
+import threading
 import time
 import typing
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple, Union
@@ -31,6 +32,7 @@ from tqdm import tqdm
 from packaging.version import Version
 
 import torch
+from library import full_bf16_stochastic_util
 from library.device_utils import init_ipex, clean_memory_on_device
 from library.strategy_base import (
     LatentsCachingStrategy,
@@ -258,6 +260,13 @@ def get_optimizer(args, trainable_params) -> tuple[str, str, object]:
         lr=lr,
         logger=logger,
     )
+    optimizer = full_bf16_stochastic_util.wrap_optimizer_if_needed(
+        args,
+        optimizer=optimizer,
+        trainable_params=trainable_params,
+        logger=logger,
+        route_label="Training route",
+    )
 
     """
     # wrap any of above optimizer with schedulefree, if optimizer is not schedulefree
@@ -448,16 +457,169 @@ def resolve_torch_compile_runtime(args: argparse.Namespace) -> tuple[bool, list[
         return False, []
 
     reasons: list[str] = []
+    backend = str(getattr(args, "dynamo_backend", "inductor") or "inductor").strip().lower()
     if _runtime_flag_enabled(getattr(args, "deepspeed", False), default=False):
         reasons.append("deepspeed")
     if _runtime_flag_enabled(getattr(args, "sdxl_fixed_block_swap", False), default=False):
         reasons.append("sdxl_fixed_block_swap")
     if _runtime_flag_enabled(getattr(args, "sdxl_component_cpu_residency", False), default=False):
         reasons.append("sdxl_component_cpu_residency")
+    if os.name == "nt" and bool(torch.cuda.is_available()) and backend in {"inductor", "cudagraphs"}:
+        reasons.append(f"windows_cuda_{backend}_startup_oom_risk")
 
     if reasons:
         return False, reasons
     return True, []
+
+
+def should_use_local_torch_compile(args: argparse.Namespace) -> bool:
+    if not _runtime_flag_enabled(getattr(args, "torch_compile", False), default=False):
+        return False
+    if _runtime_flag_enabled(getattr(args, "deepspeed", False), default=False):
+        return False
+    return True
+
+
+class _CompiledModelWithProgress(torch.nn.Module):
+    def __init__(self, compiled_model: torch.nn.Module, *, label: str, logger_to_use: logging.Logger, backend: str):
+        super().__init__()
+        self.inner = compiled_model
+        self._compile_label = label
+        self._compile_logger = logger_to_use
+        self._compile_backend = backend
+        self._compile_monitor_lock = threading.Lock()
+        self._compile_monitor_started = False
+        self._compile_monitor_finished = False
+        self._compile_started_at = 0.0
+        self._compile_monitor_thread: Optional[threading.Thread] = None
+
+    def __getattr__(self, name):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            inner = self._modules.get("inner")
+            if inner is not None:
+                return getattr(inner, name)
+            raise
+
+    def _start_compile_monitor_if_needed(self) -> None:
+        with self._compile_monitor_lock:
+            if self._compile_monitor_started:
+                return
+            self._compile_monitor_started = True
+            self._compile_started_at = time.time()
+
+            self._compile_logger.info(
+                f"[torch.compile] first compiled forward for {self._compile_label} has started. "
+                f"backend={self._compile_backend}. This stage may take a while on the first step."
+            )
+            self._compile_logger.info(
+                f"[torch.compile] {self._compile_label} 首次编译执行已开始。backend={self._compile_backend}。"
+                "第一次 step 期间显存上涨但进度不动，通常是正常的。"
+            )
+
+            def heartbeat() -> None:
+                last_reported_bucket = 0
+                while True:
+                    time.sleep(5.0)
+                    with self._compile_monitor_lock:
+                        if self._compile_monitor_finished:
+                            return
+                        elapsed = time.time() - self._compile_started_at
+
+                    bucket = int(elapsed // 15)
+                    if bucket <= 0 or bucket == last_reported_bucket:
+                        continue
+                    last_reported_bucket = bucket
+                    self._compile_logger.info(
+                        f"[torch.compile] still compiling {self._compile_label}... elapsed={elapsed:.0f}s. "
+                        "VRAM usage can rise before steps start moving."
+                    )
+                    self._compile_logger.info(
+                        f"[torch.compile] {self._compile_label} 仍在编译中，已等待 {elapsed:.0f} 秒。"
+                        "这段时间显存上涨、step 暂时不动通常属于正常现象。"
+                    )
+
+            self._compile_monitor_thread = threading.Thread(
+                target=heartbeat,
+                name=f"compile-progress-{self._compile_label}",
+                daemon=True,
+            )
+            self._compile_monitor_thread.start()
+
+    def _finish_compile_monitor(self, *, failed: bool, error: Optional[Exception] = None) -> None:
+        with self._compile_monitor_lock:
+            if self._compile_monitor_finished:
+                return
+            self._compile_monitor_finished = True
+            elapsed = max(0.0, time.time() - self._compile_started_at) if self._compile_started_at else 0.0
+
+        if failed:
+            self._compile_logger.warning(
+                f"[torch.compile] compiled forward for {self._compile_label} failed after {elapsed:.1f}s. "
+                f"error={error}"
+            )
+            self._compile_logger.warning(
+                f"[torch.compile] {self._compile_label} 的首次编译执行在 {elapsed:.1f} 秒后失败。"
+                f"错误：{error}"
+            )
+        else:
+            self._compile_logger.info(
+                f"[torch.compile] initial compile for {self._compile_label} finished in {elapsed:.1f}s. "
+                "Later steps should behave more normally."
+            )
+            self._compile_logger.info(
+                f"[torch.compile] {self._compile_label} 首次编译已完成，用时 {elapsed:.1f} 秒。"
+                "后续 step 通常会恢复正常节奏。"
+            )
+
+    def forward(self, *args, **kwargs):
+        if not self._compile_monitor_started:
+            self._start_compile_monitor_if_needed()
+        try:
+            result = self.inner(*args, **kwargs)
+        except Exception as exc:
+            self._finish_compile_monitor(failed=True, error=exc)
+            raise
+        else:
+            self._finish_compile_monitor(failed=False)
+            return result
+
+
+def compile_training_model_if_enabled(
+    args: argparse.Namespace,
+    model: Optional[torch.nn.Module],
+    *,
+    label: str,
+    logger_override: Optional[logging.Logger] = None,
+):
+    if model is None or not should_use_local_torch_compile(args):
+        return model
+
+    logger_to_use = logger_override or logger
+    backend = str(getattr(args, "dynamo_backend", "inductor") or "inductor").strip().lower() or "inductor"
+
+    try:
+        compiled_model = torch.compile(model, backend=backend)
+    except Exception as exc:
+        logger_to_use.warning(
+            f"torch.compile failed for {label}; continuing without local compile. backend={backend}, error={exc}"
+        )
+        logger_to_use.warning(
+            f"{label} 的局部 torch.compile 失败，已自动回退为未编译模型继续训练。backend={backend}，错误：{exc}"
+        )
+        return model
+
+    compiled_model = _CompiledModelWithProgress(
+        compiled_model,
+        label=label,
+        logger_to_use=logger_to_use,
+        backend=backend,
+    )
+    setattr(compiled_model, "_lora_rescripts_local_compile_label", label)
+    logger_to_use.info(f"Enable local torch.compile for {label} (dynamo backend: {backend})")
+    logger_to_use.info(f"已为 {label} 启用局部 torch.compile（dynamo 后端：{backend}）")
+    return compiled_model
 
 
 def prepare_accelerator(args: argparse.Namespace):
@@ -497,24 +659,22 @@ def prepare_accelerator(args: argparse.Namespace):
             if args.wandb_api_key is not None:
                 wandb.login(key=args.wandb_api_key)
 
-    # torch.compile のオプション。 NO の場合は torch.compile は使わない
-    torch_compile_enabled, compile_guard_reasons = resolve_torch_compile_runtime(args)
-    if not torch_compile_enabled and _runtime_flag_enabled(getattr(args, "torch_compile", False), default=False):
-        logger.warning(
-            "torch.compile was requested but will be disabled for runtime stability because: "
-            + ", ".join(compile_guard_reasons)
-        )
-        logger.warning(
-            "已请求 torch.compile，但为保证运行时稳定性将自动关闭，原因："
-            + "、".join(compile_guard_reasons)
-        )
-        args.torch_compile = False
-
     dynamo_backend = "NO"
-    if torch_compile_enabled:
-        dynamo_backend = args.dynamo_backend
-        logger.info(f"Enable torch.compile for training (dynamo backend: {dynamo_backend})")
-        logger.info(f"当前已启用 torch.compile（dynamo 后端：{dynamo_backend}）")
+    compile_requested = _runtime_flag_enabled(getattr(args, "torch_compile", False), default=False)
+    if compile_requested:
+        _, compile_guard_reasons = resolve_torch_compile_runtime(args)
+        if compile_guard_reasons:
+            logger.info(
+                "torch.compile requested; using local model compile path instead of Accelerator dynamo because: "
+                + ", ".join(compile_guard_reasons)
+            )
+            logger.info(
+                "已请求 torch.compile；当前将改用局部模型 compile 路线，而不是 Accelerator 全局 dynamo。原因："
+                + "、".join(compile_guard_reasons)
+            )
+        elif should_use_local_torch_compile(args):
+            logger.info("torch.compile requested; using local model compile path.")
+            logger.info("已请求 torch.compile；当前将使用局部模型 compile 路线。")
 
     kwargs_handlers = [
         (
@@ -828,6 +988,8 @@ __all__ = [
     'get_scheduler_fix',
     'prepare_dataset_args',
     'resolve_torch_compile_runtime',
+    'should_use_local_torch_compile',
+    'compile_training_model_if_enabled',
     'prepare_accelerator',
     'prepare_dtype',
     'load_target_model',

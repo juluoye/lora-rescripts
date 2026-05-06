@@ -8,10 +8,12 @@ from typing import Callable, Optional
 from mikazuki.utils.direct_trainers import (
     build_aesthetic_scorer_preflight_summary,
     build_aesthetic_scorer_start_warnings,
+    build_concept_edit_start_warnings,
     build_newbie_start_warnings,
     build_yolo_preflight_summary,
     build_yolo_start_warnings,
     validate_aesthetic_scorer_runtime_config,
+    validate_concept_edit_runtime_config,
     validate_newbie_runtime_config,
     validate_yolo_runtime_config,
 )
@@ -24,6 +26,8 @@ TrainerPreflightBuilder = Callable[[dict, list[str], list[str], list[str]], Opti
 
 AMD_ANIMA_LORA_TRAINER_FILE = "./scripts/stable/anima_train_network_amd.py"
 INTEL_ANIMA_LORA_TRAINER_FILE = "./scripts/stable/anima_train_network_intel.py"
+AMD_ANIMA_CONCEPT_EDIT_TRAINER_FILE = "./scripts/stable/anima_train_concept_edit_amd.py"
+INTEL_ANIMA_CONCEPT_EDIT_TRAINER_FILE = "./scripts/stable/anima_train_concept_edit_intel.py"
 
 
 @dataclass(frozen=True)
@@ -49,11 +53,53 @@ TRAINER_REGISTRY = {
         allow_dataset_config_without_train_data_dir=True,
         allow_dataset_class_without_train_data_dir=True,
     ),
+    "sd-ileco": TrainerDefinition(
+        "sd-ileco",
+        "./scripts/stable/train_concept_edit.py",
+        allow_dataset_class_without_train_data_dir=True,
+        config_validator=validate_concept_edit_runtime_config,
+        start_warning_builder=build_concept_edit_start_warnings,
+    ),
+    "sd-addift": TrainerDefinition(
+        "sd-addift",
+        "./scripts/stable/train_concept_edit.py",
+        allow_dataset_class_without_train_data_dir=True,
+        config_validator=validate_concept_edit_runtime_config,
+        start_warning_builder=build_concept_edit_start_warnings,
+    ),
+    "sd-multi-addift": TrainerDefinition(
+        "sd-multi-addift",
+        "./scripts/stable/train_concept_edit.py",
+        allow_dataset_class_without_train_data_dir=True,
+        config_validator=validate_concept_edit_runtime_config,
+        start_warning_builder=build_concept_edit_start_warnings,
+    ),
     "sdxl-lora": TrainerDefinition(
         "sdxl-lora",
         "./scripts/stable/sdxl_train_network.py",
         allow_dataset_config_without_train_data_dir=True,
         allow_dataset_class_without_train_data_dir=True,
+    ),
+    "sdxl-ileco": TrainerDefinition(
+        "sdxl-ileco",
+        "./scripts/stable/sdxl_train_concept_edit.py",
+        allow_dataset_class_without_train_data_dir=True,
+        config_validator=validate_concept_edit_runtime_config,
+        start_warning_builder=build_concept_edit_start_warnings,
+    ),
+    "sdxl-addift": TrainerDefinition(
+        "sdxl-addift",
+        "./scripts/stable/sdxl_train_concept_edit.py",
+        allow_dataset_class_without_train_data_dir=True,
+        config_validator=validate_concept_edit_runtime_config,
+        start_warning_builder=build_concept_edit_start_warnings,
+    ),
+    "sdxl-multi-addift": TrainerDefinition(
+        "sdxl-multi-addift",
+        "./scripts/stable/sdxl_train_concept_edit.py",
+        allow_dataset_class_without_train_data_dir=True,
+        config_validator=validate_concept_edit_runtime_config,
+        start_warning_builder=build_concept_edit_start_warnings,
     ),
     "yolo": TrainerDefinition(
         "yolo",
@@ -188,6 +234,27 @@ TRAINER_REGISTRY = {
         allow_dataset_config_without_train_data_dir=True,
         allow_dataset_class_without_train_data_dir=True,
     ),
+    "anima-ileco": TrainerDefinition(
+        "anima-ileco",
+        "./scripts/stable/anima_train_concept_edit.py",
+        allow_dataset_class_without_train_data_dir=True,
+        config_validator=validate_concept_edit_runtime_config,
+        start_warning_builder=build_concept_edit_start_warnings,
+    ),
+    "anima-addift": TrainerDefinition(
+        "anima-addift",
+        "./scripts/stable/anima_train_concept_edit.py",
+        allow_dataset_class_without_train_data_dir=True,
+        config_validator=validate_concept_edit_runtime_config,
+        start_warning_builder=build_concept_edit_start_warnings,
+    ),
+    "anima-multi-addift": TrainerDefinition(
+        "anima-multi-addift",
+        "./scripts/stable/anima_train_concept_edit.py",
+        allow_dataset_class_without_train_data_dir=True,
+        config_validator=validate_concept_edit_runtime_config,
+        start_warning_builder=build_concept_edit_start_warnings,
+    ),
     "anima-finetune": TrainerDefinition(
         "anima-finetune",
         "./scripts/stable/anima_train.py",
@@ -230,6 +297,11 @@ def resolve_trainer_file_for_training_type(training_type: str, fallback_trainer_
             return AMD_ANIMA_LORA_TRAINER_FILE
         if is_intel_xpu_runtime_requested():
             return INTEL_ANIMA_LORA_TRAINER_FILE
+    if normalized in {"anima-ileco", "anima-addift", "anima-multi-addift"}:
+        if is_rocm_amd_runtime_requested():
+            return AMD_ANIMA_CONCEPT_EDIT_TRAINER_FILE
+        if is_intel_xpu_runtime_requested():
+            return INTEL_ANIMA_CONCEPT_EDIT_TRAINER_FILE
     return fallback_trainer_file
 
 
@@ -264,6 +336,10 @@ def get_trainer_definition_by_file(trainer_file: str) -> TrainerDefinition | Non
         return replace(TRAINER_REGISTRY["anima-lora"], trainer_file=AMD_ANIMA_LORA_TRAINER_FILE)
     if trainer_name == Path(INTEL_ANIMA_LORA_TRAINER_FILE).name.lower():
         return replace(TRAINER_REGISTRY["anima-lora"], trainer_file=INTEL_ANIMA_LORA_TRAINER_FILE)
+    if trainer_name == Path(AMD_ANIMA_CONCEPT_EDIT_TRAINER_FILE).name.lower():
+        return replace(TRAINER_REGISTRY["anima-ileco"], trainer_file=AMD_ANIMA_CONCEPT_EDIT_TRAINER_FILE)
+    if trainer_name == Path(INTEL_ANIMA_CONCEPT_EDIT_TRAINER_FILE).name.lower():
+        return replace(TRAINER_REGISTRY["anima-ileco"], trainer_file=INTEL_ANIMA_CONCEPT_EDIT_TRAINER_FILE)
 
     for training_type in TRAINER_REGISTRY:
         definition = get_trainer_definition(training_type)

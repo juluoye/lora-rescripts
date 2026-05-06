@@ -65,6 +65,19 @@ def get_anima_adapter_type(payload: dict) -> str:
     return "lora"
 
 
+def anima_dora_enabled(payload: dict) -> bool:
+    if parse_boolish(payload.get("dora_wd")):
+        return True
+
+    network_args = payload.get("network_args")
+    if isinstance(network_args, (list, tuple)):
+        for item in network_args:
+            item_str = str(item).strip()
+            if item_str.startswith("dora_wd="):
+                return parse_boolish(item_str.split("=", 1)[1].strip())
+    return False
+
+
 def payload_uses_sageattention(payload: dict) -> bool:
     attn_mode = str(payload.get("attn_mode", "") or "").strip().lower()
     return (
@@ -219,7 +232,7 @@ def add_anima_preflight_guidance(payload: dict, training_type: str, errors: list
             "/ 当前 Anima 预览采样器目前仅支持 euler / k_euler，其他值会自动回退到 euler。"
         )
 
-    if training_type == "anima-lora":
+    if training_type.startswith("anima-") and training_type != "anima-finetune":
         adapter_type = get_anima_adapter_type(payload)
         if adapter_type == "lokr":
             notes.append("Anima adapter mode: LoKr (built-in linear-layer injection).")
@@ -237,7 +250,14 @@ def add_anima_preflight_guidance(payload: dict, training_type: str, errors: list
         elif adapter_type == "lora_fa":
             notes.append("Anima adapter mode: LoRA-FA (freeze lora_down / train lora_up).")
         else:
-            notes.append("Anima adapter mode: LoRA.")
+            if anima_dora_enabled(payload):
+                notes.append("Anima adapter mode: LoRA + DoRA.")
+                warnings.append(
+                    "Anima DoRA forces bypass_mode off automatically in this build to avoid the known LyCORIS-style bypass defect path. "
+                    "/ 当前构建中的 Anima DoRA 会自动强制关闭 bypass_mode，以避开已知的 bypass 缺陷路径。"
+                )
+            else:
+                notes.append("Anima adapter mode: LoRA.")
 
 
 def add_network_target_preflight_guidance(payload: dict, errors: list[str], warnings: list[str], notes: list[str]) -> None:
@@ -522,7 +542,7 @@ def analyze_training_preflight(
     if bool(payload.get("torch_compile")):
         backend = str(payload.get("dynamo_backend", "inductor") or "inductor").strip() or "inductor"
         notes.append(
-            f"torch.compile enabled with backend '{backend}'. The first launch and first few steps may be slower while graphs compile."
+            f"torch.compile enabled with backend '{backend}'. This build prefers local model-level compile for the main training model, and the first launch / first few steps may still be slower while graphs compile."
         )
         compile_guard_reasons = []
         if parse_boolish(payload.get("deepspeed")):
@@ -535,10 +555,17 @@ def analyze_training_preflight(
             warnings.append(
                 "torch.compile is enabled, but the current runtime also enables "
                 + ", ".join(compile_guard_reasons)
-                + ". This build may automatically disable compile at launch to prioritize training stability. "
+                + ". These combinations may reduce compile coverage or force specific routes to skip local model compile. "
                 "/ 当前同时启用了 "
                 + "、".join(compile_guard_reasons)
-                + "，启动时可能会自动关闭 torch.compile 以优先保证稳定性。"
+                + "，这些组合可能会减少 compile 覆盖范围，或让特定训练路线跳过局部模型 compile。"
+            )
+        if os.name == "nt" and backend.lower() in {"inductor", "cudagraphs"}:
+            warnings.append(
+                "Windows + CUDA previously had a high startup OOM risk when compile was attached to the whole launch stack. "
+                "This build now prefers local model-level compile to reduce that peak, but first-step compile overhead can still be significant. "
+                "/ 当前 Windows + CUDA 下，torch.compile 的 inductor/cudagraphs 在启动编译阶段有较高显存峰值风险；"
+                "当前构建已优先改为局部模型 compile 以降低这段峰值，但首轮编译开销仍可能偏高。"
             )
 
     if bool(payload.get("opt_channels_last")):

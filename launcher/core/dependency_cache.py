@@ -213,6 +213,13 @@ def build_runtime_dependency_plan(runtime_id: str) -> List[DependencyPlanItem]:
         kind="pip",
         pip_args=("triton-windows==3.5.1.post24",),
     )
+    triton_runtime_default = DependencyPlanItem(
+        item_id="triton_runtime_default",
+        label_zh="Triton Runtime",
+        label_en="Triton runtime",
+        kind="pip",
+        pip_args=("triton-windows==3.6.0.post26",),
+    )
     sage_pkg = DependencyPlanItem(
         item_id="sageattention",
         label_zh="SageAttention 1.x",
@@ -243,11 +250,11 @@ def build_runtime_dependency_plan(runtime_id: str) -> List[DependencyPlanItem]:
     )
 
     plan_map: Dict[str, List[DependencyPlanItem]] = {
-        "standard": [standard_torch, standard_xformers, common_requirements],
-        "flashattention": [standard_torch, common_requirements, flash_wheel],
+        "standard": [standard_torch, standard_xformers, common_requirements, triton_runtime_default],
+        "flashattention": [standard_torch, common_requirements, triton_runtime_default, flash_wheel],
         "sageattention": [sage_torch, common_requirements, triton_runtime, sage_pkg],
         "sageattention2": [sage2_torch, common_requirements, triton_runtime, sage2_pkg],
-        "blackwell": [standard_torch, common_requirements, blackwell_xformers],
+        "blackwell": [standard_torch, common_requirements, triton_runtime_default, blackwell_xformers],
         "sageattention-blackwell": [standard_torch, common_requirements, blackwell_xformers, triton_runtime, sage_pkg],
         "intel-xpu": [common_requirements],
         "intel-xpu-sage": [common_requirements],

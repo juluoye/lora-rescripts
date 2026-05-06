@@ -8,6 +8,7 @@ import sys
 import torch
 
 from library import deepspeed_utils
+from library import full_bf16_stochastic_util
 from lulynx.experimental_core import create_lulynx_core
 import library.train_util as train_util
 
@@ -262,6 +263,11 @@ def prepare_execution_runtime(
 
     if args.full_fp16:
         train_util.patch_accelerator_for_fp16_training(accelerator)
+    elif args.full_bf16:
+        full_bf16_stochastic_util.activate_training_model_grads_if_needed(
+            args,
+            optimizer=optimizer,
+        )
 
     return prepared_cls(
         network=network,

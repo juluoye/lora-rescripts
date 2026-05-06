@@ -76,6 +76,7 @@ class BaseSubsetParams:
     token_warmup_min: int = 1
     token_warmup_step: float = 0
     custom_attributes: Optional[Dict[str, Any]] = None
+    is_val: bool = False
     validation_seed: int = 0
     validation_split: float = 0.0
     resize_interpolation: Optional[str] = None
@@ -208,6 +209,7 @@ class ConfigSanitizer:
         "caption_suffix": str,
         "custom_attributes": dict,
         "resize_interpolation": str,
+        "is_val": bool,
     }
     # DO means DropOut
     DO_SUBSET_ASCENDABLE_SCHEMA = {
@@ -491,55 +493,76 @@ class BlueprintGenerator:
 def generate_dataset_group_by_blueprint(dataset_group_blueprint: DatasetGroupBlueprint) -> Tuple[DatasetGroup, Optional[DatasetGroup]]:
     datasets: List[Union[DreamBoothDataset, FineTuningDataset, ControlNetDataset]] = []
 
-    for dataset_blueprint in dataset_group_blueprint.datasets:
-        extra_dataset_params = {}
-
+    def resolve_dataset_types(dataset_blueprint: DatasetBlueprint):
         if dataset_blueprint.is_controlnet:
             subset_klass = ControlNetSubset
             dataset_klass = ControlNetDataset
         elif dataset_blueprint.is_dreambooth:
             subset_klass = DreamBoothSubset
             dataset_klass = DreamBoothDataset
-            # DreamBooth datasets support splitting training and validation datasets
-            extra_dataset_params = {"is_training_dataset": True}
         else:
             subset_klass = FineTuningSubset
             dataset_klass = FineTuningDataset
 
-        subsets = [subset_klass(**asdict(subset_blueprint.params)) for subset_blueprint in dataset_blueprint.subsets]
-        dataset = dataset_klass(subsets=subsets, **asdict(dataset_blueprint.params), **extra_dataset_params)
-        datasets.append(dataset)
+        return subset_klass, dataset_klass
+
+    def build_dataset(
+        dataset_blueprint: DatasetBlueprint,
+        *,
+        is_training_dataset: bool,
+        effective_validation_split: float,
+    ) -> Optional[Union[DreamBoothDataset, FineTuningDataset, ControlNetDataset]]:
+        subset_klass, dataset_klass = resolve_dataset_types(dataset_blueprint)
+        subset_blueprints = (
+            [subset_blueprint for subset_blueprint in dataset_blueprint.subsets if not subset_blueprint.params.is_val]
+            if is_training_dataset
+            else list(dataset_blueprint.subsets)
+        )
+        if not subset_blueprints:
+            return None
+
+        subsets = [subset_klass(**asdict(subset_blueprint.params)) for subset_blueprint in subset_blueprints]
+        for subset in subsets:
+            setattr(subset, "_validation_view", not is_training_dataset)
+        dataset_params = asdict(dataset_blueprint.params)
+        dataset_params["validation_split"] = effective_validation_split
+        return dataset_klass(subsets=subsets, is_training_dataset=is_training_dataset, **dataset_params)
+
+    for dataset_blueprint in dataset_group_blueprint.datasets:
+        validation_split = dataset_blueprint.params.validation_split
+        if validation_split < 0.0 or validation_split > 1.0:
+            logging.warning(
+                f"Dataset param `validation_split` ({validation_split}) is not a valid number between 0.0 and 1.0, ignoring validation split... / "
+                f"`validation_split` が 0.0 から 1.0 の範囲外のため、検証データ分割を無視します。 / "
+                f"`validation_split` 不在 0.0 到 1.0 范围内，将忽略验证集切分。"
+            )
+            validation_split = 0.0
+
+        dataset = build_dataset(
+            dataset_blueprint,
+            is_training_dataset=True,
+            effective_validation_split=validation_split,
+        )
+        if dataset is not None:
+            datasets.append(dataset)
 
     val_datasets: List[Union[DreamBoothDataset, FineTuningDataset, ControlNetDataset]] = []
     for dataset_blueprint in dataset_group_blueprint.datasets:
-        if dataset_blueprint.params.validation_split < 0.0 or dataset_blueprint.params.validation_split > 1.0:
-            logging.warning(
-                f"Dataset param `validation_split` ({dataset_blueprint.params.validation_split}) is not a valid number between 0.0 and 1.0, skipping validation split... / "
-                f"`validation_split` が 0.0 から 1.0 の範囲外のため、検証データ分割をスキップします。 / "
-                f"`validation_split` 不在 0.0 到 1.0 范围内，将跳过验证集划分。"
-            )
+        validation_split = dataset_blueprint.params.validation_split
+        if validation_split < 0.0 or validation_split > 1.0:
+            validation_split = 0.0
+
+        has_is_val_subset = any(subset_blueprint.params.is_val for subset_blueprint in dataset_blueprint.subsets)
+        if validation_split == 0.0 and not has_is_val_subset:
             continue
 
-        # if the dataset isn't setting a validation split, there is no current validation dataset
-        if dataset_blueprint.params.validation_split == 0.0:
-            continue
-
-        extra_dataset_params = {}
-        if dataset_blueprint.is_controlnet:
-            subset_klass = ControlNetSubset
-            dataset_klass = ControlNetDataset
-        elif dataset_blueprint.is_dreambooth:
-            subset_klass = DreamBoothSubset
-            dataset_klass = DreamBoothDataset
-            # DreamBooth datasets support splitting training and validation datasets
-            extra_dataset_params = {"is_training_dataset": False}
-        else:
-            subset_klass = FineTuningSubset
-            dataset_klass = FineTuningDataset
-
-        subsets = [subset_klass(**asdict(subset_blueprint.params)) for subset_blueprint in dataset_blueprint.subsets]
-        dataset = dataset_klass(subsets=subsets, **asdict(dataset_blueprint.params), **extra_dataset_params)
-        val_datasets.append(dataset)
+        dataset = build_dataset(
+            dataset_blueprint,
+            is_training_dataset=False,
+            effective_validation_split=validation_split,
+        )
+        if dataset is not None:
+            val_datasets.append(dataset)
 
     def print_info(_datasets, dataset_type: str):
         info = ""
@@ -592,6 +615,7 @@ def generate_dataset_group_by_blueprint(dataset_group_blueprint: DatasetGroupBlu
                     alpha_mask: {subset.alpha_mask}
                     resize_interpolation: {subset.resize_interpolation}
                     custom_attributes: {subset.custom_attributes}
+                    is_val: {getattr(subset, "is_val", False)}
                 """), "  ")
 
                 if is_dreambooth:

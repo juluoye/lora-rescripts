@@ -216,7 +216,7 @@ def check_torch_gpu():
             f"preferred={attention_summary['preferred_backend']} | "
             f"runtime={attention_summary['runtime_mode']} | "
             f"flashattn={'ready' if attention_summary['flashattention']['symbols_ok'] else 'unavailable'} | "
-            f"xformers={'ready' if status.get('supported') else 'unavailable'} | "
+            f"xformers={'ready' if status.get('verified') else 'unavailable'} | "
             f"sdpa={'ready' if attention_summary['sdpa_available'] else 'unavailable'} | "
             f"sageattn={'ready' if attention_summary['sageattention']['symbols_ok'] else 'unavailable'}"
         )
@@ -292,10 +292,10 @@ def check_torch_gpu():
                     f"检测到 GPU {gpu_index}（{gpu_status['name']}）上的 xformers 运行探测结果未确认：{gpu_status['reason']}"
                 )
             log.warning(
-                "Keeping xformers enabled for these GPUs. If a specific training run still fails, switch that config to SDPA manually."
+                "xformers did not pass a real runtime probe on these GPUs. Training configs that request xformers will now fall back to SDPA automatically."
             )
             log.warning(
-                "此类 GPU 仍会保留 xformers 可用状态；若某个训练器实际运行仍报错，请再手动切换到 sdpa。"
+                "这类 GPU 上的 xformers 没有通过真实运行探测；若训练配置请求 xformers，启动时会自动回退到 sdpa。"
             )
         else:
             version_suffix = f" (xformers {status['version']})" if status.get("version") else ""

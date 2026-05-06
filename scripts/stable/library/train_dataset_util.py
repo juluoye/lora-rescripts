@@ -7,6 +7,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 import datetime
 import importlib
+import inspect
 import json
 import logging
 import pathlib
@@ -184,6 +185,8 @@ def split_train_val(
     [80:] = 20 validation images
     """
     dataset = list(zip(paths, sizes))
+    if not dataset:
+        return [], []
     if validation_seed is not None:
         logging.info(f"Using validation seed: {validation_seed}")
         prevstate = random.getstate()
@@ -205,6 +208,49 @@ def split_train_val(
         # Validation dataset we split to the second part
         split = len(paths) - round(len(paths) * validation_split)
         return paths[split:], sizes[split:]
+
+
+def split_train_val_entries(
+    entries: List[Any],
+    is_training_dataset: bool,
+    validation_split: float,
+    validation_seed: int | None,
+) -> List[Any]:
+    if not entries:
+        return []
+
+    shuffled_entries = list(entries)
+    if validation_seed is not None:
+        logging.info(f"Using validation seed: {validation_seed}")
+        prevstate = random.getstate()
+        random.seed(validation_seed)
+        random.shuffle(shuffled_entries)
+        random.setstate(prevstate)
+    else:
+        random.shuffle(shuffled_entries)
+
+    if is_training_dataset:
+        split = math.ceil(len(shuffled_entries) * (1 - validation_split))
+        return shuffled_entries[0:split]
+
+    split = len(shuffled_entries) - round(len(shuffled_entries) * validation_split)
+    return shuffled_entries[split:]
+
+
+def apply_validation_subset_static_settings(subset: "BaseSubset") -> None:
+    subset.num_repeats = 1
+    subset.shuffle_caption = False
+    subset.color_aug = False
+    subset.flip_aug = False
+    subset.face_crop_aug_range = None
+    subset.random_crop = False
+    subset.caption_dropout_rate = 0.0
+    subset.caption_dropout_every_n_epochs = 0
+    subset.caption_tag_dropout_rate = 0.0
+    subset.caption_tag_dropout_targets = None
+    subset.caption_tag_dropout_target_mode = "drop_all"
+    subset.caption_tag_dropout_target_count = 1
+    subset.token_warmup_step = 0
 
 
 class ImageInfo:
@@ -232,6 +278,8 @@ class ImageInfo:
         self.cond_img_path: Optional[str] = None
         self.image: Optional[Image.Image] = None  # optional, original PIL Image
         self.text_encoder_outputs_npz: Optional[str] = None  # filename. set in cache_text_encoder_outputs
+        self.text_encoder_outputs_disk_cache_ref: Optional[Any] = None
+        self.text_encoder_outputs_cache_root: Optional[str] = None
 
         # new
         self.text_encoder_outputs: Optional[List[torch.Tensor]] = None
@@ -581,6 +629,7 @@ class BaseSubset:
         token_warmup_min: int,
         token_warmup_step: Union[float, int],
         custom_attributes: Optional[Dict[str, Any]] = None,
+        is_val: bool = False,
         validation_seed: Optional[int] = None,
         validation_split: Optional[float] = 0.0,
         resize_interpolation: Optional[str] = None,
@@ -613,6 +662,8 @@ class BaseSubset:
         self.token_warmup_step = token_warmup_step  # N（N<1ならN*max_train_steps）ステップ目でタグの数が最大になる
 
         self.custom_attributes = custom_attributes if custom_attributes is not None else {}
+
+        self.is_val = is_val
 
         self.img_count = 0
 
@@ -653,6 +704,7 @@ class DreamBoothSubset(BaseSubset):
         token_warmup_min,
         token_warmup_step,
         custom_attributes: Optional[Dict[str, Any]] = None,
+        is_val: bool = False,
         validation_seed: Optional[int] = None,
         validation_split: Optional[float] = 0.0,
         resize_interpolation: Optional[str] = None,
@@ -684,6 +736,7 @@ class DreamBoothSubset(BaseSubset):
             token_warmup_min,
             token_warmup_step,
             custom_attributes=custom_attributes,
+            is_val=is_val,
             validation_seed=validation_seed,
             validation_split=validation_split,
             resize_interpolation=resize_interpolation,
@@ -730,6 +783,7 @@ class FineTuningSubset(BaseSubset):
         token_warmup_min,
         token_warmup_step,
         custom_attributes: Optional[Dict[str, Any]] = None,
+        is_val: bool = False,
         validation_seed: Optional[int] = None,
         validation_split: Optional[float] = 0.0,
         resize_interpolation: Optional[str] = None,
@@ -761,6 +815,7 @@ class FineTuningSubset(BaseSubset):
             token_warmup_min,
             token_warmup_step,
             custom_attributes=custom_attributes,
+            is_val=is_val,
             validation_seed=validation_seed,
             validation_split=validation_split,
             resize_interpolation=resize_interpolation,
@@ -803,6 +858,7 @@ class ControlNetSubset(BaseSubset):
         token_warmup_min,
         token_warmup_step,
         custom_attributes: Optional[Dict[str, Any]] = None,
+        is_val: bool = False,
         validation_seed: Optional[int] = None,
         validation_split: Optional[float] = 0.0,
         resize_interpolation: Optional[str] = None,
@@ -834,6 +890,7 @@ class ControlNetSubset(BaseSubset):
             token_warmup_min,
             token_warmup_step,
             custom_attributes=custom_attributes,
+            is_val=is_val,
             validation_seed=validation_seed,
             validation_split=validation_split,
             resize_interpolation=resize_interpolation,
@@ -1096,22 +1153,27 @@ class BaseDataset(torch.utils.data.Dataset):
         return f"{caption_separator} ".join(kept_tokens)
 
     def process_caption(self, subset: BaseSubset, caption):
+        # For validation subsets (is_val=True), disable all randomization to keep
+        # validation loss deterministic and stable across runs.
+        is_val_subset = getattr(subset, 'is_val', False) or getattr(subset, '_validation_view', False)
+
         structured_caption_payload = anima_caption_util.decode_special_caption_payload(caption)
         structured_caption_rendered = structured_caption_payload is not None
         if structured_caption_payload is not None:
             caption = anima_caption_util.build_caption_from_payload(
                 structured_caption_payload,
-                shuffle_appearance=subset.shuffle_caption,
-                shuffle_tags=subset.shuffle_caption,
-                shuffle_environment=subset.shuffle_caption,
-                tag_dropout=subset.caption_tag_dropout_rate,
+                shuffle_appearance=subset.shuffle_caption and not is_val_subset,
+                shuffle_tags=subset.shuffle_caption and not is_val_subset,
+                shuffle_environment=subset.shuffle_caption and not is_val_subset,
+                tag_dropout=subset.caption_tag_dropout_rate if not is_val_subset else 0.0,
             )
 
         # dropoutの決定：tag dropがこのメソッド内にあるのでここで行うのが良い
-        is_drop_out = subset.caption_dropout_rate > 0 and random.random() < subset.caption_dropout_rate
+        # For is_val subsets, skip caption dropout entirely
+        is_drop_out = not is_val_subset and subset.caption_dropout_rate > 0 and random.random() < subset.caption_dropout_rate
         is_drop_out = (
             is_drop_out
-            or subset.caption_dropout_every_n_epochs > 0
+            or not is_val_subset and subset.caption_dropout_every_n_epochs > 0
             and self.current_epoch % subset.caption_dropout_every_n_epochs == 0
         )
 
@@ -1120,9 +1182,9 @@ class BaseDataset(torch.utils.data.Dataset):
         else:
             # process wildcards
             if subset.enable_wildcard:
-                # if caption is multiline, random choice one line
+                # Validation datasets should stay deterministic.
                 if "\n" in caption:
-                    caption = random.choice(caption.split("\n"))
+                    caption = caption.split("\n")[0] if is_val_subset else random.choice(caption.split("\n"))
 
                 # wildcard is like '{aaa|bbb|ccc...}'
                 # escape the curly braces like {{ or }}
@@ -1136,7 +1198,8 @@ class BaseDataset(torch.utils.data.Dataset):
 
                 # replace the wildcard
                 def replace_wildcard(match):
-                    return random.choice(match.group(1).split("|"))
+                    choices = match.group(1).split("|")
+                    return choices[0] if is_val_subset else random.choice(choices)
 
                 caption = re.sub(r"\{([^}]+)\}", replace_wildcard, caption)
 
@@ -1149,7 +1212,7 @@ class BaseDataset(torch.utils.data.Dataset):
             caption = self.apply_targeted_tag_dropout(subset, caption)
 
             if not structured_caption_rendered and (
-                subset.shuffle_caption or subset.token_warmup_step > 0 or subset.caption_tag_dropout_rate > 0
+                subset.shuffle_caption and not is_val_subset or subset.token_warmup_step > 0 or subset.caption_tag_dropout_rate > 0 and not is_val_subset
             ):
                 fixed_tokens = []
                 flex_tokens = []
@@ -1193,7 +1256,7 @@ class BaseDataset(torch.utils.data.Dataset):
                             l.append(token)
                     return l
 
-                if subset.shuffle_caption:
+                if subset.shuffle_caption and not is_val_subset:
                     random.shuffle(flex_tokens)
 
                 flex_tokens = dropout_tags(flex_tokens)
@@ -1782,17 +1845,20 @@ class BaseDataset(torch.utils.data.Dataset):
 
         logger.info("checking cache validity...")
         for i, info in enumerate(tqdm(image_infos)):
+            subset = self.image_to_subset[info.image_key]
             # check disk cache exists and size of text encoder outputs
             if caching_strategy.cache_to_disk:
                 te_out_npz = caching_strategy.get_outputs_npz_path(info.absolute_path)
-                info.text_encoder_outputs_npz = te_out_npz  # set npz filename regardless of cache availability
+                info.text_encoder_outputs_npz = te_out_npz  # legacy filename / compatibility path
+                info.text_encoder_outputs_disk_cache_ref = None
+                info.text_encoder_outputs_cache_root = getattr(subset, "image_dir", None)
 
                 # if the modulo of num_processes is not equal to process_index, skip caching
                 # this makes each process cache different text encoder outputs
                 if i % num_processes != process_index:
                     continue
 
-                cache_available = caching_strategy.is_disk_cached_outputs_expected(te_out_npz)
+                cache_available = caching_strategy.is_disk_cached_outputs_expected_for_info(te_out_npz, info=info)
                 if cache_available:  # do not add to batch
                     continue
 
@@ -1815,6 +1881,9 @@ class BaseDataset(torch.utils.data.Dataset):
         for batch in tqdm(batches, smoothing=1, total=len(batches)):
             # cache_batch_latents(vae, cache_to_disk, batch, subset.flip_aug, subset.alpha_mask, subset.random_crop)
             caching_strategy.cache_batch_outputs(tokenize_strategy, models, text_encoding_strategy, batch)
+        finalize_caching = getattr(caching_strategy, "finalize_caching", None)
+        if callable(finalize_caching):
+            finalize_caching()
 
     # if weight_dtype is specified, Text Encoder itself and output will be converted to the dtype
     # this method is only for SDXL, but it should be implemented here because it needs to be a method of dataset
@@ -1869,15 +1938,17 @@ class BaseDataset(torch.utils.data.Dataset):
         logger.info("checking cache existence...")
         image_infos_to_cache = []
         for info in tqdm(image_infos):
-            # subset = self.image_to_subset[info.image_key]
+            subset = self.image_to_subset[info.image_key]
             if cache_to_disk:
                 te_out_npz = os.path.splitext(info.absolute_path)[0] + file_suffix
                 info.text_encoder_outputs_npz = te_out_npz
+                info.text_encoder_outputs_disk_cache_ref = None
+                info.text_encoder_outputs_cache_root = getattr(subset, "image_dir", None)
 
                 if not is_main_process:  # store to info only
                     continue
 
-                if os.path.exists(te_out_npz):
+                if caching_strategy.is_disk_cached_outputs_expected_for_info(te_out_npz, info=info):
                     # TODO check varidity of cache here
                     continue
 
@@ -2053,7 +2124,8 @@ class BaseDataset(torch.utils.data.Dataset):
             # in case of fine tuning, is_reg is always False
             loss_weights.append(self.prior_loss_weight if image_info.is_reg else 1.0)
 
-            flipped = subset.flip_aug and random.random() < 0.5  # not flipped or flipped with 50% chance
+            is_val_subset = getattr(subset, 'is_val', False) or getattr(subset, '_validation_view', False)
+            flipped = subset.flip_aug and not is_val_subset and random.random() < 0.5  # not flipped or flipped with 50% chance
 
             # image/latentsを処理する
             if image_info.latents is not None:  # cache_latents=Trueの場合
@@ -2108,7 +2180,7 @@ class BaseDataset(torch.utils.data.Dataset):
 
                 if self.enable_bucket:
                     img, original_size, crop_ltrb = trim_and_resize_if_required(
-                        subset.random_crop,
+                        subset.random_crop and not is_val_subset,
                         img,
                         image_info.bucket_reso,
                         image_info.resized_size,
@@ -2119,13 +2191,13 @@ class BaseDataset(torch.utils.data.Dataset):
                         img = self.crop_target(subset, img, face_cx, face_cy, face_w, face_h)
                     elif im_h > self.height or im_w > self.width:
                         assert (
-                            subset.random_crop
+                            subset.random_crop or is_val_subset
                         ), f"image too large, but cropping and bucketing are disabled / 画像サイズが大きいのでface_crop_aug_rangeかrandom_crop、またはbucketを有効にしてください: {image_info.absolute_path} / 图像尺寸过大且未启用裁剪或分桶，请启用 face_crop_aug_range、random_crop 或 bucket: {image_info.absolute_path}"
                         if im_h > self.height:
-                            p = random.randint(0, im_h - self.height)
+                            p = (im_h - self.height) // 2 if is_val_subset else random.randint(0, im_h - self.height)
                             img = img[p : p + self.height]
                         if im_w > self.width:
-                            p = random.randint(0, im_w - self.width)
+                            p = (im_w - self.width) // 2 if is_val_subset else random.randint(0, im_w - self.width)
                             img = img[:, p : p + self.width]
 
                     im_h, im_w = img.shape[0:2]
@@ -2137,7 +2209,7 @@ class BaseDataset(torch.utils.data.Dataset):
                     crop_ltrb = (0, 0, 0, 0)
 
                 # augmentation
-                aug = self.aug_helper.get_augmentor(subset.color_aug)
+                aug = self.aug_helper.get_augmentor(subset.color_aug if not is_val_subset else False)
                 if aug is not None:
                     # augment RGB channels only
                     img_rgb = img[:, :, :3]
@@ -2192,6 +2264,11 @@ class BaseDataset(torch.utils.data.Dataset):
             if image_info.text_encoder_outputs is not None:
                 # cached
                 text_encoder_outputs = image_info.text_encoder_outputs
+            elif image_info.text_encoder_outputs_disk_cache_ref is not None:
+                # on disk shard cache
+                text_encoder_outputs = self.text_encoder_output_caching_strategy.load_outputs_npz(
+                    image_info.text_encoder_outputs_disk_cache_ref
+                )
             elif image_info.text_encoder_outputs_npz is not None:
                 # on disk
                 text_encoder_outputs = self.text_encoder_output_caching_strategy.load_outputs_npz(
@@ -2578,7 +2655,19 @@ class DreamBoothDataset(BaseDataset):
             # The self.is_training_dataset defines the type of dataset, training or validation
             # if self.is_training_dataset is True -> training dataset
             # if self.is_training_dataset is False -> validation dataset
-            if self.validation_split > 0.0:
+
+            # is_val subsets: only appear in the validation dataset, not in training
+            if subset.is_val:
+                if self.is_training_dataset:
+                    img_paths = []
+                    sizes = []
+                # When is_training_dataset is False, keep all images for validation
+                # (no split needed — the entire subset is validation-only)
+                # is_val and is_reg together: reg images are excluded from validation too
+                elif subset.is_reg:
+                    img_paths = []
+                    sizes = []
+            elif self.validation_split > 0.0:
                 # For regularization images we do not want to split this dataset.
                 if subset.is_reg is True:
                     # Skip any validation dataset for regularization images
@@ -2650,6 +2739,16 @@ class DreamBoothDataset(BaseDataset):
         num_reg_images = 0
         reg_infos: List[Tuple[ImageInfo, DreamBoothSubset]] = []
         for subset in subsets:
+            # is_val subsets: skip in training dataset, include only in validation dataset
+            if subset.is_val and self.is_training_dataset:
+                continue
+            # Non-is_val subsets only appear in the validation dataset if validation_split > 0
+            if not subset.is_val and not self.is_training_dataset and self.validation_split == 0.0:
+                continue
+            # Apply static settings for validation subsets to ensure deterministic validation loss
+            if not self.is_training_dataset:
+                apply_validation_subset_static_settings(subset)
+
             num_repeats = subset.num_repeats if self.is_training_dataset else 1
             if num_repeats < 1:
                 logger.warning(
@@ -2724,6 +2823,7 @@ class FineTuningDataset(BaseDataset):
     def __init__(
         self,
         subsets: Sequence[FineTuningSubset],
+        is_training_dataset: bool,
         batch_size: int,
         resolution,
         skip_image_resolution: Optional[Tuple[int, int]],
@@ -2745,6 +2845,9 @@ class FineTuningDataset(BaseDataset):
         self.batch_size = batch_size
         self.size = min(self.width, self.height)  # 短いほう
         self.latents_cache = None
+        self.is_training_dataset = is_training_dataset
+        self.validation_seed = validation_seed
+        self.validation_split = validation_split
 
         self.enable_bucket = enable_bucket
         if self.enable_bucket:
@@ -2769,6 +2872,16 @@ class FineTuningDataset(BaseDataset):
         self.num_reg_images = 0
 
         for subset in subsets:
+            # is_val subsets: only appear in the validation dataset, not in training
+            if subset.is_val and self.is_training_dataset:
+                continue
+            # Non-is_val subsets only appear in the validation dataset if validation_split > 0
+            if not subset.is_val and not self.is_training_dataset and self.validation_split == 0.0:
+                continue
+            # Apply static settings for validation subsets to ensure deterministic validation loss
+            if not self.is_training_dataset:
+                apply_validation_subset_static_settings(subset)
+
             if subset.num_repeats < 1:
                 logger.warning(
                     f"ignore subset with metadata_file='{subset.metadata_file}': num_repeats is less than 1 / num_repeatsが1を下回っているためサブセットを無視します / num_repeats 小于 1，已忽略该子集: {subset.num_repeats}"
@@ -2812,7 +2925,23 @@ class FineTuningDataset(BaseDataset):
             else:
                 raise ValueError(f"no metadata / メタデータファイルがありません / 未找到元数据文件: {subset.metadata_file}")
 
-            if len(metadata_entries) < 1:
+            if subset.is_val:
+                # is_val subset: all entries go to validation dataset, none to training
+                if self.is_training_dataset:
+                    active_metadata_entries = []
+                else:
+                    active_metadata_entries = metadata_entries
+            elif self.validation_split > 0.0:
+                active_metadata_entries = split_train_val_entries(
+                    metadata_entries,
+                    self.is_training_dataset,
+                    self.validation_split,
+                    self.validation_seed,
+                )
+            else:
+                active_metadata_entries = metadata_entries
+
+            if len(active_metadata_entries) < 1:
                 logger.warning(
                     f"ignore subset with '{subset.metadata_file}': no image entries found / 画像に関するデータが見つからないためサブセットを無視します / 元数据中未找到图像条目，已忽略该子集"
                 )
@@ -2822,7 +2951,7 @@ class FineTuningDataset(BaseDataset):
             image_dirs = set()
             if subset.image_dir is not None:
                 image_dirs.add(subset.image_dir)
-            for metadata_entry in metadata_entries:
+            for metadata_entry in active_metadata_entries:
                 image_key = metadata_entry["image_key"]
                 if not os.path.isabs(image_key):
                     assert (
@@ -2843,12 +2972,13 @@ class FineTuningDataset(BaseDataset):
                 npz_paths = sorted(npz_paths, key=lambda item: len(os.path.basename(item)), reverse=True)  # longer paths first
 
             # Match image filename longer to shorter because some images share same prefix
-            metadata_entries_sorted = sorted(metadata_entries, key=lambda item: len(item["image_key"]), reverse=True)
+            metadata_entries_sorted = sorted(active_metadata_entries, key=lambda item: len(item["image_key"]), reverse=True)
 
             # Collect tags and sizes
             tags_list = []
             size_set_from_metadata = 0
             size_set_from_cache_filename = 0
+            num_repeats = subset.num_repeats if self.is_training_dataset else 1
             for img_md in metadata_entries_sorted:
                 image_key = img_md["image_key"]
                 caption = img_md.get("caption")
@@ -2893,7 +3023,7 @@ class FineTuningDataset(BaseDataset):
                 if caption is None:
                     caption = ""
 
-                image_info = ImageInfo(image_key, subset.num_repeats, caption, False, abs_path, subset.caption_dropout_rate)
+                image_info = ImageInfo(image_key, num_repeats, caption, False, abs_path, subset.caption_dropout_rate)
                 image_info.resize_interpolation = (
                     subset.resize_interpolation if subset.resize_interpolation is not None else self.resize_interpolation
                 )
@@ -2915,11 +3045,11 @@ class FineTuningDataset(BaseDataset):
                 )
             if size_set_from_metadata > 0:
                 logger.info(f"set image size from metadata: {size_set_from_metadata}/{len(metadata_entries_sorted)}")
-            self.num_train_images += len(metadata_entries) * subset.num_repeats
+            self.num_train_images += len(active_metadata_entries) * num_repeats
 
             # TODO do not record tag freq when no tag
             self.set_tag_frequency(os.path.basename(subset.metadata_file), tags_list)
-            subset.img_count = len(metadata_entries)
+            subset.img_count = len(active_metadata_entries)
             self.subsets.append(subset)
 
 
@@ -2927,6 +3057,7 @@ class ControlNetDataset(BaseDataset):
     def __init__(
         self,
         subsets: Sequence[ControlNetSubset],
+        is_training_dataset: bool,
         batch_size: int,
         resolution,
         skip_image_resolution: Optional[Tuple[int, int]],
@@ -2978,13 +3109,14 @@ class ControlNetDataset(BaseDataset):
                 subset.caption_suffix,
                 subset.token_warmup_min,
                 subset.token_warmup_step,
+                is_val=subset.is_val,
                 resize_interpolation=subset.resize_interpolation,
             )
             db_subsets.append(db_subset)
 
         self.dreambooth_dataset_delegate = DreamBoothDataset(
             db_subsets,
-            True,
+            is_training_dataset,
             batch_size,
             resolution,
             skip_image_resolution,
@@ -3013,6 +3145,7 @@ class ControlNetDataset(BaseDataset):
         self.resize_interpolation = resize_interpolation
 
         # assert all conditioning data exists
+        active_subset_dirs = {subset.image_dir for subset in self.dreambooth_dataset_delegate.subsets}
         missing_imgs = []
         cond_imgs_with_pair = set()
         for image_key, info in self.dreambooth_dataset_delegate.image_data.items():
@@ -3041,6 +3174,8 @@ class ControlNetDataset(BaseDataset):
 
         extra_imgs = []
         for subset in subsets:
+            if subset.image_dir not in active_subset_dirs:
+                continue
             conditioning_img_paths = glob_images(subset.conditioning_data_dir, "*")
             conditioning_img_paths = [os.path.abspath(p) for p in conditioning_img_paths]  # normalize path
             extra_imgs.extend([p for p in conditioning_img_paths if os.path.splitext(p)[0] not in cond_imgs_with_pair])
@@ -3434,8 +3569,21 @@ def glob_images_pathlib(dir_path, recursive):
 
 
 class MinimalDataset(BaseDataset):
-    def __init__(self, resolution, network_multiplier, debug_dataset=False):
-        super().__init__(resolution, network_multiplier, debug_dataset)
+    def __init__(
+        self,
+        resolution,
+        network_multiplier=1.0,
+        debug_dataset=False,
+        skip_image_resolution=None,
+        resize_interpolation: Optional[str] = None,
+    ):
+        super().__init__(
+            resolution,
+            skip_image_resolution,
+            network_multiplier,
+            debug_dataset,
+            resize_interpolation=resize_interpolation,
+        )
 
         self.num_train_images = 0  # update in subclass
         self.num_reg_images = 0  # update in subclass
@@ -3505,7 +3653,19 @@ def load_arbitrary_dataset(args, tokenizer=None) -> MinimalDataset:
     dataset_class = args.dataset_class.split(".")[-1]
     module = importlib.import_module(module)
     dataset_class = getattr(module, dataset_class)
-    train_dataset_group: MinimalDataset = dataset_class(tokenizer, args.max_token_length, args.resolution, args.debug_dataset)
+    constructor = inspect.signature(dataset_class)
+    supports_args_kw = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD or name == "args"
+        for name, parameter in constructor.parameters.items()
+    )
+    call_kwargs = {"args": args} if supports_args_kw else {}
+    train_dataset_group: MinimalDataset = dataset_class(
+        tokenizer,
+        args.max_token_length,
+        args.resolution,
+        args.debug_dataset,
+        **call_kwargs,
+    )
     return train_dataset_group
 
 

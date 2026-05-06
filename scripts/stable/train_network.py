@@ -35,6 +35,7 @@ import library.train_network_validation_util as train_network_validation_util
 import library.train_resume_util as train_resume_util
 import library.train_runtime_support_util as train_runtime_support_util
 import library.train_network_setup_util as train_network_setup_util
+import library.network_vram_swap_util as network_vram_swap_util
 from lulynx.experimental_core import (
     AutoVramProtectionController,
     AutoVramProtectionRuntimeContext,
@@ -615,7 +616,8 @@ class NetworkTrainer:
     def prepare_unet_with_accelerator(
         self, args: argparse.Namespace, accelerator: Accelerator, unet: torch.nn.Module
     ) -> torch.nn.Module:
-        return accelerator.prepare(unet)
+        prepared_unet = accelerator.prepare(unet)
+        return train_util.compile_training_model_if_enabled(args, prepared_unet, label="training U-Net")
 
     def on_step_start(self, args, accelerator, network, text_encoders, unet, batch, weight_dtype, is_train: bool = True):
         pass
@@ -1016,6 +1018,15 @@ class NetworkTrainer:
         unet = prepared_execution_runtime.unet
         training_model = prepared_execution_runtime.training_model
         unet_weight_dtype = prepared_execution_runtime.unet_weight_dtype
+
+        network_vram_swap_util.maybe_activate_network_vram_swap(
+            args,
+            accelerator,
+            network,
+            optimizer_name,
+            logger,
+            route_label="Network training",
+        )
 
         def build_train_state_payload():
             mixed_resolution_phase_start_epoch = int(getattr(args, "mixed_resolution_phase_start_epoch", 0) or 0)
@@ -1556,6 +1567,14 @@ def setup_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="[EXPERIMENTAL] enable offloading of tensors to CPU during checkpointing for U-Net or DiT, if supported"
         " / 勾配チェックポイント時にテンソルをCPUにオフロードする（U-NetまたはDiTのみ、サポートされている場合）",
+    )
+    parser.add_argument(
+        "--vram_swap_to_ram",
+        action="store_true",
+        help="[EXPERIMENTAL] keep native adapter/network weights on CPU RAM and move them to the runtime device on demand during forward. "
+        "Currently intended for supported native LoRA routes only, and not recommended together with bitsandbytes/paged optimizers or multi-process training."
+        " / 実験機能：原生适配器/网络权重常驻 CPU RAM，前向时按需拉回训练设备。当前仅面向受支持的原生 LoRA 路线，"
+        "不建议与 bitsandbytes/paged 优化器或多进程训练同时使用。",
     )
     parser.add_argument(
         "--no_metadata", action="store_true", help="do not save metadata in output model / メタデータを出力先モデルに保存しない"

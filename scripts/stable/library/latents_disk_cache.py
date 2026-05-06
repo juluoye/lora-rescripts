@@ -77,10 +77,16 @@ def build_safetensors_shard_stem(
     flip_aug: bool,
     alpha_mask: bool,
     unique_suffix: Optional[str] = None,
+    sequence_no: Optional[int] = None,
+    image_count: Optional[int] = None,
 ) -> str:
     suffix = unique_suffix or f"{time.time_ns()}_{os.getpid()}"
+    sequence_label = f"no{max(1, int(sequence_no or 1)):04d}"
+    image_count_label = f"{max(1, int(image_count or 1))}imgs"
     return (
-        f"bucket_{int(bucket_reso[0])}x{int(bucket_reso[1])}"
+        f"{sequence_label}"
+        f"__{image_count_label}"
+        f"__bucket_{int(bucket_reso[0])}x{int(bucket_reso[1])}"
         f"__flip{1 if flip_aug else 0}"
         f"__alpha{1 if alpha_mask else 0}"
         f"__part_{suffix}"

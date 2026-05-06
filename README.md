@@ -18,7 +18,7 @@
 
 _✨ Enjoy Stable Diffusion Train！ ✨_
 
-**v1.5.9**
+**v1.6.0**
 
 Fork from 秋葉 `aaaki/lora-scripts`  
 Modify By `Lulynx`
@@ -260,6 +260,7 @@ This project stands on the work of multiple open-source communities. Respect and
 - [Akegarasu/lora-scripts](https://github.com/Akegarasu/lora-scripts): earlier foundation of the script-first and GUI workflow.
 - [kohya-ss/sd-scripts](https://github.com/kohya-ss/sd-scripts): core training backend used by this project.
 - [kozistr/pytorch_optimizer](https://github.com/kozistr/pytorch_optimizer): optimizer and scheduler collection used for the extended optimizer/scheduler options in this project.
+- [67372a/LoRA_Easy_Training_Scripts](https://github.com/67372a/LoRA_Easy_Training_Scripts): reference project for several advanced training-route ideas explored and adapted in this repository.
 
 ## Acknowledgements
 

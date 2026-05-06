@@ -266,9 +266,11 @@ def train(args):
             unet, text_encoder, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
                 unet, text_encoder, optimizer, train_dataloader, lr_scheduler
             )
+            unet = train_util.compile_training_model_if_enabled(args, unet, label="DreamBooth U-Net")
             training_models = [unet, text_encoder]
         else:
             unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(unet, optimizer, train_dataloader, lr_scheduler)
+            unet = train_util.compile_training_model_if_enabled(args, unet, label="DreamBooth U-Net")
             training_models = [unet]
 
     if not train_text_encoder:
@@ -417,6 +419,15 @@ def train(args):
 
                 huber_c = train_util.get_huber_threshold_if_needed(args, timesteps, noise_scheduler)
                 loss = train_util.conditional_loss(noise_pred.float(), target.float(), args.loss_type, "none", huber_c)
+                loss = train_util.apply_wavelet_loss(
+                    loss,
+                    noise_pred,
+                    target,
+                    enabled=bool(getattr(args, "wavelet_loss_enabled", False)),
+                    weight=float(getattr(args, "wavelet_loss_weight", 0.0) or 0.0),
+                    levels=max(1, int(getattr(args, "wavelet_loss_levels", 1) or 1)),
+                    approx_weight=float(getattr(args, "wavelet_loss_approx_weight", 0.0) or 0.0),
+                )
                 if args.masked_loss or ("alpha_masks" in batch and batch["alpha_masks"] is not None):
                     loss = apply_masked_loss(loss, batch)
                 loss = loss.mean([1, 2, 3])

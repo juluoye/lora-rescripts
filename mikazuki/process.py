@@ -107,18 +107,10 @@ def _resolve_accelerate_mixed_precision(config_data: dict) -> str:
 
 
 def _resolve_accelerate_dynamo_backend(config_data: dict) -> str:
-    if not _flag_enabled(config_data.get("torch_compile"), default=False):
-        return "no"
-
-    if _flag_enabled(config_data.get("deepspeed"), default=False):
-        return "no"
-    if _flag_enabled(config_data.get("sdxl_fixed_block_swap"), default=False):
-        return "no"
-    if _flag_enabled(config_data.get("sdxl_component_cpu_residency"), default=False):
-        return "no"
-
-    dynamo_backend = str(config_data.get("dynamo_backend", "inductor") or "inductor").strip().lower()
-    return dynamo_backend if dynamo_backend in ACCELERATE_DYNAMO_BACKEND_CHOICES else "inductor"
+    # Training runtime now prefers local model-level torch.compile instead of
+    # Accelerate-wide dynamo so startup initialization is not compiled together
+    # with the whole training stack.
+    return "no"
 
 
 PYTORCH_ALLOC_CONF_ENV = "PYTORCH_ALLOC_CONF"

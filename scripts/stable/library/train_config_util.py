@@ -165,6 +165,7 @@ SS_METADATA_KEY_NETWORK_MODULE = "ss_network_module"
 SS_METADATA_KEY_NETWORK_DIM = "ss_network_dim"
 SS_METADATA_KEY_NETWORK_ALPHA = "ss_network_alpha"
 SS_METADATA_KEY_NETWORK_ARGS = "ss_network_args"
+SS_METADATA_KEY_TRAINING_ALGO = "ss_training_algo"
 
 SS_METADATA_MINIMUM_KEYS = [
     SS_METADATA_KEY_V2,
@@ -173,6 +174,7 @@ SS_METADATA_MINIMUM_KEYS = [
     SS_METADATA_KEY_NETWORK_DIM,
     SS_METADATA_KEY_NETWORK_ALPHA,
     SS_METADATA_KEY_NETWORK_ARGS,
+    SS_METADATA_KEY_TRAINING_ALGO,
 ]
 
 
@@ -184,11 +186,23 @@ def build_minimum_network_metadata(
     network_alpha: str,
     network_args: Optional[dict],
 ):
+    def _metadata_boolish(value) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        if isinstance(value, (int, float)):
+            return bool(value)
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    normalized_network_module = str(network_module or "").strip().lower()
+
     # old LoRA doesn't have base_model
     metadata = {
         SS_METADATA_KEY_NETWORK_MODULE: network_module,
         SS_METADATA_KEY_NETWORK_DIM: network_dim,
         SS_METADATA_KEY_NETWORK_ALPHA: network_alpha,
+        "ss_training_network_module": network_module,
     }
     if v2 is not None:
         metadata[SS_METADATA_KEY_V2] = v2
@@ -196,6 +210,35 @@ def build_minimum_network_metadata(
         metadata[SS_METADATA_KEY_BASE_MODEL_VERSION] = base_model
     if network_args is not None:
         metadata[SS_METADATA_KEY_NETWORK_ARGS] = json.dumps(network_args)
+        metadata["ss_training_network_args"] = json.dumps(network_args)
+        inferred_training_algo = network_args.get("algo")
+        if inferred_training_algo is not None:
+            metadata[SS_METADATA_KEY_TRAINING_ALGO] = str(inferred_training_algo)
+            metadata["ss_network_type"] = str(inferred_training_algo)
+            if str(network_module or "").strip().lower() == "lycoris.kohya":
+                metadata["ss_lycoris_algo"] = str(inferred_training_algo)
+                metadata["ss_training_lycoris_algo"] = str(inferred_training_algo)
+        if str(network_module or "").strip().lower() == "lycoris.kohya":
+            metadata["ss_training_is_lycoris"] = True
+            metadata.setdefault("ss_network_type", "lycoris")
+        if "dora_wd" in network_args:
+            metadata["ss_dora_enabled"] = _metadata_boolish(network_args.get("dora_wd"))
+        if "train_norm" in network_args:
+            metadata["ss_train_norm_enabled"] = _metadata_boolish(network_args.get("train_norm"))
+    elif normalized_network_module.startswith("networks.lora_fa"):
+        metadata["ss_network_type"] = "lora_fa"
+    elif normalized_network_module.startswith("networks.vera"):
+        metadata["ss_network_type"] = "vera"
+    elif normalized_network_module.startswith("networks.tlora"):
+        metadata["ss_network_type"] = "tlora"
+    elif normalized_network_module.startswith("networks.dylora"):
+        metadata["ss_network_type"] = "dylora"
+    elif normalized_network_module.startswith("networks.oft"):
+        metadata["ss_network_type"] = "oft"
+    elif normalized_network_module.startswith("networks.lokr"):
+        metadata["ss_network_type"] = "lokr"
+    elif normalized_network_module.startswith("networks.lora"):
+        metadata["ss_network_type"] = "lora"
     return metadata
 
 
@@ -1036,6 +1079,7 @@ __all__ = [
     'SS_METADATA_KEY_NETWORK_DIM',
     'SS_METADATA_KEY_NETWORK_ALPHA',
     'SS_METADATA_KEY_NETWORK_ARGS',
+    'SS_METADATA_KEY_TRAINING_ALGO',
     'SS_METADATA_MINIMUM_KEYS',
     'load_metadata_from_safetensors',
     'resolve_attention_backend',

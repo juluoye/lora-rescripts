@@ -109,11 +109,17 @@ MODEL_SIGNATURE = [
 
 TRAINER_ALLOWED_MODEL_TYPES = {
     "sd-lora": [ModelType.SD15, ModelType.SD2],
+    "sd-ileco": [ModelType.SD15, ModelType.SD2],
+    "sd-addift": [ModelType.SD15, ModelType.SD2],
+    "sd-multi-addift": [ModelType.SD15, ModelType.SD2],
     "sd-dreambooth": [ModelType.SD15, ModelType.SD2],
     "sd-controlnet": [ModelType.SD15, ModelType.SD2],
     "sd-textual-inversion": [ModelType.SD15, ModelType.SD2],
     "sd-textual-inversion-xti": [ModelType.SD15, ModelType.SD2],
     "sdxl-lora": [ModelType.SDXL],
+    "sdxl-ileco": [ModelType.SDXL],
+    "sdxl-addift": [ModelType.SDXL],
+    "sdxl-multi-addift": [ModelType.SDXL],
     "sdxl-finetune": [ModelType.SDXL],
     "sdxl-controlnet": [ModelType.SDXL],
     "sdxl-controlnet-lllite": [ModelType.SDXL],
@@ -127,6 +133,9 @@ TRAINER_ALLOWED_MODEL_TYPES = {
     "lumina-finetune": [ModelType.LUMINA],
     "hunyuan-image-lora": [ModelType.HUNYUAN_IMAGE],
     "anima-lora": [ModelType.ANIMA],
+    "anima-ileco": [ModelType.ANIMA],
+    "anima-addift": [ModelType.ANIMA],
+    "anima-multi-addift": [ModelType.ANIMA],
     "anima-finetune": [ModelType.ANIMA],
 }
 
@@ -135,6 +144,9 @@ ALLOW_UNKNOWN_MODEL_TYPE_TRAINERS = {
     "lumina-finetune",
     "hunyuan-image-lora",
     "anima-lora",
+    "anima-ileco",
+    "anima-addift",
+    "anima-multi-addift",
     "anima-finetune",
     "newbie-lora",
 }

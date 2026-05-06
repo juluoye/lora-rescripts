@@ -29,6 +29,8 @@ from library import (
     config_util,
     flux_train_utils,
     huggingface_util,
+    full_bf16_stochastic_util,
+    network_vram_swap_util,
     qwen_image_autoencoder_kl,
     sd3_train_utils,
     strategy_anima,
@@ -796,6 +798,15 @@ class AnimaNetworkTrainer:
         with (profiler.step_section("loss") if profiler is not None else nullcontext()):
             huber_c = train_util.get_huber_threshold_if_needed(args, timesteps, None)
             loss = train_util.conditional_loss(model_pred.float(), target.float(), args.loss_type, "none", huber_c)
+            loss = train_util.apply_wavelet_loss(
+                loss,
+                model_pred,
+                target,
+                enabled=bool(getattr(args, "wavelet_loss_enabled", False)),
+                weight=float(getattr(args, "wavelet_loss_weight", 0.0) or 0.0),
+                levels=max(1, int(getattr(args, "wavelet_loss_levels", 1) or 1)),
+                approx_weight=float(getattr(args, "wavelet_loss_approx_weight", 0.0) or 0.0),
+            )
             if weighting is not None:
                 loss = loss * weighting
             if args.masked_loss or ("alpha_masks" in batch and batch["alpha_masks"] is not None):
@@ -816,12 +827,13 @@ class AnimaNetworkTrainer:
             unet.enable_gradient_checkpointing(unsloth_offload=True)
 
         if not self.is_swapping_blocks:
-            return accelerator.prepare(unet)
+            prepared_unet = accelerator.prepare(unet)
+            return train_util.compile_training_model_if_enabled(args, prepared_unet, label="Anima DiT")
 
         model = accelerator.prepare(unet, device_placement=[False])
         accelerator.unwrap_model(model).move_to_device_except_swap_blocks(accelerator.device)
         accelerator.unwrap_model(model).prepare_block_swap_before_forward()
-        return model
+        return train_util.compile_training_model_if_enabled(args, model, label="Anima DiT")
 
     def all_reduce_network(self, accelerator, network):
         for param in network.parameters():
@@ -1302,6 +1314,14 @@ class AnimaNetworkTrainer:
         qwen3_text_encoder = text_encoders[0] if len(text_encoders) > 0 else None
         text_encoder = text_encoders
         accelerator.unwrap_model(network).prepare_grad_etc(text_encoder, dit)
+        network_vram_swap_util.maybe_activate_network_vram_swap(
+            args,
+            accelerator,
+            network,
+            optimizer_name,
+            logger,
+            route_label="Anima LoRA",
+        )
 
         if not cache_latents:
             vae.requires_grad_(False)
@@ -1311,6 +1331,11 @@ class AnimaNetworkTrainer:
 
         if args.full_fp16:
             train_util.patch_accelerator_for_fp16_training(accelerator)
+        elif args.full_bf16:
+            full_bf16_stochastic_util.activate_training_model_grads_if_needed(
+                args,
+                optimizer=optimizer,
+            )
 
         steps_from_state = None
 
@@ -1785,10 +1810,20 @@ class AnimaNetworkTrainer:
 
                             with anima_step_profiler.step_section("optimizer_step"):
                                 if accelerator.sync_gradients:
+                                    full_bf16_optimizer = full_bf16_stochastic_util.unwrap_full_bf16_optimizer(optimizer)
+                                    if full_bf16_optimizer is not None:
+                                        full_bf16_optimizer.sync_model_grads_to_master()
                                     self.all_reduce_network(accelerator, network)
+                                    if full_bf16_optimizer is not None:
+                                        full_bf16_stochastic_util.sync_master_grads_to_model_if_needed(optimizer)
                                     if args.max_grad_norm != 0.0:
-                                        params_to_clip = accelerator.unwrap_model(network).get_trainable_params()
+                                        params_to_clip = full_bf16_stochastic_util.get_params_for_grad_clipping(
+                                            accelerator.unwrap_model(network).get_trainable_params(),
+                                            optimizer,
+                                        )
                                         accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+                                        if full_bf16_optimizer is not None:
+                                            full_bf16_stochastic_util.sync_master_grads_to_model_if_needed(optimizer)
 
                                 emit_before_optimizer_step_event(
                                     route="anima",

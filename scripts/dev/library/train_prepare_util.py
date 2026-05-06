@@ -448,12 +448,15 @@ def resolve_torch_compile_runtime(args: argparse.Namespace) -> tuple[bool, list[
         return False, []
 
     reasons: list[str] = []
+    backend = str(getattr(args, "dynamo_backend", "inductor") or "inductor").strip().lower()
     if _runtime_flag_enabled(getattr(args, "deepspeed", False), default=False):
         reasons.append("deepspeed")
     if _runtime_flag_enabled(getattr(args, "sdxl_fixed_block_swap", False), default=False):
         reasons.append("sdxl_fixed_block_swap")
     if _runtime_flag_enabled(getattr(args, "sdxl_component_cpu_residency", False), default=False):
         reasons.append("sdxl_component_cpu_residency")
+    if os.name == "nt" and bool(torch.cuda.is_available()) and backend in {"inductor", "cudagraphs"}:
+        reasons.append(f"windows_cuda_{backend}_startup_oom_risk")
 
     if reasons:
         return False, reasons

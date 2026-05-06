@@ -130,7 +130,7 @@ def build_attention_backend_summary(torch_module, xformers_info: dict, is_xpu_av
         preferred_backend = "sdpa"
     elif runtime_mode == "rocm-amd" and sdpa_available:
         preferred_backend = "sdpa"
-    elif xformers_info.get("supported"):
+    elif xformers_info.get("verified"):
         preferred_backend = "xformers"
     elif sdpa_available:
         preferred_backend = "sdpa"

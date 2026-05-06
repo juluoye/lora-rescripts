@@ -218,6 +218,7 @@ def test_lumina_latents_caching_strategy():
                 self.bucket_reso = image_size
                 self.resized_size = image_size
                 self.resize_interpolation = "lanczos"
+                self.latents_disk_cache_ref = None
                 # Specify full path to the latents npz file
                 self.latents_npz = os.path.join(tmpdir, f"{os.path.splitext(os.path.basename(path))[0]}_0064x0064_lumina.npz")
 
@@ -226,16 +227,18 @@ def test_lumina_latents_caching_strategy():
         # Call cache_batch_latents
         mock_vae = MockVAE()
         caching_strategy.cache_batch_latents(mock_vae, batch, flip_aug=False, alpha_mask=False, random_crop=False)
+        caching_strategy.finalize_caching()
 
-        # Generate the expected npz path
+        cache_ref = batch[0].latents_disk_cache_ref
         npz_path = caching_strategy.get_latents_npz_path(abs_path, image_size)
+        cache_path_or_ref = cache_ref if cache_ref is not None else npz_path
 
-        # Verify the file was created
-        assert os.path.exists(npz_path), f"NPZ file not created at {npz_path}"
-
-        # Verify is_disk_cached_latents_expected
-        assert caching_strategy.is_disk_cached_latents_expected(image_size, npz_path, False, False)
+        if cache_ref is not None:
+            assert os.path.exists(cache_ref.path), f"Latents cache shard not created at {cache_ref.path}"
+        else:
+            assert os.path.exists(npz_path), f"NPZ file not created at {npz_path}"
+            assert caching_strategy.is_disk_cached_latents_expected(image_size, npz_path, False, False)
 
         # Test loading from disk
-        loaded_data = caching_strategy.load_latents_from_disk(npz_path, image_size)
+        loaded_data = caching_strategy.load_latents_from_disk(cache_path_or_ref, image_size)
         assert len(loaded_data) == 5  # Check for 5 expected elements

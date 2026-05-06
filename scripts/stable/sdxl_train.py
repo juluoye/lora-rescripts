@@ -511,6 +511,7 @@ def train(args):
         # acceleratorがなんかよろしくやってくれるらしい
         if train_unet:
             unet = accelerator.prepare(unet)
+            unet = train_util.compile_training_model_if_enabled(args, unet, label="SDXL U-Net")
         if train_text_encoder1:
             text_encoder1 = accelerator.prepare(text_encoder1)
         if train_text_encoder2:
@@ -821,6 +822,15 @@ def train(args):
                 ):
                     # do not mean over batch dimension for snr weight or scale v-pred loss
                     loss = train_util.conditional_loss(noise_pred.float(), target.float(), args.loss_type, "none", huber_c)
+                    loss = train_util.apply_wavelet_loss(
+                        loss,
+                        noise_pred,
+                        target,
+                        enabled=bool(getattr(args, "wavelet_loss_enabled", False)),
+                        weight=float(getattr(args, "wavelet_loss_weight", 0.0) or 0.0),
+                        levels=max(1, int(getattr(args, "wavelet_loss_levels", 1) or 1)),
+                        approx_weight=float(getattr(args, "wavelet_loss_approx_weight", 0.0) or 0.0),
+                    )
                     if bool(getattr(args, "contrastive_flow_matching", False)) and bool(getattr(args, "flow_model", False)) and noise_pred.shape[0] > 1:
                         negative_target = target.roll(1, 0)
                         contrastive = torch.nn.functional.mse_loss(

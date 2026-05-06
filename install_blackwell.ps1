@@ -25,7 +25,7 @@ $blackwellRuntimeDirName = $blackwellRuntimeInfo.DirectoryName
 $blackwellRuntimeDir = $blackwellRuntimeInfo.DirectoryPath
 $blackwellPython = Join-Path $blackwellRuntimeDir "python.exe"
 $blackwellMarker = Join-Path $blackwellRuntimeDir ".deps_installed"
-$mainRequiredModules = @("accelerate", "torch", "fastapi", "toml", "transformers", "diffusers", "peft", "torchdiffeq", "timm", "lion_pytorch", "dadaptation", "schedulefree", "prodigyopt", "prodigyplus", "pytorch_optimizer", "tensorboard", "pkg_resources")
+$mainRequiredModules = @("accelerate", "torch", "fastapi", "toml", "transformers", "diffusers", "peft", "torchdiffeq", "timm", "lion_pytorch", "dadaptation", "schedulefree", "prodigyopt", "prodigyplus", "pytorch_optimizer", "tensorboard", "pkg_resources", "triton")
 
 function Test-PipReady {
     param (
@@ -245,6 +245,7 @@ function Get-BlackwellExpectedPackageVersions {
                 Torch = "2.8.0.dev20250501+cu128"
                 TorchVision = "0.22.0.dev20250502+cu128"
                 Xformers = "0.0.31+8fc8ec5a.d20250503"
+                Triton = ""
             }
         }
         "panchovix-20250321" {
@@ -253,6 +254,7 @@ function Get-BlackwellExpectedPackageVersions {
                 Torch = "2.8.0.dev20250320+cu128"
                 TorchVision = "0.22.0.dev20250321+cu128"
                 Xformers = "0.0.30+9a2cd3ef.d20250321"
+                Triton = ""
             }
         }
         default {
@@ -261,6 +263,7 @@ function Get-BlackwellExpectedPackageVersions {
                 Torch = ""
                 TorchVision = ""
                 Xformers = ""
+                Triton = ""
             }
         }
     }
@@ -282,8 +285,10 @@ result = {
     "torch_version": "",
     "torchvision_version": "",
     "xformers_version": "",
+    "triton_version": "",
     "cuda_available": False,
     "torch_cuda_runtime": "",
+    "triton_import_ok": False,
     "xformers_import_ok": False,
     "xformers_ops_ok": False,
     "xformers_error": "",
@@ -304,6 +309,22 @@ try:
     result["torchvision_version"] = md.version("torchvision")
 except Exception:
     result["torchvision_version"] = ""
+
+try:
+    result["triton_version"] = md.version("triton-windows")
+except Exception:
+    try:
+        result["triton_version"] = md.version("triton")
+    except Exception:
+        result["triton_version"] = ""
+
+try:
+    import triton  # noqa: F401
+    result["triton_import_ok"] = True
+except Exception as exc:
+    result["xformers_error"] = f"triton import failed: {exc}"
+    print(json.dumps(result))
+    raise SystemExit(0)
 
 try:
     result["xformers_version"] = md.version("xformers")
@@ -347,6 +368,12 @@ function Assert-BlackwellRuntimeReady {
     if ($Expected.TorchVision -and $probe.torchvision_version -ne $Expected.TorchVision) {
         $issues.Add("TorchVision is $($probe.torchvision_version), expected $($Expected.TorchVision)") | Out-Null
     }
+    if ($Expected.Triton -and $probe.triton_version -ne $Expected.Triton) {
+        $issues.Add("triton is $($probe.triton_version), expected $($Expected.Triton)") | Out-Null
+    }
+    if (-not $probe.triton_import_ok) {
+        $issues.Add("triton import failed") | Out-Null
+    }
     if ($RequireXformers -and $Expected.Xformers -and $probe.xformers_version -ne $Expected.Xformers) {
         $issues.Add("xformers is $($probe.xformers_version), expected $($Expected.Xformers)") | Out-Null
     }
@@ -362,7 +389,7 @@ function Assert-BlackwellRuntimeReady {
         throw "Blackwell runtime verification failed: $($issues -join '; ')"
     }
 
-    Write-Host -ForegroundColor Green "Blackwell runtime versions: Python $($probe.python_version); Torch $($probe.torch_version); TorchVision $($probe.torchvision_version); xformers $($probe.xformers_version)"
+    Write-Host -ForegroundColor Green "Blackwell runtime versions: Python $($probe.python_version); Torch $($probe.torch_version); TorchVision $($probe.torchvision_version); Triton $($probe.triton_version); xformers $($probe.xformers_version)"
     Write-Host -ForegroundColor Green "CUDA available: $($probe.cuda_available); runtime: $($probe.torch_cuda_runtime)"
 }
 
@@ -492,9 +519,99 @@ else {
         "--extra-index-url", "https://download.pytorch.org/whl/cu128"
     )
 }
+
+function Get-PythonRuntimeVersionInfo {
+    param (
+        [string]$PythonExe
+    )
+
+    $script = @"
+import json
+import sys
+
+print(json.dumps({
+    "version": sys.version.split()[0],
+    "python_minor": f"{sys.version_info.major}.{sys.version_info.minor}",
+    "abi_tag": f"cp{sys.version_info.major}{sys.version_info.minor}",
+}))
+"@
+
+    return Invoke-PythonJsonProbe -PythonExe $PythonExe -ScriptContent $script
+}
+
+function Ensure-EmbeddablePythonDevFiles {
+    param (
+        [string]$PythonExe,
+        [string]$RuntimeDir
+    )
+
+    $versionInfo = Get-PythonRuntimeVersionInfo -PythonExe $PythonExe
+    if (-not $versionInfo) {
+        throw "Could not determine Python runtime version for $RuntimeDir."
+    }
+
+    $pythonLibName = "python$($versionInfo.abi_tag).lib"
+    $runtimeIncludeDir = Join-Path $RuntimeDir "Include"
+    $runtimeLibDir = Join-Path $RuntimeDir "libs"
+    $runtimePythonHeader = Join-Path $runtimeIncludeDir "Python.h"
+    $runtimePythonLib = Join-Path $runtimeLibDir $pythonLibName
+
+    if ((Test-Path $runtimePythonHeader) -and (Test-Path $runtimePythonLib)) {
+        Write-Host -ForegroundColor Green "Python dev files already present for $blackwellRuntimeDirName."
+        return
+    }
+
+    $devCacheRoot = Join-Path $repoRoot ".python-dev-cache"
+    $nugetVersion = $versionInfo.version
+    $packageFile = Join-Path $devCacheRoot "python.$nugetVersion.nupkg"
+    $extractDir = Join-Path $devCacheRoot "python-$nugetVersion"
+    $packageUrl = "https://www.nuget.org/api/v2/package/python/$nugetVersion"
+
+    if (-not (Test-Path $devCacheRoot)) {
+        New-Item -ItemType Directory -Path $devCacheRoot -Force | Out-Null
+    }
+
+    if (-not (Test-Path $packageFile)) {
+        Write-Host -ForegroundColor Yellow "Downloading CPython dev package for $nugetVersion..."
+        Invoke-WebRequest -Uri $packageUrl -OutFile $packageFile
+    }
+
+    $sourceIncludeDir = Join-Path $extractDir "tools\include"
+    $sourcePythonLib = Join-Path $extractDir "tools\libs\$pythonLibName"
+
+    if (-not (Test-Path $sourceIncludeDir) -or -not (Test-Path $sourcePythonLib)) {
+        if (Test-Path $extractDir) {
+            Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        Write-Host -ForegroundColor Yellow "Extracting CPython dev package for $nugetVersion..."
+        $zipPackageFile = Join-Path $devCacheRoot "python.$nugetVersion.zip"
+        Copy-Item -LiteralPath $packageFile -Destination $zipPackageFile -Force
+        Expand-Archive -LiteralPath $zipPackageFile -DestinationPath $extractDir -Force
+    }
+
+    if (-not (Test-Path $sourceIncludeDir) -or -not (Test-Path $sourcePythonLib)) {
+        throw "Downloaded CPython dev package does not contain the expected Include or $pythonLibName files."
+    }
+
+    if (-not (Test-Path $runtimeIncludeDir)) {
+        New-Item -ItemType Directory -Path $runtimeIncludeDir -Force | Out-Null
+    }
+    if (-not (Test-Path $runtimeLibDir)) {
+        New-Item -ItemType Directory -Path $runtimeLibDir -Force | Out-Null
+    }
+
+    Copy-Item -Path (Join-Path $sourceIncludeDir "*") -Destination $runtimeIncludeDir -Recurse -Force
+    Copy-Item -LiteralPath $sourcePythonLib -Destination $runtimePythonLib -Force
+    Write-Host -ForegroundColor Green "Provisioned Python dev files into $blackwellRuntimeDirName."
+}
 $torchInstallArgs = @($torchInstallArgs[0..4]) + @(Add-MikazukiRuntimeCacheArgs -PipArgs $torchInstallArgs[5..($torchInstallArgs.Count - 1)] -RepoRoot $repoRoot -RuntimeId "blackwell" -ItemIds @("torch_stack"))
 if ($optionalTorchaudioArgs) {
     $optionalTorchaudioArgs = @($optionalTorchaudioArgs[0..5]) + @(Add-MikazukiRuntimeCacheArgs -PipArgs $optionalTorchaudioArgs[6..($optionalTorchaudioArgs.Count - 1)] -RepoRoot $repoRoot -RuntimeId "blackwell" -ItemIds @("torch_stack"))
+}
+
+Invoke-Step "Provisioning Python dev files required by Triton..." {
+    Ensure-EmbeddablePythonDevFiles -PythonExe $blackwellPython -RuntimeDir $blackwellRuntimeDir
 }
 
 Invoke-Step "Upgrading pip tooling for Blackwell environment..." {
@@ -521,6 +638,17 @@ Invoke-Step "Installing project dependencies into $blackwellRuntimeDirName..." {
     )
     $requirementArgs = Add-MikazukiRuntimeCacheArgs -PipArgs $requirementArgs -RepoRoot $repoRoot -RuntimeId "blackwell" -ItemIds @("requirements")
     & $blackwellPython -m pip install @requirementArgs
+}
+
+Invoke-Step "Installing Triton runtime for $blackwellRuntimeDirName..." {
+    $tritonArgs = @(
+        "--upgrade",
+        "--no-warn-script-location",
+        "--prefer-binary",
+        "triton-windows==3.6.0.post26"
+    )
+    $tritonArgs = Add-MikazukiRuntimeCacheArgs -PipArgs $tritonArgs -RepoRoot $repoRoot -RuntimeId "blackwell" -ItemIds @("triton_runtime_default")
+    & $blackwellPython -m pip install @tritonArgs
 }
 
 Invoke-Step "Re-enabling pkg_resources compatibility for TensorBoard in $blackwellRuntimeDirName..." {

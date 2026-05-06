@@ -78,7 +78,7 @@ def resolve_anima_runtime_attention_backend(gpu_ids=None) -> str:
         return "torch"
 
     xformers_info = get_xformers_status(gpu_ids)
-    if xformers_info.get("selected_supported", xformers_info.get("supported", False)):
+    if xformers_info.get("selected_verified", xformers_info.get("verified", False)):
         return "xformers"
     return "torch"
 

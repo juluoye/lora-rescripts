@@ -14,6 +14,7 @@ from transformers import CLIPTextModel
 import numpy as np
 import torch
 import re
+from library import network_vram_swap_util
 from library.utils import setup_logging
 setup_logging()
 import logging
@@ -104,6 +105,33 @@ class LoRAModule(torch.nn.Module):
         self.org_module.forward = self.forward
         del self.org_module
 
+    def _forward_delta(self, x):
+        if network_vram_swap_util.module_uses_vram_swap(self):
+            lx = network_vram_swap_util.forward_supported_module(self.lora_down, x)
+        else:
+            lx = self.lora_down(x)
+
+        if self.dropout is not None and self.training:
+            lx = torch.nn.functional.dropout(lx, p=self.dropout)
+
+        if self.rank_dropout is not None and self.training:
+            mask = torch.rand((lx.size(0), self.lora_dim), device=lx.device) > self.rank_dropout
+            if len(lx.size()) == 3:
+                mask = mask.unsqueeze(1)
+            elif len(lx.size()) == 4:
+                mask = mask.unsqueeze(-1).unsqueeze(-1)
+            lx = lx * mask
+            scale = self.scale * (1.0 / (1.0 - self.rank_dropout))
+        else:
+            scale = self.scale
+
+        if network_vram_swap_util.module_uses_vram_swap(self):
+            lx = network_vram_swap_util.forward_supported_module(self.lora_up, lx)
+        else:
+            lx = self.lora_up(lx)
+
+        return lx * self.multiplier * scale
+
     def forward(self, x):
         org_forwarded = self.org_forward(x)
 
@@ -112,30 +140,7 @@ class LoRAModule(torch.nn.Module):
             if torch.rand(1) < self.module_dropout:
                 return org_forwarded
 
-        lx = self.lora_down(x)
-
-        # normal dropout
-        if self.dropout is not None and self.training:
-            lx = torch.nn.functional.dropout(lx, p=self.dropout)
-
-        # rank dropout
-        if self.rank_dropout is not None and self.training:
-            mask = torch.rand((lx.size(0), self.lora_dim), device=lx.device) > self.rank_dropout
-            if len(lx.size()) == 3:
-                mask = mask.unsqueeze(1)  # for Text Encoder
-            elif len(lx.size()) == 4:
-                mask = mask.unsqueeze(-1).unsqueeze(-1)  # for Conv2d
-            lx = lx * mask
-
-            # scaling for rank dropout: treat as if the rank is changed
-            # maskから計算することも考えられるが、augmentation的な効果を期待してrank_dropoutを用いる
-            scale = self.scale * (1.0 / (1.0 - self.rank_dropout))  # redundant for readability
-        else:
-            scale = self.scale
-
-        lx = self.lora_up(lx)
-
-        return org_forwarded + lx * self.multiplier * scale
+        return org_forwarded + self._forward_delta(x)
 
 
 class LoRAInfModule(LoRAModule):
@@ -240,7 +245,7 @@ class LoRAInfModule(LoRAModule):
 
     def default_forward(self, x):
         # logger.info("default_forward", self.lora_name, x.size())
-        return self.org_forward(x) + self.lora_up(self.lora_down(x)) * self.multiplier * self.scale
+        return self.org_forward(x) + self._forward_delta(x)
 
     def forward(self, x):
         if not self.enabled:
@@ -279,7 +284,7 @@ class LoRAInfModule(LoRAModule):
             return self.default_forward(x)
 
         # apply mask for LoRA result
-        lx = self.lora_up(self.lora_down(x)) * self.multiplier * self.scale
+        lx = self._forward_delta(x)
         mask = self.get_mask_for_x(lx)
         # logger.info("regional", self.lora_name, self.network.sub_prompt_index, lx.size(), mask.size())
         lx = lx * mask
@@ -323,7 +328,7 @@ class LoRAInfModule(LoRAModule):
 
         # apply sub prompt of X
         lx = x[emb_idx :: self.network.num_sub_prompts]
-        lx = self.lora_up(self.lora_down(lx)) * self.multiplier * self.scale
+        lx = self._forward_delta(lx)
 
         # logger.info("sub_prompt_forward", self.lora_name, x.size(), lx.size(), emb_idx)
 
@@ -343,7 +348,7 @@ class LoRAInfModule(LoRAModule):
 
         # call own LoRA
         x1 = x[self.network.batch_size + self.network.sub_prompt_index :: self.network.num_sub_prompts]
-        lx1 = self.lora_up(self.lora_down(x1)) * self.multiplier * self.scale
+        lx1 = self._forward_delta(x1)
 
         if self.network.is_last_network:
             lx = torch.zeros(

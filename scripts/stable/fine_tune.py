@@ -286,8 +286,10 @@ def train(args):
             unet, text_encoder, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
                 unet, text_encoder, optimizer, train_dataloader, lr_scheduler
             )
+            unet = train_util.compile_training_model_if_enabled(args, unet, label="fine-tune U-Net")
         else:
             unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(unet, optimizer, train_dataloader, lr_scheduler)
+            unet = train_util.compile_training_model_if_enabled(args, unet, label="fine-tune U-Net")
 
     # 実験的機能：勾配も含めたfp16学習を行う　PyTorchにパッチを当ててfp16でのgrad scaleを有効にする
     if args.full_fp16:
@@ -403,9 +405,21 @@ def train(args):
                     target = noise
 
                 huber_c = train_util.get_huber_threshold_if_needed(args, timesteps, noise_scheduler)
-                if args.min_snr_gamma or args.scale_v_pred_loss_like_noise_pred or args.debiased_estimation_loss:
+                wavelet_enabled = bool(getattr(args, "wavelet_loss_enabled", False)) and float(
+                    getattr(args, "wavelet_loss_weight", 0.0) or 0.0
+                ) > 0.0
+                if args.min_snr_gamma or args.scale_v_pred_loss_like_noise_pred or args.debiased_estimation_loss or wavelet_enabled:
                     # do not mean over batch dimension for snr weight or scale v-pred loss
                     loss = train_util.conditional_loss(noise_pred.float(), target.float(), args.loss_type, "none", huber_c)
+                    loss = train_util.apply_wavelet_loss(
+                        loss,
+                        noise_pred,
+                        target,
+                        enabled=wavelet_enabled,
+                        weight=float(getattr(args, "wavelet_loss_weight", 0.0) or 0.0),
+                        levels=max(1, int(getattr(args, "wavelet_loss_levels", 1) or 1)),
+                        approx_weight=float(getattr(args, "wavelet_loss_approx_weight", 0.0) or 0.0),
+                    )
                     loss = loss.mean([1, 2, 3])
 
                     if args.min_snr_gamma:

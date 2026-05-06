@@ -10,6 +10,7 @@ import torch
 
 from library.sdxl_original_unet import SdxlUNet2DConditionModel
 from library.utils import setup_logging
+from library import network_vram_swap_util
 from networks import lora as lora_network
 
 setup_logging()
@@ -156,7 +157,10 @@ class TLoRAModule(lora_network.LoRAModule):
             if torch.rand(1, device=x.device) < self.module_dropout:
                 return org_forwarded
 
-        lx = self.lora_down(x)
+        if network_vram_swap_util.module_uses_vram_swap(self):
+            lx = network_vram_swap_util.forward_supported_module(self.lora_down, x)
+        else:
+            lx = self.lora_down(x)
         tlora_rank_mask, tlora_rank_scale = self._get_tlora_rank_mask_and_scale(lx)
         if tlora_rank_mask is not None:
             lx = lx * tlora_rank_mask
@@ -175,7 +179,10 @@ class TLoRAModule(lora_network.LoRAModule):
         if tlora_rank_scale is not None:
             scale = scale * tlora_rank_scale
 
-        lx = self.lora_up(lx)
+        if network_vram_swap_util.module_uses_vram_swap(self):
+            lx = network_vram_swap_util.forward_supported_module(self.lora_up, lx)
+        else:
+            lx = self.lora_up(lx)
         return org_forwarded + lx * self.multiplier * scale
 
 
