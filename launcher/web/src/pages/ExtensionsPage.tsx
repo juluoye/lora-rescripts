@@ -115,7 +115,7 @@ export function ExtensionsPage() {
             </h3>
             <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
               {isZh
-                ? '这里显示内置界面和社区界面。社区界面支持通过 GitHub 仓库链接直接安装。'
+                ? '管理已安装 UI，可通过 Github 链接安装第三方 UI。'
                 : 'Built-in and community UIs are listed here. Community UIs can be installed directly from GitHub repository URLs.'}
             </p>
           </div>
@@ -196,16 +196,16 @@ export function ExtensionsPage() {
         className="rounded-2xl p-5 space-y-4"
         style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-card)' }}
       >
-        <div>
-          <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
-            {isZh ? '后端插件' : 'Backend Plugins'}
-          </h3>
-          <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-            {isZh
-              ? '这里管理训练器后端的插件开关。'
-              : 'Manage backend plugin enable/disable state here.'}
-          </p>
-        </div>
+          <div>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+              {isZh ? '后端插件' : 'Backend Plugins'}
+            </h3>
+            <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+              {isZh
+                ? '管理后端插件。'
+                : 'Manage backend plugin enable/disable state here.'}
+            </p>
+          </div>
 
         {plugins.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 gap-4" style={{ color: 'var(--text-muted)' }}>

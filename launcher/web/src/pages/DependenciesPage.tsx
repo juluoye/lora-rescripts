@@ -99,8 +99,9 @@ export function DependenciesPage() {
         <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>{t('dependencies_page_desc')}</p>
       </div>
 
-      <div className="rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4" style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-card)' }}>
-        <div className="space-y-1">
+      <div className="rounded-2xl p-4" style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-card)' }}>
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <div className="space-y-1 min-w-0 flex-1">
           <div className="text-sm font-semibold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
             <Gauge size={16} />
             {t('dependencies_progress_title')}
@@ -122,11 +123,7 @@ export function DependenciesPage() {
             />
           </div>
         </div>
-        <div className="flex flex-wrap gap-3 text-xs" style={{ color: 'var(--text-secondary)' }}>
-          <span>{t('dependencies_progress_percent', { percent: String(Math.round(progressPercent)) })}</span>
-          <span>{t('dependencies_speed_label')}: {formatSpeed(cacheProgress?.speedBytesPerSec, language)}</span>
-          <span>{t('dependencies_downloaded_label')}: {formatBytes(cacheProgress?.downloadedBytes || 0, language)}</span>
-          <span>{t('dependencies_eta_label')}: {etaSeconds == null ? t('dependencies_eta_unknown') : t('dependencies_eta_value', { seconds: String(etaSeconds) })}</span>
+        <div className="flex shrink-0 md:pt-7">
           <button
             onClick={() => { void refreshDependencyCacheStates(); }}
             className="btn-interactive px-3 py-2 rounded-lg"
@@ -134,6 +131,13 @@ export function DependenciesPage() {
           >
             {t('btn_refresh')}
           </button>
+        </div>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-3 text-xs" style={{ color: 'var(--text-secondary)' }}>
+          <span>{t('dependencies_progress_percent', { percent: String(Math.round(progressPercent)) })}</span>
+          <span>{t('dependencies_speed_label')}: {formatSpeed(cacheProgress?.speedBytesPerSec, language)}</span>
+          <span>{t('dependencies_downloaded_label')}: {formatBytes(cacheProgress?.downloadedBytes || 0, language)}</span>
+          <span>{t('dependencies_eta_label')}: {etaSeconds == null ? t('dependencies_eta_unknown') : t('dependencies_eta_value', { seconds: String(etaSeconds) })}</span>
         </div>
       </div>
 

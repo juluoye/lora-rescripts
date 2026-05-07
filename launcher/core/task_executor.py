@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -43,6 +44,156 @@ def _now_iso() -> str:
 
 _TASK_LOG_LIMIT = 200
 _TASK_LOG_PERSIST_INTERVAL = 10
+_SIZE_UNITS = {
+    "B": 1,
+    "KB": 1024,
+    "MB": 1024**2,
+    "GB": 1024**3,
+    "TB": 1024**4,
+}
+_DOWNLOAD_PROGRESS_RE = re.compile(
+    r"(?P<done>\d+(?:\.\d+)?)\s*/\s*(?P<total>\d+(?:\.\d+)?)\s*(?P<unit>B|KB|MB|GB|TB)\b",
+    re.IGNORECASE,
+)
+_SPEED_RE = re.compile(
+    r"(?P<speed>\d+(?:\.\d+)?)\s*(?P<unit>B|KB|MB|GB|TB)\s*/s\b",
+    re.IGNORECASE,
+)
+_ETA_RE = re.compile(
+    r"(?:eta[:\s]+)?(?P<eta>\d{1,2}:\d{2}(?::\d{2})?)\b",
+    re.IGNORECASE,
+)
+_INSTALL_SECTION_SPECS = (
+    {
+        "patterns": ("provisioning python dev files",),
+        "key": "dev_files",
+        "phase": "preparing",
+        "label_zh": "准备 Python 开发文件",
+        "label_en": "Preparing Python dev files",
+        "start": 4,
+        "end": 10,
+    },
+    {
+        "patterns": ("upgrading pip tooling",),
+        "key": "pip_tooling",
+        "phase": "install",
+        "label_zh": "升级 pip 工具链",
+        "label_en": "Upgrading pip tooling",
+        "start": 10,
+        "end": 16,
+    },
+    {
+        "patterns": ("installing pytorch and torchvision", "installing pytorch stack"),
+        "key": "torch_stack",
+        "phase": "download",
+        "label_zh": "安装 PyTorch 与 TorchVision",
+        "label_en": "Installing PyTorch and TorchVision",
+        "start": 16,
+        "end": 58,
+    },
+    {
+        "patterns": ("installing xformers",),
+        "key": "xformers",
+        "phase": "download",
+        "label_zh": "安装 xformers",
+        "label_en": "Installing xformers",
+        "start": 58,
+        "end": 70,
+    },
+    {
+        "patterns": ("installing project dependencies",),
+        "key": "requirements",
+        "phase": "install",
+        "label_zh": "安装项目依赖",
+        "label_en": "Installing project dependencies",
+        "start": 70,
+        "end": 84,
+    },
+    {
+        "patterns": ("installing triton runtime",),
+        "key": "triton_runtime",
+        "phase": "install",
+        "label_zh": "安装 Triton 运行时",
+        "label_en": "Installing Triton runtime",
+        "start": 84,
+        "end": 91,
+    },
+    {
+        "patterns": ("re-enabling pkg_resources compatibility",),
+        "key": "setuptools_compat",
+        "phase": "finalizing",
+        "label_zh": "恢复兼容组件",
+        "label_en": "Restoring compatibility components",
+        "start": 91,
+        "end": 94,
+    },
+    {
+        "patterns": ("verifying triton runtime", "verifying ", "checking runtime", "runtime verification"),
+        "key": "verification",
+        "phase": "finalizing",
+        "label_zh": "校验运行时",
+        "label_en": "Verifying runtime",
+        "start": 94,
+        "end": 98,
+    },
+    {
+        "patterns": ("installing flashattention", "downloading flashattention wheel", "building flashattention"),
+        "key": "flashattention",
+        "phase": "compile",
+        "label_zh": "安装 FlashAttention",
+        "label_en": "Installing FlashAttention",
+        "start": 86,
+        "end": 96,
+    },
+    {
+        "patterns": ("installing sageattention", "building sageattention", "downloading sageattention"),
+        "key": "sageattention",
+        "phase": "compile",
+        "label_zh": "安装 SageAttention",
+        "label_en": "Installing SageAttention",
+        "start": 86,
+        "end": 96,
+    },
+    {
+        "patterns": ("installing spargeattn2", "building spargeattn2", "spas_sage_attn", "local wheel"),
+        "key": "spargeattn2",
+        "phase": "compile",
+        "label_zh": "安装 SpargeAttn2",
+        "label_en": "Installing SpargeAttn2",
+        "start": 84,
+        "end": 96,
+    },
+)
+_INSTALL_SECTION_SPEC_BY_KEY = {str(spec["key"]): spec for spec in _INSTALL_SECTION_SPECS}
+
+
+def _size_to_bytes(value: str, unit: str) -> Optional[int]:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    multiplier = _SIZE_UNITS.get(str(unit or "").upper())
+    if multiplier is None:
+        return None
+    return max(0, int(numeric * multiplier))
+
+
+def _eta_to_seconds(value: str) -> Optional[int]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    parts = text.split(":")
+    try:
+        numbers = [int(part) for part in parts]
+    except ValueError:
+        return None
+    if len(numbers) == 2:
+        minutes, seconds = numbers
+        return max(0, minutes * 60 + seconds)
+    if len(numbers) == 3:
+        hours, minutes, seconds = numbers
+        return max(0, hours * 3600 + minutes * 60 + seconds)
+    return None
 
 _RUNTIME_BOOTSTRAP_SITE_PACKAGE_PATTERNS = (
     "pip",
@@ -934,7 +1085,7 @@ class LauncherTaskExecutor:
                 )
                 success = run_install_plan(
                     plan,
-                    log_callback=lambda line: self._append_task_log_line(line, event_name="install_log"),
+                    output_callback=lambda line, progress: self._handle_install_output_line(line, progress=progress),
                     stage_callback=lambda command, index, total: (
                         self._record_command_started(
                             command=command,
@@ -950,8 +1101,13 @@ class LauncherTaskExecutor:
                                 "runtime_id": runtime_id,
                                 "script_index": index,
                                 "script_total": total,
+                                "progress_phase": "preparing",
+                                "progress_phase_label_zh": "准备脚本",
+                                "progress_phase_label_en": "Preparing script",
                                 "command_label_zh": command.label_zh,
                                 "command_label_en": command.label_en,
+                                "progress_item_label_zh": command.label_zh,
+                                "progress_item_label_en": command.label_en,
                                 "command_preview": command.to_public_dict().get("command_preview"),
                             },
                         ),
@@ -1528,6 +1684,191 @@ class LauncherTaskExecutor:
         if self._task_log_dirty_count >= _TASK_LOG_PERSIST_INTERVAL:
             self._task_log_dirty_count = 0
             self._persist_active_task_state()
+
+    def _update_task_details(self, patch: Dict[str, Any]) -> None:
+        if self._task_state.get("task_type") == "idle":
+            return
+        current_details = dict(self._task_state.get("details") or {})
+        next_details = dict(current_details)
+        changed = False
+        for key, value in patch.items():
+            if next_details.get(key) != value:
+                next_details[key] = value
+                changed = True
+        if not changed:
+            return
+        self._task_state["details"] = next_details
+        self._task_state["updated_at"] = _now_iso()
+        self._emit_task_snapshot(include_stage_event=False)
+        self._persist_active_task_state()
+
+    def _parse_install_progress_patch(self, line: str) -> Optional[Dict[str, Any]]:
+        stripped = str(line or "").strip()
+        lowered = stripped.lower()
+        if not stripped:
+            return None
+
+        patch: Dict[str, Any] = {}
+        current_details = dict(self._task_state.get("details") or {})
+
+        for spec in _INSTALL_SECTION_SPECS:
+            if any(pattern in lowered for pattern in spec["patterns"]):
+                patch.update(
+                    {
+                        "progress_section_key": spec["key"],
+                        "progress_section_start_percent": spec["start"],
+                        "progress_section_end_percent": spec["end"],
+                        "progress_phase": spec["phase"],
+                        "progress_phase_label_zh": spec["label_zh"],
+                        "progress_phase_label_en": spec["label_en"],
+                        "progress_item_label_zh": stripped,
+                        "progress_item_label_en": stripped,
+                        "progress_downloaded_bytes": 0,
+                        "progress_total_bytes": 0,
+                        "progress_speed_bytes_per_sec": 0,
+                        "progress_eta_seconds": None,
+                        "progress_item_percent": 0,
+                    }
+                )
+                break
+
+        download_match = _DOWNLOAD_PROGRESS_RE.search(stripped)
+        if download_match:
+            downloaded_bytes = _size_to_bytes(download_match.group("done"), download_match.group("unit"))
+            total_bytes = _size_to_bytes(download_match.group("total"), download_match.group("unit"))
+            if downloaded_bytes is not None:
+                patch["progress_downloaded_bytes"] = downloaded_bytes
+            if total_bytes is not None:
+                patch["progress_total_bytes"] = total_bytes
+                if downloaded_bytes is not None and total_bytes > 0:
+                    patch["progress_item_percent"] = max(0.0, min(100.0, (downloaded_bytes / total_bytes) * 100.0))
+            patch["progress_phase"] = "download"
+            patch["progress_phase_label_zh"] = "下载中"
+            patch["progress_phase_label_en"] = "Downloading"
+
+            speed_match = _SPEED_RE.search(stripped)
+            if speed_match:
+                speed_bytes = _size_to_bytes(speed_match.group("speed"), speed_match.group("unit"))
+                if speed_bytes is not None:
+                    patch["progress_speed_bytes_per_sec"] = speed_bytes
+            eta_match = _ETA_RE.search(stripped)
+            if eta_match:
+                eta_seconds = _eta_to_seconds(eta_match.group("eta"))
+                if eta_seconds is not None:
+                    patch["progress_eta_seconds"] = eta_seconds
+
+        if stripped.startswith("Downloading "):
+            item_label = stripped[len("Downloading ") :].strip().rstrip(".")
+            patch.update(
+                {
+                    "progress_phase": "download",
+                    "progress_phase_label_zh": "下载中",
+                    "progress_phase_label_en": "Downloading",
+                    "progress_item_label_zh": item_label,
+                    "progress_item_label_en": item_label,
+                }
+            )
+        elif lowered.startswith("collecting "):
+            item_label = stripped[len("Collecting ") :].strip()
+            patch.update(
+                {
+                    "progress_phase": "install",
+                    "progress_phase_label_zh": "安装依赖中",
+                    "progress_phase_label_en": "Installing dependencies",
+                    "progress_item_label_zh": item_label,
+                    "progress_item_label_en": item_label,
+                }
+            )
+        elif lowered.startswith("installing collected packages"):
+            item_label = stripped.partition(":")[2].strip() or stripped
+            patch.update(
+                {
+                    "progress_phase": "install",
+                    "progress_phase_label_zh": "安装依赖中",
+                    "progress_phase_label_en": "Installing dependencies",
+                    "progress_item_label_zh": item_label,
+                    "progress_item_label_en": item_label,
+                }
+            )
+        elif "preparing metadata" in lowered or "installing build dependencies" in lowered or "getting requirements to build wheel" in lowered:
+            patch.update(
+                {
+                    "progress_phase": "install",
+                    "progress_phase_label_zh": "准备安装环境",
+                    "progress_phase_label_en": "Preparing install environment",
+                    "progress_item_label_zh": stripped,
+                    "progress_item_label_en": stripped,
+                }
+            )
+        elif "building wheel for" in lowered or "building wheels for collected packages" in lowered or "running build_ext" in lowered or "ninja:" in lowered or "compiling" in lowered:
+            patch.update(
+                {
+                    "progress_phase": "compile",
+                    "progress_phase_label_zh": "编译中",
+                    "progress_phase_label_en": "Compiling",
+                    "progress_item_label_zh": stripped,
+                    "progress_item_label_en": stripped,
+                }
+            )
+        elif lowered.startswith("successfully installed"):
+            current_section_key = str(current_details.get("progress_section_key") or "").strip()
+            current_section_spec = _INSTALL_SECTION_SPEC_BY_KEY.get(current_section_key)
+            success_phase = "install"
+            if current_section_spec is not None:
+                section_phase = str(current_section_spec.get("phase") or "").strip()
+                if section_phase in {"compile", "finalizing"}:
+                    success_phase = section_phase
+            elif str(current_details.get("progress_phase") or "").strip() in {"compile", "finalizing"}:
+                success_phase = str(current_details.get("progress_phase") or "").strip()
+
+            if success_phase == "compile":
+                phase_label_zh = "编译中"
+                phase_label_en = "Compiling"
+            elif success_phase == "finalizing":
+                phase_label_zh = "收尾中"
+                phase_label_en = "Finalizing"
+            else:
+                phase_label_zh = "安装依赖中"
+                phase_label_en = "Installing dependencies"
+
+            patch.update(
+                {
+                    "progress_phase": success_phase,
+                    "progress_phase_label_zh": phase_label_zh,
+                    "progress_phase_label_en": phase_label_en,
+                    "progress_item_label_zh": stripped,
+                    "progress_item_label_en": stripped,
+                    "progress_eta_seconds": 0,
+                    "progress_item_percent": 100,
+                }
+            )
+        elif lowered.startswith("requirement already satisfied"):
+            patch.update(
+                {
+                    "progress_phase": "install",
+                    "progress_phase_label_zh": "检查依赖中",
+                    "progress_phase_label_en": "Checking dependencies",
+                    "progress_item_label_zh": stripped,
+                    "progress_item_label_en": stripped,
+                }
+            )
+        elif lowered.startswith("using cached "):
+            patch.update(
+                {
+                    "progress_item_label_zh": stripped,
+                    "progress_item_label_en": stripped,
+                }
+            )
+
+        return patch or None
+
+    def _handle_install_output_line(self, line: str, *, progress: bool) -> None:
+        self._append_task_log_line(line, event_name="install_log", progress=progress)
+        if self._task_state.get("task_type") != "install":
+            return
+        patch = self._parse_install_progress_patch(line)
+        if patch:
+            self._update_task_details(patch)
 
     def _build_log_analysis(self) -> Dict[str, Any]:
         lines = list(self._task_log_lines)

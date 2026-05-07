@@ -233,11 +233,98 @@ def build_install_commands(
     return commands
 
 
+def _emit_stream_output(
+    line: str,
+    *,
+    progress: bool,
+    log_callback: Optional[Callable[[str], None]] = None,
+    output_callback: Optional[Callable[[str, bool], None]] = None,
+) -> None:
+    if output_callback is not None:
+        output_callback(line, progress)
+    elif log_callback is not None:
+        log_callback(line)
+
+
+def _read_streamed_output(
+    stream,
+    *,
+    log_callback: Optional[Callable[[str], None]] = None,
+    output_callback: Optional[Callable[[str, bool], None]] = None,
+    encoding: str = "utf-8",
+) -> None:
+    if stream is None:
+        return
+
+    try:
+        fd = stream.fileno()
+    except Exception:
+        return
+
+    def _decode(raw: bytes) -> str:
+        try:
+            return raw.decode(encoding, errors="replace")
+        except Exception:
+            return raw.decode("utf-8", errors="replace")
+
+    buffer = b""
+    while True:
+        try:
+            chunk = os.read(fd, 8192)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buffer += chunk
+
+        while True:
+            cr_idx = buffer.find(b"\r")
+            lf_idx = buffer.find(b"\n")
+            if cr_idx == -1 and lf_idx == -1:
+                break
+
+            if cr_idx == -1:
+                idx = lf_idx
+            elif lf_idx == -1:
+                idx = cr_idx
+            else:
+                idx = min(cr_idx, lf_idx)
+
+            is_progress = buffer[idx : idx + 1] == b"\r"
+            delimiter_length = 1
+            if is_progress and idx + 1 < len(buffer) and buffer[idx + 1 : idx + 2] == b"\n":
+                is_progress = False
+                delimiter_length = 2
+
+            raw_line = buffer[:idx]
+            buffer = buffer[idx + delimiter_length :]
+
+            line = _decode(raw_line).rstrip()
+            if line:
+                _emit_stream_output(
+                    line,
+                    progress=is_progress,
+                    log_callback=log_callback,
+                    output_callback=output_callback,
+                )
+
+    if buffer:
+        line = _decode(buffer).rstrip()
+        if line:
+            _emit_stream_output(
+                line,
+                progress=False,
+                log_callback=log_callback,
+                output_callback=output_callback,
+            )
+
+
 def run_streamed_command(
     command: List[str],
     env: Dict[str, str],
     cwd: Path,
     log_callback: Optional[Callable[[str], None]] = None,
+    output_callback: Optional[Callable[[str, bool], None]] = None,
 ) -> bool:
     """Run a command while streaming merged stdout/stderr."""
 
@@ -248,28 +335,38 @@ def run_streamed_command(
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
+            bufsize=0,
             **hidden_subprocess_kwargs(),
         )
 
         if process.stdout:
-            for line in process.stdout:
-                line = line.rstrip("\n\r")
-                if log_callback:
-                    log_callback(line)
+            _read_streamed_output(
+                process.stdout,
+                log_callback=log_callback,
+                output_callback=output_callback,
+            )
 
         process.wait()
-        if log_callback:
-            log_callback(f"Exit code: {process.returncode}")
+        _emit_stream_output(
+            f"Exit code: {process.returncode}",
+            progress=False,
+            log_callback=log_callback,
+            output_callback=output_callback,
+        )
         return process.returncode == 0
     except FileNotFoundError:
-        if log_callback:
-            log_callback(f"Error: executable not found: {command[0]}")
+        _emit_stream_output(
+            f"Error: executable not found: {command[0]}",
+            progress=False,
+            log_callback=log_callback,
+            output_callback=output_callback,
+        )
         return False
     except Exception as exc:
-        if log_callback:
-            log_callback(f"Error running command: {exc}")
+        _emit_stream_output(
+            f"Error running command: {exc}",
+            progress=False,
+            log_callback=log_callback,
+            output_callback=output_callback,
+        )
         return False

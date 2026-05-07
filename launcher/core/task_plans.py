@@ -404,6 +404,7 @@ def run_launch_plan(plan: TaskPlan):
 def run_install_plan(
     plan: TaskPlan,
     log_callback: Optional[Callable[[str], None]] = None,
+    output_callback: Optional[Callable[[str, bool], None]] = None,
     stage_callback: Optional[Callable[[PlannedCommand, int, int], None]] = None,
     result_callback: Optional[Callable[[PlannedCommand, int, int, bool], None]] = None,
 ) -> bool:
@@ -416,9 +417,17 @@ def run_install_plan(
         script_name = Path(command.args[-1]).name if command.args else command.executable
         if stage_callback:
             stage_callback(command, index, total)
-        if log_callback:
+        if output_callback is not None:
+            output_callback(f"Running: {script_name} ...", False)
+        elif log_callback:
             log_callback(f"Running: {script_name} ...")
-        success = run_streamed_command(argv, plan.effective_env, Path(command.cwd), log_callback)
+        success = run_streamed_command(
+            argv,
+            plan.effective_env,
+            Path(command.cwd),
+            log_callback=log_callback if output_callback is None else None,
+            output_callback=output_callback,
+        )
         if result_callback:
             result_callback(command, index, total, success)
         if not success:

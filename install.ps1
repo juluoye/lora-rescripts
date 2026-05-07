@@ -154,6 +154,7 @@ print(json.dumps({
     "version": sys.version.split()[0],
     "python_minor": f"{sys.version_info.major}.{sys.version_info.minor}",
     "abi_tag": f"cp{sys.version_info.major}{sys.version_info.minor}",
+    "python_lib_name": f"python{sys.version_info.major}{sys.version_info.minor}.lib",
 }))
 "@
 
@@ -176,7 +177,7 @@ function Ensure-EmbeddablePythonDevFiles {
         throw "Could not determine Python runtime version for $RuntimeDir."
     }
 
-    $pythonLibName = "python$($versionInfo.abi_tag).lib"
+    $pythonLibName = if ($versionInfo.python_lib_name) { [string]$versionInfo.python_lib_name } else { "python$($versionInfo.major)$($versionInfo.minor).lib" }
     $runtimeIncludeDir = Join-Path $RuntimeDir "Include"
     $runtimeLibDir = Join-Path $RuntimeDir "libs"
     $runtimePythonHeader = Join-Path $runtimeIncludeDir "Python.h"

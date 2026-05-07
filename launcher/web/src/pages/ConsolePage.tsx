@@ -35,6 +35,13 @@ export function ConsolePage() {
     return language === 'zh' ? matched.name_zh : matched.name_en;
   }, [lastInstallSummary, runtimeDefs, language]);
   const isStoppingTask = isTaskStopping(currentTaskState.task_type, currentTaskState.state);
+  const installProgress = useMemo(
+    () => buildInstallProgressState(currentTaskState, runtimeDefs, language, t),
+    [currentTaskState, runtimeDefs, language, t],
+  );
+  const [displayInstallProgressPercent, setDisplayInstallProgressPercent] = useState(0);
+  const installProgressTaskRef = useRef<string | null>(null);
+  const installProgressSectionRef = useRef<string>('');
   const recentTaskStages = useMemo(() => [...taskStageEvents].slice(-8).reverse(), [taskStageEvents]);
   const liveTaskRecord = useMemo(
     () => buildLiveTaskRecord(currentTaskState, taskStageEvents, consoleLines),
@@ -85,6 +92,30 @@ export function ConsolePage() {
       setSelectedTaskId(getTaskSelectionId(recentTaskHistory[0]));
     }
   }, [recentTaskHistory, selectedTaskId]);
+
+  useEffect(() => {
+    if (!installProgress || !installProgress.taskId) {
+      installProgressTaskRef.current = null;
+      installProgressSectionRef.current = '';
+      setDisplayInstallProgressPercent(0);
+      return;
+    }
+    if (installProgressTaskRef.current !== installProgress.taskId) {
+      installProgressTaskRef.current = installProgress.taskId;
+      installProgressSectionRef.current = installProgress.sectionKey;
+      setDisplayInstallProgressPercent(installProgress.percent);
+      return;
+    }
+    if (installProgress.sectionKey && installProgress.sectionKey !== installProgressSectionRef.current) {
+      installProgressSectionRef.current = installProgress.sectionKey;
+      setDisplayInstallProgressPercent(installProgress.percent);
+      return;
+    }
+    if (installProgress.sectionKey) {
+      installProgressSectionRef.current = installProgress.sectionKey;
+    }
+    setDisplayInstallProgressPercent((prev) => Math.max(prev, installProgress.percent));
+  }, [installProgress]);
 
   const handleCopy = () => {
     const text = consoleLines.join('\n');
@@ -760,6 +791,66 @@ export function ConsolePage() {
           ))
         )}
       </div>
+
+      {installProgress && (
+        <div className="rounded-2xl p-4 space-y-3" style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-card)' }}>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                {t('install_progress_title')}
+                {installProgress.runtimeName ? ` · ${installProgress.runtimeName}` : ''}
+              </div>
+              <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                {installProgress.stageLabel}
+              </div>
+            </div>
+            <div className="text-sm font-semibold" style={{ color: 'var(--accent-text)' }}>
+              {Math.round(displayInstallProgressPercent)}%
+            </div>
+          </div>
+
+          <div className="h-2.5 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--bg-input)' }}>
+            <div
+              className="h-full transition-all duration-300"
+              style={{ width: `${displayInstallProgressPercent}%`, backgroundColor: 'var(--accent)' }}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <TaskDetailField
+              label={t('install_progress_phase')}
+              value={installProgress.phaseLabel}
+            />
+            <TaskDetailField
+              label={t('install_progress_script', {
+                current: String(installProgress.scriptCurrent),
+                total: String(installProgress.scriptTotal),
+              })}
+              value={installProgress.itemLabel || '—'}
+            />
+            <TaskDetailField
+              label={t('install_progress_eta')}
+              value={installProgress.etaLabel}
+            />
+            <TaskDetailField
+              label={t('install_progress_downloaded')}
+              value={installProgress.downloadedLabel || '—'}
+            />
+          </div>
+
+          {installProgress.speedLabel && (
+            <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+              {t('install_progress_speed')}: {installProgress.speedLabel}
+            </div>
+          )}
+
+          {installProgress.compileHint && (
+            <div className="rounded-xl px-3 py-2 text-xs" style={{ backgroundColor: 'var(--warning-subtle)', border: '1px solid var(--warning-border)', color: 'var(--warning-text)' }}>
+              {installProgress.compileHint}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -952,6 +1043,171 @@ function formatTaskCodeText(code: string, t: (key: string) => string): string {
 function formatDuration(durationMs: number | null | undefined): string {
   if (typeof durationMs !== 'number') return '—';
   return `${Math.max(0.1, durationMs / 1000).toFixed(1)}s`;
+}
+
+function formatBytes(bytes: number, language: string): string {
+  if (!bytes || bytes <= 0) {
+    return language === 'zh' ? '0 B' : '0 B';
+  }
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function formatSpeed(bytesPerSecond: number | null | undefined, language: string): string | null {
+  if (!bytesPerSecond || bytesPerSecond <= 0) {
+    return null;
+  }
+  return `${formatBytes(bytesPerSecond, language)}/s`;
+}
+
+function formatEta(seconds: number | null | undefined, language: string, t: (key: string) => string): string {
+  if (seconds == null) {
+    return t('install_progress_eta_calculating');
+  }
+  if (seconds <= 0) {
+    return language === 'zh' ? '0 秒' : '0s';
+  }
+  if (seconds < 60) {
+    return language === 'zh' ? `${seconds} 秒` : `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainSeconds = seconds % 60;
+  if (minutes < 60) {
+    return language === 'zh' ? `${minutes} 分 ${remainSeconds} 秒` : `${minutes}m ${remainSeconds}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainMinutes = minutes % 60;
+  return language === 'zh' ? `${hours} 小时 ${remainMinutes} 分` : `${hours}h ${remainMinutes}m`;
+}
+
+function inferInstallPhaseFromStage(stageCode: string): string {
+  if (stageCode === 'runtime_install.validating_runtime' || stageCode === 'runtime_install.building_plan') {
+    return 'preparing';
+  }
+  if (stageCode === 'runtime_install.executing_scripts' || stageCode === 'runtime_install.running_script') {
+    return 'install';
+  }
+  if (stageCode === 'runtime_install.completed') {
+    return 'finalizing';
+  }
+  return 'preparing';
+}
+
+function getInstallPhaseRank(phase: string): number {
+  if (phase === 'download') return 0.28;
+  if (phase === 'install') return 0.58;
+  if (phase === 'compile') return 0.82;
+  if (phase === 'finalizing') return 0.96;
+  return 0.12;
+}
+
+function buildInstallProgressState(
+  taskState: {
+    task_id: string | null;
+    task_type: string;
+    state: string;
+    runtime_id: string | null;
+    stage_code: string;
+    stage_label_zh: string;
+    stage_label_en: string;
+    details?: Record<string, unknown>;
+  },
+  runtimeDefs: Array<{ id: string; name_zh: string; name_en: string }>,
+  language: string,
+  t: (key: string, params?: Record<string, string>) => string,
+) {
+  if (taskState.task_type !== 'install') {
+    return null;
+  }
+
+  const details = taskState.details || {};
+  const runtimeName = (() => {
+    if (!taskState.runtime_id) return null;
+    const matched = runtimeDefs.find((item) => item.id === taskState.runtime_id);
+    if (!matched) return taskState.runtime_id;
+    return language === 'zh' ? matched.name_zh : matched.name_en;
+  })();
+
+  const scriptTotal = Math.max(1, Number(details.script_total || 1));
+  const scriptIndex = Math.min(scriptTotal, Math.max(1, Number(details.script_index || (taskState.stage_code === 'runtime_install.running_script' ? 1 : 0))));
+  const phase = String(details.progress_phase || '').trim() || inferInstallPhaseFromStage(taskState.stage_code);
+  const phaseRank = getInstallPhaseRank(phase);
+  const scriptFraction = taskState.stage_code === 'runtime_install.running_script'
+    ? ((Math.max(0, scriptIndex - 1) + phaseRank) / scriptTotal)
+    : 0;
+  const sectionStartPercent = Number(details.progress_section_start_percent || 0);
+  const sectionEndPercent = Number(details.progress_section_end_percent || 0);
+  const sectionItemPercent = Number(details.progress_item_percent || 0);
+  const sectionKey = String(details.progress_section_key || '').trim();
+
+  let percent = 0;
+  if (taskState.state === 'succeeded' || taskState.stage_code === 'runtime_install.completed') {
+    percent = 100;
+  } else if (taskState.stage_code === 'runtime_install.request_received') {
+    percent = 2;
+  } else if (taskState.stage_code === 'runtime_install.validating_runtime') {
+    percent = 8;
+  } else if (taskState.stage_code === 'runtime_install.building_plan') {
+    percent = 15;
+  } else if (taskState.stage_code === 'runtime_install.executing_scripts') {
+    percent = 20;
+  } else if (taskState.stage_code === 'runtime_install.running_script') {
+    if (sectionEndPercent > sectionStartPercent) {
+      const normalizedSectionProgress = Math.max(0, Math.min(100, sectionItemPercent)) / 100;
+      const dynamicSectionPercent = sectionStartPercent + ((sectionEndPercent - sectionStartPercent) * normalizedSectionProgress);
+      const fallbackPercent = 20 + scriptFraction * 76;
+      percent = Math.min(96, Math.max(sectionStartPercent, Math.max(dynamicSectionPercent, fallbackPercent * 0.35)));
+    } else {
+      percent = Math.min(96, 20 + scriptFraction * 76);
+    }
+  } else if (taskState.state === 'failed') {
+    percent = Math.min(96, 20 + scriptFraction * 76);
+  }
+
+  const downloadedBytes = Number(details.progress_downloaded_bytes || 0);
+  const totalBytes = Number(details.progress_total_bytes || 0);
+  const speedBytesPerSec = Number(details.progress_speed_bytes_per_sec || 0);
+  const itemLabel = (language === 'zh'
+    ? String(details.progress_item_label_zh || details.command_label_zh || '')
+    : String(details.progress_item_label_en || details.command_label_en || '')
+  ).trim();
+  const phaseLabel = (language === 'zh'
+    ? String(details.progress_phase_label_zh || '')
+    : String(details.progress_phase_label_en || '')
+  ).trim() || t(`install_progress_phase_${phase || 'preparing'}`);
+
+  let etaLabel = t('install_progress_eta_unknown');
+  if (phase === 'compile') {
+    etaLabel = t('install_progress_eta_calculating');
+  } else if (totalBytes > 0 && downloadedBytes >= 0 && speedBytesPerSec > 0) {
+    etaLabel = formatEta(Math.max(0, Math.round((totalBytes - downloadedBytes) / speedBytesPerSec)), language, t);
+  } else if (taskState.state === 'succeeded') {
+    etaLabel = language === 'zh' ? '0 秒' : '0s';
+  } else {
+    etaLabel = t('install_progress_eta_calculating');
+  }
+
+  return {
+    taskId: taskState.task_id,
+    sectionKey,
+    runtimeName,
+    stageLabel: language === 'zh' ? taskState.stage_label_zh : taskState.stage_label_en,
+    phaseLabel,
+    scriptCurrent: scriptIndex,
+    scriptTotal,
+    itemLabel,
+    downloadedLabel: totalBytes > 0 ? `${formatBytes(downloadedBytes, language)} / ${formatBytes(totalBytes, language)}` : '',
+    speedLabel: formatSpeed(speedBytesPerSec, language) || '',
+    etaLabel,
+    compileHint: phase === 'compile' ? t('install_progress_compile_hint') : '',
+    percent,
+  };
 }
 
 function formatTaskDetailValue(value: unknown): string {
