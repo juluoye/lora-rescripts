@@ -174,8 +174,16 @@ def save_sd_model_on_epoch_end_or_stepwise(
         )
 
     def diffusers_saver(out_dir):
+        sai_metadata = get_sai_model_spec(None, args, False, False, False, is_stable_diffusion_ckpt=True)
         model_util.save_diffusers_checkpoint(
-            args.v2, out_dir, text_encoder, unet, src_path, vae=vae, use_safetensors=use_safetensors
+            args.v2,
+            out_dir,
+            text_encoder,
+            unet,
+            src_path,
+            vae=vae,
+            use_safetensors=use_safetensors,
+            export_metadata=sai_metadata,
         )
 
     save_sd_model_on_epoch_end_or_stepwise_common(

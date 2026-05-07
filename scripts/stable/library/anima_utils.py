@@ -9,8 +9,9 @@ from accelerate import init_empty_weights
 
 from library.fp8_optimization_utils import apply_fp8_monkey_patch
 from library.lora_utils import load_safetensors_with_lora_and_fp8
-from library import anima_models
+from library import anima_models, train_util
 from library.safetensors_utils import MemoryEfficientSafeOpen, WeightTransformHooks, get_split_weight_filenames
+from mikazuki.compliance import build_lulynx_metadata_fields
 from .utils import setup_logging
 
 setup_logging()
@@ -419,6 +420,13 @@ def save_anima_model(
     if metadata is None:
         metadata = {}
     metadata["format"] = "pt"  # For compatibility with the official .safetensors file
+    metadata.update(
+        build_lulynx_metadata_fields(
+            metadata=metadata,
+            git_commit=str(metadata.get("ss_sd_scripts_commit_hash", "") or ""),
+            model_hash=train_util.compute_tensor_payload_sha256(prefixed_sd),
+        )
+    )
 
     save_file(prefixed_sd, save_path, metadata=metadata)  # safetensors.save_file cosumes a lot of memory, but Anima is small enough
     logger.info(f"Saved Anima model to {save_path}")

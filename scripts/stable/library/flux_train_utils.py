@@ -13,6 +13,7 @@ from transformers import CLIPTextModel
 from tqdm import tqdm
 from PIL import Image
 from safetensors.torch import save_file
+from mikazuki.compliance import build_lulynx_metadata_fields
 
 from library import flux_models, flux_utils, strategy_base, train_util
 from library.device_utils import init_ipex, clean_memory_on_device
@@ -554,6 +555,7 @@ def save_models(
     save_dtype: Optional[torch.dtype] = None,
     use_mem_eff_save: bool = False,
 ):
+    sai_metadata = dict(sai_metadata or {})
     state_dict = {}
 
     def update_sd(prefix, sd):
@@ -564,6 +566,14 @@ def save_models(
             state_dict[key] = v
 
     update_sd("", flux.state_dict())
+    sai_metadata.setdefault("ss_sd_scripts_commit_hash", train_util.get_git_revision_hash())
+    sai_metadata.update(
+        build_lulynx_metadata_fields(
+            metadata=sai_metadata,
+            git_commit=sai_metadata.get("ss_sd_scripts_commit_hash", ""),
+            model_hash=train_util.compute_tensor_payload_sha256(state_dict),
+        )
+    )
 
     if not use_mem_eff_save:
         save_file(state_dict, ckpt_path, metadata=sai_metadata)

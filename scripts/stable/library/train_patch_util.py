@@ -17,6 +17,7 @@ import typing
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple, Union
 from accelerate import Accelerator, InitProcessGroupKwargs, DistributedDataParallelKwargs, PartialState
 import glob
+import hmac
 import math
 import os
 import random
@@ -196,6 +197,31 @@ def get_git_revision_hash() -> str:
         )
     except Exception:
         return "(unknown)"
+
+
+def compute_tensor_payload_sha256(tensors) -> str:
+    hash_sha256 = hashlib.sha256()
+    for key in sorted(tensors.keys()):
+        hash_sha256.update(str(key).encode("utf-8", errors="ignore"))
+        tensor = tensors[key]
+        if not torch.is_tensor(tensor):
+            tensor = torch.as_tensor(tensor)
+        prepared = tensor.detach().contiguous().cpu()
+        hash_sha256.update(str(prepared.dtype).encode("ascii", errors="ignore"))
+        hash_sha256.update(str(tuple(prepared.shape)).encode("ascii", errors="ignore"))
+        hash_sha256.update(prepared.numpy().tobytes())
+    return hash_sha256.hexdigest()
+
+
+def sign_metadata_payload(payload_json: str, secret: str) -> str:
+    normalized_secret = str(secret or "").strip()
+    if not normalized_secret:
+        return ""
+    return hmac.new(
+        normalized_secret.encode("utf-8"),
+        payload_json.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 # def replace_unet_modules(unet: diffusers.models.unet_2d_condition.UNet2DConditionModel, mem_eff_attn, xformers):
@@ -475,6 +501,8 @@ __all__ = [
     'addnet_hash_legacy',
     'addnet_hash_safetensors',
     'get_git_revision_hash',
+    'compute_tensor_payload_sha256',
+    'sign_metadata_payload',
     'enable_sageattention',
     'enable_flashattention',
     'replace_unet_modules',

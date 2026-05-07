@@ -6,6 +6,8 @@ from safetensors.torch import load_file, save_file
 from transformers import CLIPTextModel, CLIPTextConfig, CLIPTextModelWithProjection, CLIPTokenizer
 from typing import List
 from diffusers import AutoencoderKL, EulerDiscreteScheduler, UNet2DConditionModel
+from mikazuki.compliance import build_lulynx_metadata_fields, write_export_notice_file
+import library.train_util as train_util
 from library import model_util
 from library import sdxl_original_unet
 from library.utils import setup_logging
@@ -514,6 +516,7 @@ def save_stable_diffusion_checkpoint(
     metadata,
     save_dtype=None,
 ):
+    metadata = dict(metadata or {})
     state_dict = {}
 
     def update_sd(prefix, sd):
@@ -549,6 +552,16 @@ def save_stable_diffusion_checkpoint(
     new_ckpt["global_step"] = steps
 
     if model_util.is_safetensors(output_file):
+        metadata.setdefault("ss_epoch", str(epochs))
+        metadata.setdefault("ss_steps", str(steps))
+        metadata.setdefault("ss_sd_scripts_commit_hash", train_util.get_git_revision_hash())
+        metadata.update(
+            build_lulynx_metadata_fields(
+                metadata=metadata,
+                git_commit=metadata.get("ss_sd_scripts_commit_hash", ""),
+                model_hash=train_util.compute_tensor_payload_sha256(state_dict),
+            )
+        )
         save_file(state_dict, output_file, metadata)
     else:
         torch.save(new_ckpt, output_file)
@@ -557,7 +570,15 @@ def save_stable_diffusion_checkpoint(
 
 
 def save_diffusers_checkpoint(
-    output_dir, text_encoder1, text_encoder2, unet, pretrained_model_name_or_path, vae=None, use_safetensors=False, save_dtype=None
+    output_dir,
+    text_encoder1,
+    text_encoder2,
+    unet,
+    pretrained_model_name_or_path,
+    vae=None,
+    use_safetensors=False,
+    save_dtype=None,
+    export_metadata=None,
 ):
     from diffusers import StableDiffusionXLPipeline
 
@@ -606,3 +627,27 @@ def save_diffusers_checkpoint(
     if save_dtype is not None:
         pipeline.to(None, save_dtype)
     pipeline.save_pretrained(output_dir, safe_serialization=use_safetensors)
+
+    export_metadata = dict(export_metadata or {})
+    export_metadata.setdefault("ss_sd_scripts_commit_hash", train_util.get_git_revision_hash())
+    export_metadata.setdefault("ss_export_format", "diffusers")
+    export_metadata.setdefault("ss_base_model_version", MODEL_VERSION_SDXL_BASE_V1_0)
+    fingerprint_tensors = {}
+    for prefix, module in (
+        ("text_encoder", text_encoder1),
+        ("text_encoder_2", text_encoder2),
+        ("unet", unet),
+        ("vae", vae),
+    ):
+        if module is None:
+            continue
+        for key, value in module.state_dict().items():
+            fingerprint_tensors[f"{prefix}.{key}"] = value
+    model_hash = train_util.compute_tensor_payload_sha256(fingerprint_tensors) if fingerprint_tensors else None
+    write_export_notice_file(
+        output_dir + "/lulynx_export_notice.json",
+        metadata=export_metadata,
+        git_commit=export_metadata.get("ss_sd_scripts_commit_hash", ""),
+        model_hash=model_hash,
+        export_format="diffusers-sdxl",
+    )

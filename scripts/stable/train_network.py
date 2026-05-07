@@ -1096,6 +1096,8 @@ class NetworkTrainer:
                 if mixed_resolution_phase_target_epoch > 0
                 else None
             ),
+            git_commit=train_util.get_git_revision_hash(),
+            route_label="SDXL network training" if self.is_sdxl else "Network training",
         )
 
         metadata_bundle = train_metadata_util.build_metadata_bundle(

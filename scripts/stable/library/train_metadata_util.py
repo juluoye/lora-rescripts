@@ -6,6 +6,7 @@ from typing import Any, Callable, Mapping, NamedTuple
 
 import library.train_util as train_util
 from library.train_util import DreamBoothDataset
+from mikazuki.compliance import build_lulynx_metadata_fields
 
 
 class PreparedMetadataBundle(NamedTuple):
@@ -353,6 +354,12 @@ def add_model_reference_metadata(metadata, args):
 
 def finalize_metadata(metadata):
     metadata = {k: str(v) for k, v in metadata.items()}
+    metadata.update(
+        build_lulynx_metadata_fields(
+            metadata=metadata,
+            git_commit=metadata.get("ss_sd_scripts_commit_hash", ""),
+        )
+    )
     minimum_metadata = {}
     for key in train_util.SS_METADATA_MINIMUM_KEYS:
         if key in metadata:

@@ -13,6 +13,8 @@ import diffusers
 from transformers import CLIPTextModel, CLIPTokenizer, CLIPTextConfig, logging
 from diffusers import AutoencoderKL, DDIMScheduler, StableDiffusionPipeline  # , UNet2DConditionModel
 from safetensors.torch import load_file, save_file
+from mikazuki.compliance import build_lulynx_metadata_fields, write_export_notice_file
+import library.train_util as train_util
 from library.original_unet import UNet2DConditionModel
 from library.utils import setup_logging
 
@@ -1164,6 +1166,7 @@ def convert_text_encoder_state_dict_to_sd_v2(checkpoint, make_dummy_weights=Fals
 def save_stable_diffusion_checkpoint(
     v2, output_file, text_encoder, unet, ckpt_path, epochs, steps, metadata, save_dtype=None, vae=None
 ):
+    metadata = dict(metadata or {})
     if ckpt_path is not None:
         # epoch/stepを参照する。またVAEがメモリ上にないときなど、もう一度VAEを含めて読み込む
         checkpoint, state_dict = load_checkpoint_with_text_encoder_conversion(ckpt_path)
@@ -1224,6 +1227,16 @@ def save_stable_diffusion_checkpoint(
     new_ckpt["global_step"] = steps
 
     if is_safetensors(output_file):
+        metadata.setdefault("ss_epoch", str(epochs))
+        metadata.setdefault("ss_steps", str(steps))
+        metadata.setdefault("ss_sd_scripts_commit_hash", train_util.get_git_revision_hash())
+        metadata.update(
+            build_lulynx_metadata_fields(
+                metadata=metadata,
+                git_commit=metadata.get("ss_sd_scripts_commit_hash", ""),
+                model_hash=train_util.compute_tensor_payload_sha256(state_dict),
+            )
+        )
         # TODO Tensor以外のdictの値を削除したほうがいいか
         save_file(state_dict, output_file, metadata)
     else:
@@ -1232,7 +1245,16 @@ def save_stable_diffusion_checkpoint(
     return key_count
 
 
-def save_diffusers_checkpoint(v2, output_dir, text_encoder, unet, pretrained_model_name_or_path, vae=None, use_safetensors=False):
+def save_diffusers_checkpoint(
+    v2,
+    output_dir,
+    text_encoder,
+    unet,
+    pretrained_model_name_or_path,
+    vae=None,
+    use_safetensors=False,
+    export_metadata=None,
+):
     if pretrained_model_name_or_path is None:
         # load default settings for v1/v2
         if v2:
@@ -1261,6 +1283,25 @@ def save_diffusers_checkpoint(v2, output_dir, text_encoder, unet, pretrained_mod
         requires_safety_checker=None,
     )
     pipeline.save_pretrained(output_dir, safe_serialization=use_safetensors)
+
+    export_metadata = dict(export_metadata or {})
+    export_metadata.setdefault("ss_sd_scripts_commit_hash", train_util.get_git_revision_hash())
+    export_metadata.setdefault("ss_export_format", "diffusers")
+    export_metadata.setdefault("ss_base_model_version", "sd_v2" if v2 else "sd_v1")
+    fingerprint_tensors = {}
+    for prefix, module in (("text_encoder", text_encoder), ("unet", unet), ("vae", vae)):
+        if module is None:
+            continue
+        for key, value in module.state_dict().items():
+            fingerprint_tensors[f"{prefix}.{key}"] = value
+    model_hash = train_util.compute_tensor_payload_sha256(fingerprint_tensors) if fingerprint_tensors else None
+    write_export_notice_file(
+        os.path.join(output_dir, "lulynx_export_notice.json"),
+        metadata=export_metadata,
+        git_commit=export_metadata.get("ss_sd_scripts_commit_hash", ""),
+        model_hash=model_hash,
+        export_format="diffusers-stable-diffusion",
+    )
 
 
 VAE_PREFIX = "first_stage_model."

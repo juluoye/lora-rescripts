@@ -4,6 +4,8 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 
+from mikazuki.compliance import build_runtime_banner_lines
+
 
 @dataclass
 class TrainingSchedule:
@@ -42,7 +44,15 @@ def log_training_start_summary(
     train_dataloader_len: int,
     displayed_num_train_epochs: int,
     mixed_resolution_epoch_window: Optional[tuple[int, int]] = None,
+    git_commit: Optional[str] = None,
+    route_label: Optional[str] = None,
 ) -> None:
+    for line in build_runtime_banner_lines(
+        script_path=str(getattr(args, "config_file", "") or ""),
+        git_commit=git_commit,
+        extra_notice=f"Training route: {route_label}" if route_label else None,
+    ):
+        accelerator.print(line)
     accelerator.print("running training / 学習開始")
     accelerator.print(f"  num train images * repeats / 学習画像の数×繰り返し回数: {train_dataset_group.num_train_images}")
     accelerator.print(

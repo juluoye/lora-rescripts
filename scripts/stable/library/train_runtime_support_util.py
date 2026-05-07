@@ -4,6 +4,9 @@ import os
 import time
 from contextlib import nullcontext
 
+import library.train_util as train_util
+from mikazuki.compliance import build_lulynx_metadata_fields
+
 
 def save_network_checkpoint(
     args,
@@ -29,12 +32,23 @@ def save_network_checkpoint(
     metadata["ss_steps"] = str(steps)
     metadata["ss_epoch"] = str(epoch_no)
 
-    metadata_to_save = minimum_metadata if args.no_metadata else metadata
+    metadata_to_save = dict(minimum_metadata if args.no_metadata else metadata)
     sai_metadata = get_sai_model_spec(args)
     metadata_to_save.update(sai_metadata)
 
     save_context = ema_model.apply_to_models() if ema_model is not None else nullcontext()
     with save_context:
+        try:
+            weight_fingerprint = train_util.compute_tensor_payload_sha256(unwrapped_nw.state_dict())
+        except Exception:
+            weight_fingerprint = None
+        metadata_to_save.update(
+            build_lulynx_metadata_fields(
+                metadata=metadata_to_save,
+                git_commit=train_util.get_git_revision_hash(),
+                model_hash=weight_fingerprint,
+            )
+        )
         unwrapped_nw.save_weights(ckpt_file, save_dtype, metadata_to_save)
 
     if args.huggingface_repo_id is not None and upload_fn is not None:

@@ -3,6 +3,22 @@ import sys
 from pathlib import Path
 
 
+def _emit_runtime_banner(base_dir: Path, target_path: Path, runtime_mode: str | None = None) -> None:
+    try:
+        from mikazuki.compliance import emit_runtime_banner
+        from library import train_util
+
+        emit_runtime_banner(
+            printer=lambda line: print(line, flush=True),
+            script_path=str(target_path),
+            git_commit=train_util.get_git_revision_hash(),
+            runtime_mode=runtime_mode,
+        )
+    except Exception:
+        # Keep script runner resilient even if optional compliance helpers fail.
+        pass
+
+
 def _disable_windows_quick_edit_mode() -> None:
     if sys.platform != "win32":
         return
@@ -66,6 +82,7 @@ def main():
     apply_torch_distributed_compat_shims()
 
     runtime_mode = infer_attention_runtime_mode()
+    _emit_runtime_banner(base_dir, target_path, runtime_mode=runtime_mode)
     if is_amd_rocm_runtime(runtime_mode) or is_intel_xpu_runtime(runtime_mode):
         print(
             f"Experimental runtime bootstrap: mode={runtime_mode}; import_guards=on; distributed_compat=on",

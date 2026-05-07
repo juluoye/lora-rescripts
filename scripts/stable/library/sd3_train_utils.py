@@ -12,6 +12,7 @@ from accelerate import Accelerator, PartialState
 from tqdm import tqdm
 from PIL import Image
 from transformers import CLIPTextModelWithProjection, T5EncoderModel
+from mikazuki.compliance import build_lulynx_metadata_fields
 
 from library.device_utils import init_ipex, clean_memory_on_device
 
@@ -45,6 +46,7 @@ def save_models(
     Save models to checkpoint file. Only supports unified checkpoint format.
     """
 
+    sai_metadata = dict(sai_metadata or {})
     state_dict = {}
 
     def update_sd(prefix, sd):
@@ -65,14 +67,46 @@ def save_models(
     # if t5xxl is not None:
     #     update_sd("text_encoders.t5xxl.", t5xxl.state_dict())
 
+    sai_metadata.setdefault("ss_sd_scripts_commit_hash", train_util.get_git_revision_hash())
+    sai_metadata.update(
+        build_lulynx_metadata_fields(
+            metadata=sai_metadata,
+            git_commit=sai_metadata.get("ss_sd_scripts_commit_hash", ""),
+            model_hash=train_util.compute_tensor_payload_sha256(state_dict),
+        )
+    )
+
     save_file(state_dict, ckpt_path, metadata=sai_metadata)
+
+    def build_component_metadata(component_name: str, component_state_dict: dict) -> dict:
+        component_metadata = dict(sai_metadata)
+        component_metadata["ss_component_name"] = component_name
+        component_metadata.setdefault("ss_sd_scripts_commit_hash", train_util.get_git_revision_hash())
+        component_metadata.update(
+            build_lulynx_metadata_fields(
+                metadata=component_metadata,
+                git_commit=component_metadata.get("ss_sd_scripts_commit_hash", ""),
+                model_hash=train_util.compute_tensor_payload_sha256(component_state_dict),
+            )
+        )
+        return component_metadata
 
     if clip_l is not None:
         clip_l_path = ckpt_path.replace(".safetensors", "_clip_l.safetensors")
-        save_file(clip_l.state_dict(), clip_l_path)
+        clip_l_state_dict = clip_l.state_dict()
+        save_file(
+            clip_l_state_dict,
+            clip_l_path,
+            metadata=build_component_metadata("clip_l", clip_l_state_dict),
+        )
     if clip_g is not None:
         clip_g_path = ckpt_path.replace(".safetensors", "_clip_g.safetensors")
-        save_file(clip_g.state_dict(), clip_g_path)
+        clip_g_state_dict = clip_g.state_dict()
+        save_file(
+            clip_g_state_dict,
+            clip_g_path,
+            metadata=build_component_metadata("clip_g", clip_g_state_dict),
+        )
     if t5xxl is not None:
         t5xxl_path = ckpt_path.replace(".safetensors", "_t5xxl.safetensors")
         t5xxl_state_dict = t5xxl.state_dict()
@@ -82,7 +116,11 @@ def save_models(
         shared_weight_copy = shared_weight.detach().clone()
         t5xxl_state_dict["shared.weight"] = shared_weight_copy
 
-        save_file(t5xxl_state_dict, t5xxl_path)
+        save_file(
+            t5xxl_state_dict,
+            t5xxl_path,
+            metadata=build_component_metadata("t5xxl", t5xxl_state_dict),
+        )
 
 
 def save_sd3_model_on_train_end(

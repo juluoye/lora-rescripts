@@ -76,6 +76,12 @@ def train(args):
         args.cache_text_encoder_outputs = True
 
     anima_train_utils.log_anima_runtime_summary(args, route_label="Anima finetune")
+    for line in train_util.build_runtime_banner_lines(
+        script_path=str(getattr(args, "config_file", "") or ""),
+        git_commit=train_util.get_git_revision_hash(),
+        extra_notice="Training route: Anima finetune",
+    ):
+        logger.info(line)
     component_cpu_offload = anima_train_utils.should_use_anima_component_cpu_offload(args)
 
     if args.cpu_offload_checkpointing and not args.gradient_checkpointing:

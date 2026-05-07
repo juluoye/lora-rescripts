@@ -50,6 +50,10 @@ Modify By `Lulynx`
   <a href="https://github.com/WhitecrowAurora/lora-rescripts/blob/main/AGENTS.md">协作约束</a>
   ·
   <a href="https://github.com/WhitecrowAurora/lora-rescripts/blob/main/FRONTEND.md">前端补丁规范</a>
+  ·
+  <a href="https://github.com/WhitecrowAurora/lora-rescripts/blob/main/COMPLIANCE.md">合规说明</a>
+  ·
+  <a href="https://github.com/WhitecrowAurora/lora-rescripts/blob/main/BRANDING.md">品牌与署名</a>
 </p>
 
 SD-reScripts 是基于 LoRA-scripts（又名 SD-Trainer）继续维护的分支版本。
