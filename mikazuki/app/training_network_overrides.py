@@ -97,6 +97,22 @@ def get_network_arg_value(args_list, key):
     return None
 
 
+def normalize_lokr_export_mode(value) -> str:
+    mode = str(value or "native").strip().lower().replace("-", "_")
+    return mode if mode in {"native", "lora_compatible"} else "native"
+
+
+def normalize_bool_config_or_arg(config: dict, network_args: list[str], key: str, alias: str | None = None) -> bool:
+    if key in config:
+        return parse_boolish(config.get(key))
+    if alias and alias in config:
+        return parse_boolish(config.get(alias))
+    existing = get_network_arg_value(network_args, key)
+    if existing is None and alias:
+        existing = get_network_arg_value(network_args, alias)
+    return parse_boolish(existing) if existing is not None else False
+
+
 def pop_network_args(config: dict) -> list[str]:
     return normalize_network_args(config.get("network_args"), config.pop("network_args_custom", None))
 
@@ -258,11 +274,28 @@ def apply_anima_ui_overrides(config: dict) -> None:
             config["anima_adapter_type"] = "lokr"
             config["dora_wd"] = False
             config["bypass_mode"] = False
+            existing_lokr_export_mode = get_network_arg_value(network_args, "lokr_export_mode")
+            lokr_export_mode = normalize_lokr_export_mode(config.get("lokr_export_mode", existing_lokr_export_mode))
+            full_matrix_enabled = normalize_bool_config_or_arg(config, network_args, "full_matrix", "lokr_full_matrix")
+            decompose_both_enabled = normalize_bool_config_or_arg(config, network_args, "decompose_both", "lokr_decompose_both")
+            unbalanced_factorization_enabled = normalize_bool_config_or_arg(
+                config, network_args, "unbalanced_factorization"
+            )
+            config["lokr_export_mode"] = lokr_export_mode
+            config["full_matrix"] = full_matrix_enabled
+            config["decompose_both"] = decompose_both_enabled
+            config["unbalanced_factorization"] = unbalanced_factorization_enabled
             legacy_factor = get_network_arg_value(network_args, "factor")
             if legacy_factor not in (None, "") and "lokr_factor" not in config:
                 config["lokr_factor"] = legacy_factor
             network_args = upsert_network_arg(network_args, "anima_adapter_type", "lokr")
             network_args = upsert_network_arg(network_args, "lokr_factor", int(config.get("lokr_factor", 8) or 8))
+            network_args = upsert_network_arg(network_args, "lokr_export_mode", lokr_export_mode)
+            network_args = upsert_network_arg(network_args, "full_matrix", "True" if full_matrix_enabled else None)
+            network_args = upsert_network_arg(network_args, "decompose_both", "True" if decompose_both_enabled else None)
+            network_args = upsert_network_arg(
+                network_args, "unbalanced_factorization", "True" if unbalanced_factorization_enabled else None
+            )
             if "dropout" in config:
                 config["network_dropout"] = config.get("dropout")
             elif get_network_arg_value(network_args, "dropout") not in (None, ""):
@@ -284,6 +317,8 @@ def apply_anima_ui_overrides(config: dict) -> None:
                 "tlora_min_rank=",
                 "tlora_rank_schedule=",
                 "tlora_orthogonal_init=",
+                "lokr_full_matrix=",
+                "lokr_decompose_both=",
                 *ANIMA_DORA_STALE_NETWORK_ARG_PREFIXES,
                 *PISSA_STALE_NETWORK_ARG_PREFIXES,
             )
@@ -302,6 +337,12 @@ def apply_anima_ui_overrides(config: dict) -> None:
                 "train_norm=",
                 "dropout=",
                 "lokr_factor=",
+                "lokr_export_mode=",
+                "full_matrix=",
+                "lokr_full_matrix=",
+                "decompose_both=",
+                "lokr_decompose_both=",
+                "unbalanced_factorization=",
                 "tlora_min_rank=",
                 "tlora_rank_schedule=",
                 "tlora_orthogonal_init=",
@@ -313,7 +354,18 @@ def apply_anima_ui_overrides(config: dict) -> None:
             network_args = apply_tlora_rank_overrides(config, network_args)
             config["pissa_init"] = False
 
-            for key in ("lokr_factor", "conv_dim", "conv_alpha", "dropout"):
+            for key in (
+                "lokr_factor",
+                "lokr_export_mode",
+                "full_matrix",
+                "lokr_full_matrix",
+                "decompose_both",
+                "lokr_decompose_both",
+                "unbalanced_factorization",
+                "conv_dim",
+                "conv_alpha",
+                "dropout",
+            ):
                 config.pop(key, None)
         elif lora_type == "lora_fa":
             config["network_module"] = "networks.lora_anima"
@@ -327,6 +379,12 @@ def apply_anima_ui_overrides(config: dict) -> None:
                 if not str(item).startswith(
                     (
                         "lokr_factor=",
+                        "lokr_export_mode=",
+                        "full_matrix=",
+                        "lokr_full_matrix=",
+                        "decompose_both=",
+                        "lokr_decompose_both=",
+                        "unbalanced_factorization=",
                         "tlora_min_rank=",
                         "tlora_rank_schedule=",
                         "tlora_orthogonal_init=",
@@ -336,7 +394,18 @@ def apply_anima_ui_overrides(config: dict) -> None:
             ]
             network_args = filter_network_args(network_args, PISSA_STALE_NETWORK_ARG_PREFIXES)
             config["pissa_init"] = False
-            for key in ("lokr_factor", "conv_dim", "conv_alpha", "dropout"):
+            for key in (
+                "lokr_factor",
+                "lokr_export_mode",
+                "full_matrix",
+                "lokr_full_matrix",
+                "decompose_both",
+                "lokr_decompose_both",
+                "unbalanced_factorization",
+                "conv_dim",
+                "conv_alpha",
+                "dropout",
+            ):
                 config.pop(key, None)
         elif lora_type == "vera":
             config["network_module"] = "networks.lora_anima"
@@ -350,6 +419,12 @@ def apply_anima_ui_overrides(config: dict) -> None:
                 if not str(item).startswith(
                     (
                         "lokr_factor=",
+                        "lokr_export_mode=",
+                        "full_matrix=",
+                        "lokr_full_matrix=",
+                        "decompose_both=",
+                        "lokr_decompose_both=",
+                        "unbalanced_factorization=",
                         "tlora_min_rank=",
                         "tlora_rank_schedule=",
                         "tlora_orthogonal_init=",
@@ -359,7 +434,18 @@ def apply_anima_ui_overrides(config: dict) -> None:
             ]
             network_args = filter_network_args(network_args, PISSA_STALE_NETWORK_ARG_PREFIXES)
             config["pissa_init"] = False
-            for key in ("lokr_factor", "conv_dim", "conv_alpha", "dropout"):
+            for key in (
+                "lokr_factor",
+                "lokr_export_mode",
+                "full_matrix",
+                "lokr_full_matrix",
+                "decompose_both",
+                "lokr_decompose_both",
+                "unbalanced_factorization",
+                "conv_dim",
+                "conv_alpha",
+                "dropout",
+            ):
                 config.pop(key, None)
         else:
             config["network_module"] = "networks.lora_anima"
@@ -375,6 +461,12 @@ def apply_anima_ui_overrides(config: dict) -> None:
                 if not str(item).startswith(
                     (
                         "lokr_factor=",
+                        "lokr_export_mode=",
+                        "full_matrix=",
+                        "lokr_full_matrix=",
+                        "decompose_both=",
+                        "lokr_decompose_both=",
+                        "unbalanced_factorization=",
                         "tlora_min_rank=",
                         "tlora_rank_schedule=",
                         "tlora_orthogonal_init=",
@@ -389,7 +481,18 @@ def apply_anima_ui_overrides(config: dict) -> None:
                 network_args = apply_pissa_overrides(config, network_args)
             network_args = upsert_network_arg(network_args, "dora_wd", "True" if dora_enabled else None)
             network_args = upsert_network_arg(network_args, "bypass_mode", "True" if bypass_mode else "False")
-            for key in ("lokr_factor", "conv_dim", "conv_alpha", "dropout"):
+            for key in (
+                "lokr_factor",
+                "lokr_export_mode",
+                "full_matrix",
+                "lokr_full_matrix",
+                "decompose_both",
+                "lokr_decompose_both",
+                "unbalanced_factorization",
+                "conv_dim",
+                "conv_alpha",
+                "dropout",
+            ):
                 config.pop(key, None)
 
         if train_norm_enabled is not None:

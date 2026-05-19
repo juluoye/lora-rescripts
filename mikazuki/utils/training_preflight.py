@@ -8,6 +8,7 @@ from typing import Callable, Optional, TypeVar
 
 from mikazuki.launch_utils import base_dir_path
 from mikazuki.log import log
+from mikazuki.training_route_contract import extract_route_contract_metadata, resolve_training_route_contract
 from mikazuki.utils import train_utils
 from mikazuki.utils.train_utils import parse_boolish
 from mikazuki.utils.dataset_cache_preflight import analyze_dataset_cache_preflight
@@ -126,6 +127,20 @@ def train_data_dir_can_be_omitted(payload: dict, training_type: str) -> bool:
         return True
 
     return False
+
+
+def build_route_contract_preflight_note(payload: dict, training_type: str) -> str:
+    route_contract = extract_route_contract_metadata(payload) or resolve_training_route_contract(
+        training_type,
+        config=payload,
+    ).as_metadata_fields()
+    label = str(route_contract.get("lulynx_route_label", training_type) or training_type)
+    kind = str(route_contract.get("lulynx_route_kind", "") or "")
+    capabilities = str(route_contract.get("lulynx_route_capabilities", "") or "")
+    summary = str(route_contract.get("lulynx_route_capability_summary", "") or "")
+    if capabilities:
+        return f"Route contract preflight: {label} [{kind}] | capabilities={capabilities} | {summary}"
+    return f"Route contract preflight: {label} [{kind}]"
 
 
 def resolve_dataset_config_path(payload: dict, *, root_dir: str | Path | None = None) -> Optional[Path]:

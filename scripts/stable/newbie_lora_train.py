@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 
+from mikazuki.compliance import build_runtime_banner_lines
+from mikazuki.training_route_contract import resolve_training_route_contract
 from lulynx.newbie import (
     NewbieCachedTrainer,
     NewbieTrainer,
@@ -89,6 +91,20 @@ def main() -> None:
 
     config, warnings = load_newbie_runtime_config(args.config_file)
     _configure_runtime_environment(config)
+    route_contract = resolve_training_route_contract(
+        getattr(config, "model_train_type", "newbie-lora"),
+        config=config.__dict__,
+        route_kind_override="newbie",
+        route_label_override="Newbie LoRA",
+    )
+    for line in build_runtime_banner_lines(
+        script_path=str(args.config_file),
+        training_type=getattr(config, "model_train_type", "newbie-lora"),
+        route_kind=route_contract.route_kind,
+        route_label=route_contract.route_label,
+        extra_notice=f"Training route: {route_contract.route_label}",
+    ):
+        print(line)
 
     trainer = NewbieTrainer(config)
     preparation = trainer.prepare(initial_warnings=warnings)

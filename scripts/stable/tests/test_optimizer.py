@@ -216,6 +216,44 @@ def test_full_bf16_optimizer_wraps_master_params():
         assert optimizer.param_groups[0]["params"][0].dtype == torch.float32
 
 
+def test_full_bf16_optimizer_syncs_outer_group_options_to_inner_optimizer():
+    with patch("sys.argv", ["", "--full_bf16", "--mixed_precision", "bf16"]):
+        parser = setup_parser()
+        args = parser.parse_args()
+        param = Parameter(torch.tensor([0.0], dtype=torch.bfloat16))
+        _, _, optimizer = get_optimizer(args, [{"params": [param], "lr": 2e-5}])
+        assert isinstance(optimizer, FullBf16StochasticOptimizer)
+
+        optimizer._optimizer.param_groups = [
+            {**group, "params": list(group["params"])}
+            for group in optimizer._optimizer.param_groups
+        ]
+        optimizer.param_groups[0]["lr"] = 6.666666666666668e-8
+        optimizer._optimizer.param_groups[0]["lr"] = 0.0
+        param.grad = torch.tensor([1.0], dtype=torch.bfloat16)
+
+        optimizer.step()
+
+        assert optimizer._optimizer.param_groups[0]["lr"] == optimizer.param_groups[0]["lr"]
+        assert optimizer._master_params[0].detach().float().abs().item() > 0
+
+
+def test_compat_optimizer_param_groups_delegate_to_inner_optimizer():
+    param = Parameter(torch.tensor([1.0]))
+    inner = torch.optim.AdamW([param], lr=0.0)
+    optimizer = Compass(inner, adaptive_clip=None)
+
+    replacement_groups = [
+        {**group, "params": list(group["params"])}
+        for group in optimizer.param_groups
+    ]
+    optimizer.param_groups = replacement_groups
+    optimizer.param_groups[0]["lr"] = 1e-4
+
+    assert inner.param_groups is replacement_groups
+    assert inner.param_groups[0]["lr"] == 1e-4
+
+
 def test_adamw8bitkahan_accepts_kahan_offload_args():
     with patch(
         "sys.argv",

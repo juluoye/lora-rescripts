@@ -17,6 +17,7 @@ from mikazuki.app.training_run_context import TrainingRunContext
 from mikazuki.app.training_ui_overrides import build_sdxl_clip_skip_warning
 from mikazuki.log import log
 from mikazuki.plugins.runtime import plugin_runtime
+from mikazuki.training_route_contract import extract_route_contract_metadata, resolve_training_route_contract
 from mikazuki.utils import train_utils
 from mikazuki.utils.attention_runtime_guard import (
     apply_sageattention_route_guard,
@@ -29,6 +30,7 @@ from mikazuki.utils.devices import get_xformers_status
 from mikazuki.utils.mixed_resolution import build_mixed_resolution_plan
 from mikazuki.utils.runtime_dependencies import analyze_training_runtime_dependencies
 from mikazuki.utils.training_preflight import (
+    build_route_contract_preflight_note,
     build_sageattention_experimental_warning,
     train_data_dir_can_be_omitted,
     validate_dataset_config_reference,
@@ -199,10 +201,20 @@ def _prepare_training_sample_prompts(context: TrainingRunContext) -> APIResponse
 
 
 def _emit_dataset_prepared_event(context: TrainingRunContext) -> None:
+    route_contract = extract_route_contract_metadata(context.config) or resolve_training_route_contract(
+        context.model_train_type,
+        config=context.config,
+        route_kind_override=getattr(context.trainer_definition, "route_kind", None),
+        route_label_override=getattr(context.trainer_definition, "route_label", None),
+    ).as_metadata_fields()
     plugin_runtime.emit_event(
         "on_dataset_prepared",
         {
             "model_train_type": context.model_train_type,
+            "trainer_route_kind": route_contract.get("lulynx_route_kind", ""),
+            "trainer_route_label": route_contract.get("lulynx_route_label", ""),
+            "trainer_route_family": route_contract.get("lulynx_route_family", ""),
+            "trainer_route_capabilities": route_contract.get("lulynx_route_capabilities", ""),
             "train_data_dir": str(context.config.get("train_data_dir", "") or ""),
             "direct_python_training": bool(context.direct_python_training),
         },
@@ -220,6 +232,9 @@ def launch_training(context: TrainingRunContext):
         "on_train_launch",
         {
             "model_train_type": context.model_train_type,
+            "trainer_route_kind": str(context.config.get("_lulynx_route_kind", "") or ""),
+            "trainer_route_label": str(context.config.get("_lulynx_route_label", "") or ""),
+            "trainer_route_capabilities": ",".join(context.config.get("_lulynx_route_capabilities", []) or []),
             "trainer_file": context.trainer_file,
             "toml_file": context.toml_file,
             "gpu_ids": list(context.gpu_ids or []),
@@ -238,6 +253,8 @@ def launch_training(context: TrainingRunContext):
 
 
 def prepare_training_run(context: TrainingRunContext) -> APIResponseFail | None:
+    context.start_warnings.append(build_route_contract_preflight_note(context.config, context.model_train_type))
+
     validation_error = _validate_training_inputs(context)
     if validation_error:
         return validation_error

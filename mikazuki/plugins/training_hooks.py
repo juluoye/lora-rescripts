@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from mikazuki.log import log
+from mikazuki.training_route_contract import resolve_training_route_contract
 from mikazuki.plugins.training_protocol import (
     build_after_backward_payload,
     build_after_loss_payload,
@@ -61,6 +62,22 @@ def _empty_dispatch(event: str, *, result_payload: dict | None = None) -> dict:
     if result_payload is not None:
         dispatch["result_payload"] = result_payload
     return dispatch
+
+
+def _merge_route_contract_extra(extra: dict | None, *, route: Any, training_type: Any) -> dict:
+    merged = dict(extra or {})
+    contract = resolve_training_route_contract(training_type, route_kind_override=route)
+    merged.setdefault(
+        "route_contract",
+        {
+            "kind": contract.route_kind,
+            "label": contract.route_label,
+            "family": contract.route_family,
+            "capabilities": list(contract.capability_flags),
+            "summary": contract.capability_summary,
+        },
+    )
+    return merged
 
 
 def _to_finite_float(value: Any, default: float) -> float:
@@ -349,7 +366,7 @@ def emit_before_forward_event(
             micro_batch_size=micro_batch_size,
             gradient_accumulation_steps=gradient_accumulation_steps,
             sync_gradients=sync_gradients,
-            extra=extra,
+            extra=_merge_route_contract_extra(extra, route=route, training_type=training_type),
             source=source,
         )
 
@@ -385,7 +402,7 @@ def emit_after_loss_event(
             weighted_loss=weighted_loss,
             gradient_accumulation_steps=gradient_accumulation_steps,
             sync_gradients=sync_gradients,
-            extra=extra,
+            extra=_merge_route_contract_extra(extra, route=route, training_type=training_type),
             source=source,
         )
 
@@ -422,7 +439,7 @@ def apply_modify_loss_event(
             loss_scale=loss_scale,
             gradient_accumulation_steps=gradient_accumulation_steps,
             sync_gradients=sync_gradients,
-            extra=extra,
+            extra=_merge_route_contract_extra(extra, route=route, training_type=training_type),
             source=source,
         )
 
@@ -494,7 +511,7 @@ def emit_after_backward_event(
             weighted_loss=weighted_loss,
             gradient_accumulation_steps=gradient_accumulation_steps,
             sync_gradients=sync_gradients,
-            extra=extra,
+            extra=_merge_route_contract_extra(extra, route=route, training_type=training_type),
             source=source,
         )
 
@@ -526,7 +543,7 @@ def emit_before_optimizer_step_event(
             gradient_accumulation_steps=gradient_accumulation_steps,
             sync_gradients=sync_gradients,
             max_grad_norm=max_grad_norm,
-            extra=extra,
+            extra=_merge_route_contract_extra(extra, route=route, training_type=training_type),
             source=source,
         )
 
@@ -570,7 +587,7 @@ def emit_after_optimizer_step_event(
             optimizer_step_executed=optimizer_step_executed,
             scheduler_step_executed=scheduler_step_executed,
             zero_grad_called=zero_grad_called,
-            extra=extra,
+            extra=_merge_route_contract_extra(extra, route=route, training_type=training_type),
             source=source,
         )
 

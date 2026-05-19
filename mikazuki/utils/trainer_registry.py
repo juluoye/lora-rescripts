@@ -37,6 +37,8 @@ class TrainerDefinition:
     direct_python: bool = False
     direct_cli_args: tuple[str, ...] = ()
     direct_launch_summary: str | None = None
+    route_kind: str | None = None
+    route_label: str | None = None
     skip_model_validation: bool = False
     config_validator: TrainerConfigValidator | None = None
     start_warning_builder: TrainerWarningBuilder | None = None
@@ -50,12 +52,16 @@ TRAINER_REGISTRY = {
     "sd-lora": TrainerDefinition(
         "sd-lora",
         "./scripts/stable/train_network.py",
+        route_kind="stable",
+        route_label="Stable LoRA",
         allow_dataset_config_without_train_data_dir=True,
         allow_dataset_class_without_train_data_dir=True,
     ),
     "sd-ileco": TrainerDefinition(
         "sd-ileco",
         "./scripts/stable/train_concept_edit.py",
+        route_kind="stable",
+        route_label="Stable iLECO",
         allow_dataset_class_without_train_data_dir=True,
         config_validator=validate_concept_edit_runtime_config,
         start_warning_builder=build_concept_edit_start_warnings,
@@ -63,6 +69,8 @@ TRAINER_REGISTRY = {
     "sd-addift": TrainerDefinition(
         "sd-addift",
         "./scripts/stable/train_concept_edit.py",
+        route_kind="stable",
+        route_label="Stable ADDifT",
         allow_dataset_class_without_train_data_dir=True,
         config_validator=validate_concept_edit_runtime_config,
         start_warning_builder=build_concept_edit_start_warnings,
@@ -70,6 +78,8 @@ TRAINER_REGISTRY = {
     "sd-multi-addift": TrainerDefinition(
         "sd-multi-addift",
         "./scripts/stable/train_concept_edit.py",
+        route_kind="stable",
+        route_label="Stable Multi-ADDifT",
         allow_dataset_class_without_train_data_dir=True,
         config_validator=validate_concept_edit_runtime_config,
         start_warning_builder=build_concept_edit_start_warnings,
@@ -77,12 +87,16 @@ TRAINER_REGISTRY = {
     "sdxl-lora": TrainerDefinition(
         "sdxl-lora",
         "./scripts/stable/sdxl_train_network.py",
+        route_kind="sdxl",
+        route_label="SDXL LoRA",
         allow_dataset_config_without_train_data_dir=True,
         allow_dataset_class_without_train_data_dir=True,
     ),
     "sdxl-ileco": TrainerDefinition(
         "sdxl-ileco",
         "./scripts/stable/sdxl_train_concept_edit.py",
+        route_kind="sdxl",
+        route_label="SDXL iLECO",
         allow_dataset_class_without_train_data_dir=True,
         config_validator=validate_concept_edit_runtime_config,
         start_warning_builder=build_concept_edit_start_warnings,
@@ -90,6 +104,8 @@ TRAINER_REGISTRY = {
     "sdxl-addift": TrainerDefinition(
         "sdxl-addift",
         "./scripts/stable/sdxl_train_concept_edit.py",
+        route_kind="sdxl",
+        route_label="SDXL ADDifT",
         allow_dataset_class_without_train_data_dir=True,
         config_validator=validate_concept_edit_runtime_config,
         start_warning_builder=build_concept_edit_start_warnings,
@@ -97,6 +113,8 @@ TRAINER_REGISTRY = {
     "sdxl-multi-addift": TrainerDefinition(
         "sdxl-multi-addift",
         "./scripts/stable/sdxl_train_concept_edit.py",
+        route_kind="sdxl",
+        route_label="SDXL Multi-ADDifT",
         allow_dataset_class_without_train_data_dir=True,
         config_validator=validate_concept_edit_runtime_config,
         start_warning_builder=build_concept_edit_start_warnings,
@@ -106,6 +124,8 @@ TRAINER_REGISTRY = {
         "./scripts/stable/yolo_train.py",
         direct_python=True,
         direct_launch_summary="YOLO 训练直接由 Ultralytics 启动，不走 accelerate 分布式包装。",
+        route_kind="yolo",
+        route_label="YOLO",
         config_validator=validate_yolo_runtime_config,
         start_warning_builder=build_yolo_start_warnings,
         preflight_builder=build_yolo_preflight_summary,
@@ -116,6 +136,8 @@ TRAINER_REGISTRY = {
         "./scripts/stable/aesthetic_scorer_train.py",
         direct_python=True,
         direct_launch_summary="美学评分训练直接由独立 Python 训练器启动，不走 accelerate 分布式包装。",
+        route_kind="aesthetic",
+        route_label="Aesthetic Scorer",
         skip_model_validation=True,
         config_validator=validate_aesthetic_scorer_runtime_config,
         start_warning_builder=build_aesthetic_scorer_start_warnings,
@@ -127,6 +149,8 @@ TRAINER_REGISTRY = {
         "./scripts/stable/newbie_lora_train.py",
         direct_python=True,
         direct_cli_args=("--execute", "--phase", "full"),
+        route_kind="newbie",
+        route_label="Newbie LoRA",
         direct_launch_summary=(
             "Newbie 训练当前由独立 Python 训练器直接启动，默认执行 full phase："
             "缺缓存时会先补 cache，再进入正式训练。"
@@ -138,12 +162,16 @@ TRAINER_REGISTRY = {
     "sd-dreambooth": TrainerDefinition(
         "sd-dreambooth",
         "./scripts/stable/train_db.py",
+        route_kind="stable",
+        route_label="Stable DreamBooth",
         allow_dataset_config_without_train_data_dir=True,
         allow_dataset_class_without_train_data_dir=True,
     ),
     "sdxl-finetune": TrainerDefinition(
         "sdxl-finetune",
         "./scripts/stable/sdxl_train.py",
+        route_kind="sdxl",
+        route_label="SDXL finetune",
         allow_dataset_config_without_train_data_dir=True,
         allow_dataset_class_without_train_data_dir=True,
     ),
@@ -165,6 +193,8 @@ TRAINER_REGISTRY = {
     "flux-controlnet": TrainerDefinition(
         "flux-controlnet",
         "./scripts/stable/flux_train_control_net.py",
+        route_kind="flux",
+        route_label="Flux ControlNet",
         allow_dataset_config_without_train_data_dir=True,
         allow_dataset_class_without_train_data_dir=True,
     ),
@@ -183,24 +213,32 @@ TRAINER_REGISTRY = {
     "sd3-lora": TrainerDefinition(
         "sd3-lora",
         "./scripts/dev/sd3_train_network.py",
+        route_kind="sd3",
+        route_label="SD3 LoRA",
         allow_dataset_config_without_train_data_dir=True,
         allow_dataset_class_without_train_data_dir=True,
     ),
     "sd3-finetune": TrainerDefinition(
         "sd3-finetune",
         "./scripts/stable/sd3_train.py",
+        route_kind="sd3",
+        route_label="SD3 finetune",
         allow_dataset_config_without_train_data_dir=True,
         allow_dataset_class_without_train_data_dir=True,
     ),
     "flux-lora": TrainerDefinition(
         "flux-lora",
         "./scripts/dev/flux_train_network.py",
+        route_kind="flux",
+        route_label="Flux LoRA",
         allow_dataset_config_without_train_data_dir=True,
         allow_dataset_class_without_train_data_dir=True,
     ),
     "flux-finetune": TrainerDefinition(
         "flux-finetune",
         "./scripts/dev/flux_train.py",
+        route_kind="flux",
+        route_label="Flux finetune",
         allow_dataset_config_without_train_data_dir=True,
         allow_dataset_class_without_train_data_dir=True,
     ),
@@ -225,18 +263,24 @@ TRAINER_REGISTRY = {
     "hunyuan-image-lora": TrainerDefinition(
         "hunyuan-image-lora",
         "./scripts/stable/hunyuan_image_train_network.py",
+        route_kind="hunyuan-image",
+        route_label="Hunyuan Image LoRA",
         allow_dataset_config_without_train_data_dir=True,
         allow_dataset_class_without_train_data_dir=True,
     ),
     "anima-lora": TrainerDefinition(
         "anima-lora",
         "./scripts/stable/anima_train_network.py",
+        route_kind="anima",
+        route_label="Anima LoRA",
         allow_dataset_config_without_train_data_dir=True,
         allow_dataset_class_without_train_data_dir=True,
     ),
     "anima-ileco": TrainerDefinition(
         "anima-ileco",
         "./scripts/stable/anima_train_concept_edit.py",
+        route_kind="anima",
+        route_label="Anima iLECO",
         allow_dataset_class_without_train_data_dir=True,
         config_validator=validate_concept_edit_runtime_config,
         start_warning_builder=build_concept_edit_start_warnings,
@@ -244,6 +288,8 @@ TRAINER_REGISTRY = {
     "anima-addift": TrainerDefinition(
         "anima-addift",
         "./scripts/stable/anima_train_concept_edit.py",
+        route_kind="anima",
+        route_label="Anima ADDifT",
         allow_dataset_class_without_train_data_dir=True,
         config_validator=validate_concept_edit_runtime_config,
         start_warning_builder=build_concept_edit_start_warnings,
@@ -251,6 +297,8 @@ TRAINER_REGISTRY = {
     "anima-multi-addift": TrainerDefinition(
         "anima-multi-addift",
         "./scripts/stable/anima_train_concept_edit.py",
+        route_kind="anima",
+        route_label="Anima Multi-ADDifT",
         allow_dataset_class_without_train_data_dir=True,
         config_validator=validate_concept_edit_runtime_config,
         start_warning_builder=build_concept_edit_start_warnings,
@@ -258,6 +306,8 @@ TRAINER_REGISTRY = {
     "anima-finetune": TrainerDefinition(
         "anima-finetune",
         "./scripts/stable/anima_train.py",
+        route_kind="anima",
+        route_label="Anima finetune",
         allow_dataset_config_without_train_data_dir=True,
         allow_dataset_class_without_train_data_dir=True,
     ),

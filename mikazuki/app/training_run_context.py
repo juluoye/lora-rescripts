@@ -13,6 +13,7 @@ from mikazuki.app.models import APIResponseFail
 from mikazuki.app.training_prompt_utils import parse_boolish
 from mikazuki.app.training_ui_overrides import apply_training_ui_overrides
 from mikazuki.plugins.runtime import plugin_runtime
+from mikazuki.training_route_contract import attach_route_contract_to_config
 from mikazuki.utils import train_utils
 from mikazuki.utils.training_launch_runtime import resolve_training_launch_runtime
 from mikazuki.utils.training_runtime_context import resolve_training_runtime_guard_context
@@ -146,6 +147,16 @@ def _build_training_run_context(
     model_train_type = str(config.pop("model_train_type", "sd-lora") or "sd-lora").strip().lower()
     config["model_train_type"] = model_train_type
     _apply_model_specific_launch_defaults(config, model_train_type)
+    route_contract = attach_route_contract_to_config(
+        config,
+        training_type=model_train_type,
+        route_kind_override=getattr(trainer_definition, "route_kind", None),
+        route_label_override=getattr(trainer_definition, "route_label", None),
+    )
+    start_warnings.append(
+        f"Route contract: {route_contract.route_label} / capabilities="
+        + ", ".join(route_contract.capability_flags[:8])
+    )
 
     train_data_dir = str(config.get("train_data_dir", "") or "").strip()
     suggest_cpu_threads = 8 if train_data_dir and len(train_utils.get_total_images(train_data_dir)) > 200 else 2

@@ -36,6 +36,8 @@ import library.train_resume_util as train_resume_util
 import library.train_runtime_support_util as train_runtime_support_util
 import library.train_network_setup_util as train_network_setup_util
 import library.network_vram_swap_util as network_vram_swap_util
+from mikazuki.training_route_contract import get_route_kind, get_route_label
+from mikazuki.training_route_contract import resolve_training_route_contract
 from lulynx.experimental_core import (
     AutoVramProtectionController,
     AutoVramProtectionRuntimeContext,
@@ -841,6 +843,8 @@ class NetworkTrainer:
     def train(self, args):
         session_id = random.randint(0, 2**32)
         training_started_at = time.time()
+        default_route_kind = "sdxl" if self.is_sdxl else "stable"
+        default_route_label = "SDXL LoRA" if self.is_sdxl else "Stable LoRA"
         train_util.verify_training_args(args)
         train_util.prepare_dataset_args(args, True)
         deepspeed_utils.prepare_deepspeed_args(args)
@@ -848,9 +852,17 @@ class NetworkTrainer:
         self.normalize_conflicting_network_target_flags(args)
         normalize_lulynx_args(
             args,
-            route_label="SDXL LoRA" if self.is_sdxl else "Stable LoRA",
-            route_kind="sdxl" if self.is_sdxl else "stable",
+            route_label=get_route_label(vars(args), default_route_label),
+            route_kind=get_route_kind(vars(args), default_route_kind),
         )
+        route_contract = resolve_training_route_contract(
+            getattr(args, "model_train_type", ""),
+            config=vars(args),
+            route_kind_override=getattr(args, "lulynx_route_kind", None),
+            route_label_override=getattr(args, "lulynx_route_label", None),
+        )
+        args._lulynx_route_contract = route_contract.as_metadata_fields()
+        args._lulynx_route_capabilities = list(route_contract.capability_flags)
         self.configure_dataset_runtime_policy(args)
 
         if bool(getattr(args, "flow_model", False)):
@@ -1025,7 +1037,7 @@ class NetworkTrainer:
             network,
             optimizer_name,
             logger,
-            route_label="Network training",
+            route_label=get_route_label(vars(args), "Network training"),
         )
 
         def build_train_state_payload():
@@ -1097,7 +1109,7 @@ class NetworkTrainer:
                 else None
             ),
             git_commit=train_util.get_git_revision_hash(),
-            route_label="SDXL network training" if self.is_sdxl else "Network training",
+            route_label=get_route_label(vars(args), "SDXL network training" if self.is_sdxl else "Network training"),
         )
 
         metadata_bundle = train_metadata_util.build_metadata_bundle(
@@ -1149,7 +1161,7 @@ class NetworkTrainer:
         attention_step_profiler = ExperimentalAttentionStepProfiler(
             args,
             accelerator,
-            route_label="SDXL network training" if self.is_sdxl else "Network training",
+            route_label=get_route_label(vars(args), "SDXL network training" if self.is_sdxl else "Network training"),
             is_sdxl=self.is_sdxl,
         )
 
@@ -1239,13 +1251,13 @@ class NetworkTrainer:
 
         peak_vram_diagnostics = PeakVramDiagnosticsRecorder(
             args,
-            getattr(args, "lulynx_route_label", "Network training"),
+            get_route_label(vars(args), "Network training"),
             accelerator.device,
         )
         auto_vram_controller = AutoVramProtectionController(
             args,
-            route_kind=getattr(args, "lulynx_route_kind", "sdxl" if self.is_sdxl else "stable"),
-            route_label=getattr(args, "lulynx_route_label", "Network training"),
+            route_kind=get_route_kind(vars(args), "sdxl" if self.is_sdxl else "stable"),
+            route_label=get_route_label(vars(args), "Network training"),
             runtime=AutoVramProtectionRuntimeContext(
                 device=accelerator.device,
                 model=accelerator.unwrap_model(unet) if self.is_sdxl else None,

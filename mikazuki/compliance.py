@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from mikazuki.training_route_contract import resolve_training_route_contract
+
 
 PROJECT_NAME = "lora-rescripts"
 OFFICIAL_REPO_URL = "https://github.com/WhitecrowAurora/lora-rescripts"
@@ -14,6 +16,31 @@ PROJECT_LICENSE = "GNU AGPL-3.0-or-later"
 PROJECT_COPYRIGHT = "Copyright (C) WhitecrowAurora and contributors"
 COMPLIANCE_VERSION = "lulynx-compliance-v1"
 METADATA_SIGNATURE_ENV = "LULYNX_METADATA_SIGNING_SECRET"
+
+
+def _decode_shifted_char_codes(codes: tuple[int, ...], *, shift: int = 11) -> str:
+    return "".join(chr(value - shift) for value in codes)
+
+
+_ENCODED_BANNER_TEMPLATES = {
+    "project": tuple(ord(ch) + 11 for ch in "{project} {version}"),
+    "source": tuple(ord(ch) + 11 for ch in "Source: {repo}"),
+    "license": tuple(ord(ch) + 11 for ch in "License: {license}"),
+    "copyright": tuple(ord(ch) + 11 for ch in "Copyright: {copyright}"),
+    "compliance_en": tuple(
+        ord(ch) + 11
+        for ch in "Compliance: modified builds and hosted services must provide corresponding source and preserve notices."
+    ),
+    "compliance_zh": tuple(
+        ord(ch) + 11
+        for ch in "合规提示：修改版或通过网络向他人提供服务的版本，应提供对应源码并保留来源声明。"
+    ),
+}
+
+
+def _render_banner_template(key: str, **fields: str) -> str:
+    template = _decode_shifted_char_codes(_ENCODED_BANNER_TEMPLATES[key])
+    return template.format(**fields)
 
 
 def repo_root() -> Path:
@@ -53,15 +80,25 @@ def build_runtime_banner_lines(
     git_commit: Optional[str] = None,
     runtime_mode: Optional[str] = None,
     extra_notice: Optional[str] = None,
+    training_type: Optional[str] = None,
+    route_kind: Optional[str] = None,
+    route_label: Optional[str] = None,
 ) -> list[str]:
     version = get_project_version()
+    route_contract = resolve_training_route_contract(
+        training_type or "",
+        route_kind_override=route_kind,
+        route_label_override=route_label,
+    )
     lines = [
-        f"{PROJECT_NAME} {version}",
-        f"Source: {OFFICIAL_REPO_URL}",
-        f"License: {PROJECT_LICENSE}",
-        f"Copyright: {PROJECT_COPYRIGHT}",
-        "Compliance: modified builds and hosted services must provide corresponding source and preserve notices.",
-        "合规提示：修改版或通过网络向他人提供服务的版本，应提供对应源码并保留来源声明。",
+        _render_banner_template("project", project=PROJECT_NAME, version=version),
+        _render_banner_template("source", repo=OFFICIAL_REPO_URL),
+        _render_banner_template("license", license=PROJECT_LICENSE),
+        _render_banner_template("copyright", copyright=PROJECT_COPYRIGHT),
+        _render_banner_template("compliance_en"),
+        _render_banner_template("compliance_zh"),
+        f"Route contract: {route_contract.route_label} [{route_contract.route_kind}]",
+        f"Route capabilities: {', '.join(route_contract.capability_flags)}",
     ]
     if git_commit:
         lines.append(f"Commit: {git_commit}")
@@ -81,12 +118,18 @@ def emit_runtime_banner(
     git_commit: Optional[str] = None,
     runtime_mode: Optional[str] = None,
     extra_notice: Optional[str] = None,
+    training_type: Optional[str] = None,
+    route_kind: Optional[str] = None,
+    route_label: Optional[str] = None,
 ) -> None:
     for line in build_runtime_banner_lines(
         script_path=script_path,
         git_commit=git_commit,
         runtime_mode=runtime_mode,
         extra_notice=extra_notice,
+        training_type=training_type,
+        route_kind=route_kind,
+        route_label=route_label,
     ):
         printer(line)
 
@@ -114,6 +157,11 @@ def build_lulynx_metadata_fields(
     metadata_signing_secret: Optional[str] = None,
 ) -> dict[str, str]:
     version = get_project_version()
+    route_contract = resolve_training_route_contract(
+        str(metadata.get("lulynx_route_training_type") or metadata.get("model_train_type") or metadata.get("ss_training_type") or ""),
+        route_kind_override=str(metadata.get("lulynx_route_kind") or "") or None,
+        route_label_override=str(metadata.get("lulynx_route_label") or "") or None,
+    )
     fields: dict[str, str] = {
         "lulynx_project_name": PROJECT_NAME,
         "lulynx_project_version": version,
@@ -121,6 +169,7 @@ def build_lulynx_metadata_fields(
         "lulynx_project_license": PROJECT_LICENSE,
         "lulynx_project_commit": str(git_commit or "").strip() or "(unknown)",
         "lulynx_compliance_version": COMPLIANCE_VERSION,
+        **route_contract.as_metadata_fields(),
         "lulynx_training_notice": (
             f"Trained/exported with {PROJECT_NAME}. Modified or hosted builds should preserve notices and provide corresponding source under {PROJECT_LICENSE}."
         ),
