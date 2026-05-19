@@ -34,6 +34,7 @@ from mikazuki.plugins.training_hooks import (
     emit_before_forward_event,
     emit_before_optimizer_step_event,
 )
+from mikazuki.training_route_contract import resolve_training_route_contract
 
 setup_logging()
 import logging
@@ -76,10 +77,19 @@ def train(args):
         args.cache_text_encoder_outputs = True
 
     anima_train_utils.log_anima_runtime_summary(args, route_label="Anima finetune")
+    route_contract = resolve_training_route_contract(
+        getattr(args, "model_train_type", ""),
+        config=vars(args),
+        route_kind_override="anima",
+        route_label_override="Anima finetune",
+    )
     for line in train_util.build_runtime_banner_lines(
         script_path=str(getattr(args, "config_file", "") or ""),
         git_commit=train_util.get_git_revision_hash(),
-        extra_notice="Training route: Anima finetune",
+        training_type=getattr(args, "model_train_type", ""),
+        route_kind=route_contract.route_kind,
+        route_label=route_contract.route_label,
+        extra_notice=f"Training route: {route_contract.route_label}",
     ):
         logger.info(line)
     component_cpu_offload = anima_train_utils.should_use_anima_component_cpu_offload(args)

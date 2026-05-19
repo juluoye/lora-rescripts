@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from mikazuki.compliance import build_runtime_banner_lines
+from mikazuki.training_route_contract import resolve_training_route_contract
 
 
 @dataclass
@@ -47,10 +48,18 @@ def log_training_start_summary(
     git_commit: Optional[str] = None,
     route_label: Optional[str] = None,
 ) -> None:
+    route_contract = resolve_training_route_contract(
+        getattr(args, "model_train_type", ""),
+        config=vars(args),
+        route_label_override=route_label,
+    )
     for line in build_runtime_banner_lines(
         script_path=str(getattr(args, "config_file", "") or ""),
         git_commit=git_commit,
-        extra_notice=f"Training route: {route_label}" if route_label else None,
+        training_type=getattr(args, "model_train_type", ""),
+        route_kind=route_contract.route_kind,
+        route_label=route_contract.route_label,
+        extra_notice=f"Training route: {route_contract.route_label}",
     ):
         accelerator.print(line)
     accelerator.print("running training / 学習開始")

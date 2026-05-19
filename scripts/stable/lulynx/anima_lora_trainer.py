@@ -41,6 +41,7 @@ from library.config_util import BlueprintGenerator, ConfigSanitizer
 from library.custom_train_functions import apply_masked_loss
 from library.sageattention_compat import requires_reentrant_checkpoint_for_sageattention
 from library.utils import setup_logging
+from mikazuki.training_route_contract import resolve_training_route_contract
 from mikazuki.plugins.training_hooks import (
     apply_modify_loss_event,
     emit_after_backward_event,
@@ -935,6 +936,14 @@ class AnimaNetworkTrainer:
             route_label="Anima LoRA",
             route_kind="anima",
         )
+        route_contract = resolve_training_route_contract(
+            getattr(args, "model_train_type", ""),
+            config=vars(args),
+            route_kind_override=getattr(args, "lulynx_route_kind", None),
+            route_label_override=getattr(args, "lulynx_route_label", None),
+        )
+        args._lulynx_route_contract = route_contract.as_metadata_fields()
+        args._lulynx_route_capabilities = list(route_contract.capability_flags)
 
         if os.name == "nt" and int(getattr(args, "max_data_loader_n_workers", 0) or 0) > 0:
             logger.warning(

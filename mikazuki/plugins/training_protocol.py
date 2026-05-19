@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from mikazuki.training_route_contract import resolve_training_route_contract
+
 
 TRAINING_EVENT_PROTOCOL_VERSION = "tier2.training.v1"
 
@@ -73,6 +75,30 @@ _COMMON_PROTOCOL_FIELDS: tuple[TrainingPayloadFieldDefinition, ...] = (
         field_type="string",
         required=True,
         description="How training_type was resolved: declared, route_alias, route_fallback, or unknown.",
+    ),
+    TrainingPayloadFieldDefinition(
+        name="trainer_route_kind",
+        field_type="string",
+        required=True,
+        description="Shared Lulynx route kind resolved for this training payload.",
+    ),
+    TrainingPayloadFieldDefinition(
+        name="trainer_route_label",
+        field_type="string",
+        required=True,
+        description="Shared Lulynx route label resolved for this training payload.",
+    ),
+    TrainingPayloadFieldDefinition(
+        name="trainer_route_family",
+        field_type="string",
+        required=True,
+        description="Shared Lulynx route family resolved for this training payload.",
+    ),
+    TrainingPayloadFieldDefinition(
+        name="trainer_route_capabilities",
+        field_type="string[]",
+        required=True,
+        description="Route capability tags resolved from the shared Lulynx route contract.",
     ),
     TrainingPayloadFieldDefinition(
         name="source",
@@ -449,6 +475,10 @@ def _build_common_payload(
     source: str,
 ) -> dict:
     identity = resolve_training_identity(route=route, training_type=training_type)
+    route_contract = resolve_training_route_contract(
+        identity["training_type"],
+        route_kind_override=identity["trainer_route"] if identity["trainer_route"] != "unknown" else None,
+    )
     normalized_source = str(source or "").strip() or "unknown"
     current_global_step = _to_int(global_step, 0)
     return {
@@ -459,6 +489,10 @@ def _build_common_payload(
         "training_type": identity["training_type"],
         "declared_training_type": identity["declared_training_type"],
         "training_type_source": identity["training_type_source"],
+        "trainer_route_kind": route_contract.route_kind,
+        "trainer_route_label": route_contract.route_label,
+        "trainer_route_family": route_contract.route_family,
+        "trainer_route_capabilities": list(route_contract.capability_flags),
         "source": normalized_source,
         "global_step": current_global_step,
         "next_optimizer_step": current_global_step + 1,

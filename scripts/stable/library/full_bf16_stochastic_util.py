@@ -26,6 +26,21 @@ def _iter_group_params(param_groups) -> list[torch.Tensor]:
     return params
 
 
+def _is_bitsandbytes_optimizer(optimizer: Any) -> bool:
+    inner = optimizer
+    visited = set()
+    while inner is not None and id(inner) not in visited:
+        visited.add(id(inner))
+        module_name = str(getattr(inner.__class__, "__module__", "") or "").lower()
+        if "bitsandbytes" in module_name:
+            return True
+        next_inner = getattr(inner, "optimizer", None)
+        if next_inner is None:
+            next_inner = getattr(inner, "_optimizer", None)
+        inner = next_inner
+    return False
+
+
 class FullBf16StochasticOptimizer(torch.optim.Optimizer):
     def __init__(
         self,
@@ -45,9 +60,37 @@ class FullBf16StochasticOptimizer(torch.optim.Optimizer):
                 "full_bf16 stochastic optimizer received mismatched model/master parameter counts."
             )
         self._param_pairs = list(zip(self._model_params, self._master_params))
+        self._master_device_aligned = False
 
     def __getattr__(self, name: str):
         return getattr(self._optimizer, name)
+
+    def _sync_optimizer_group_options(self) -> None:
+        inner_param_groups = getattr(self._optimizer, "param_groups", None)
+        outer_param_groups = getattr(self, "param_groups", None)
+        if inner_param_groups is None or outer_param_groups is None:
+            return
+        if inner_param_groups is outer_param_groups:
+            return
+        if len(inner_param_groups) != len(outer_param_groups):
+            return
+
+        for outer_group, inner_group in zip(outer_param_groups, inner_param_groups):
+            for key, value in outer_group.items():
+                if key == "params":
+                    continue
+                inner_group[key] = value
+
+    def _align_master_device(self) -> None:
+        if self._master_device_aligned:
+            return
+        for model_param, master_param in self._param_pairs:
+            target_device = model_param.device
+            if master_param.device != target_device:
+                master_param.data = master_param.data.to(device=target_device)
+                if master_param.grad is not None:
+                    master_param.grad = master_param.grad.to(device=target_device)
+        self._master_device_aligned = True
 
     @staticmethod
     def _clone_param_groups(param_groups):
@@ -68,28 +111,32 @@ class FullBf16StochasticOptimizer(torch.optim.Optimizer):
                 model_param.grad_dtype = torch.float32
 
     def sync_model_grads_to_master(self) -> None:
+        self._align_master_device()
         for model_param, master_param in self._param_pairs:
             grad = getattr(model_param, "grad", None)
             if grad is None:
                 master_param.grad = None
                 continue
-            grad_fp32 = grad.detach().float()
+            grad_fp32 = grad.detach().to(device=master_param.device, dtype=torch.float32)
             if master_param.grad is None:
                 master_param.grad = grad_fp32.clone()
             else:
                 master_param.grad.copy_(grad_fp32)
 
     def sync_master_params_to_model(self) -> None:
+        self._align_master_device()
         with torch.no_grad():
             for model_param, master_param in self._param_pairs:
                 _copy_param_data_(model_param.data, master_param.data)
 
     def sync_model_params_to_master(self) -> None:
+        self._align_master_device()
         with torch.no_grad():
             for model_param, master_param in self._param_pairs:
-                master_param.data.copy_(model_param.data.float())
+                master_param.data.copy_(model_param.data.to(device=master_param.device, dtype=torch.float32))
 
     def state_dict(self):
+        self._sync_optimizer_group_options()
         return self._optimizer.state_dict()
 
     def load_state_dict(self, state_dict):
@@ -107,6 +154,7 @@ class FullBf16StochasticOptimizer(torch.optim.Optimizer):
                 model_param.grad.zero_()
 
     def step(self, closure=None):
+        self._sync_optimizer_group_options()
         self.sync_model_grads_to_master()
         loss = self._optimizer.step(closure)
         self.sync_master_params_to_model()
@@ -160,6 +208,16 @@ def wrap_optimizer_if_needed(
     route_label: str,
 ):
     if not bool(getattr(args, "full_bf16", False)):
+        return optimizer
+    if _is_bitsandbytes_optimizer(optimizer):
+        logger.warning(
+            f"{route_label}: full_bf16 stochastic accumulation is currently incompatible with bitsandbytes optimizers. "
+            "Falling back to the legacy full_bf16 behavior for this run."
+        )
+        logger.warning(
+            f"{route_label}：full_bf16 stochastic accumulation 当前与 bitsandbytes 优化器不兼容，"
+            "本次运行将回退为原有 full_bf16 行为。"
+        )
         return optimizer
     if bool(getattr(args, "deepspeed", False)):
         logger.warning(
@@ -227,10 +285,11 @@ def sync_master_grads_to_model_if_needed(optimizer: Any) -> None:
         if master_param.grad is None:
             model_param.grad = None
             continue
+        master_grad = master_param.grad.detach().to(device=model_param.device, dtype=torch.float32)
         if model_param.grad is None:
-            model_param.grad = master_param.grad.detach().to(dtype=torch.float32).clone()
+            model_param.grad = master_grad.clone()
         else:
-            model_param.grad.copy_(master_param.grad.detach().to(dtype=torch.float32))
+            model_param.grad.copy_(master_grad)
 
 
 __all__ = [

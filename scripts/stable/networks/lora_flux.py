@@ -144,11 +144,14 @@ class LoRAModule(torch.nn.Module):
 
             # rank dropout
             if self.rank_dropout is not None and self.training:
-                mask = torch.rand((lx.size(0), self.lora_dim), device=lx.device) > self.rank_dropout
+                # Create mask that applies to rank dimension, shared across batch and sequence
+                mask = (torch.rand(self.lora_dim, device=lx.device) > self.rank_dropout).to(lx.dtype)
                 if len(lx.size()) == 3:
-                    mask = mask.unsqueeze(1)  # for Text Encoder
+                    mask = mask.view(1, 1, -1)  # for Text Encoder: (1, 1, lora_dim)
                 elif len(lx.size()) == 4:
-                    mask = mask.unsqueeze(-1).unsqueeze(-1)  # for Conv2d
+                    mask = mask.view(1, -1, 1, 1)  # for Conv2d: (1, lora_dim, 1, 1)
+                else:
+                    mask = mask.view(1, -1)  # for 2D: (1, lora_dim)
                 lx = lx * mask
 
                 # scaling for rank dropout: treat as if the rank is changed
@@ -193,13 +196,15 @@ class LoRAModule(torch.nn.Module):
 
             # rank dropout
             if self.rank_dropout is not None and self.training:
-                masks = [torch.rand((lx.size(0), self.lora_dim), device=lx.device) > self.rank_dropout for lx in lxs]
-                for i in range(len(lxs)):
-                    if len(lx.size()) == 3:
-                        masks[i] = masks[i].unsqueeze(1)
-                    elif len(lx.size()) == 4:
-                        masks[i] = masks[i].unsqueeze(-1).unsqueeze(-1)
-                    lxs[i] = lxs[i] * masks[i]
+                # Create mask that applies to rank dimension, shared across batch and sequence
+                mask = (torch.rand(self.lora_dim, device=lxs[0].device) > self.rank_dropout).to(lxs[0].dtype)
+                if len(lxs[0].size()) == 3:
+                    mask = mask.view(1, 1, -1)  # for Text Encoder: (1, 1, lora_dim)
+                elif len(lxs[0].size()) == 4:
+                    mask = mask.view(1, -1, 1, 1)  # for Conv2d: (1, lora_dim, 1, 1)
+                else:
+                    mask = mask.view(1, -1)  # for 2D: (1, lora_dim)
+                lxs = [lx * mask for lx in lxs]
 
                 # scaling for rank dropout: treat as if the rank is changed
                 scale = self.scale * (1.0 / (1.0 - self.rank_dropout))  # redundant for readability
@@ -1373,15 +1378,14 @@ class LoRANetwork(torch.nn.Module):
 
         state_dict = self.state_dict()
 
-        if dtype is not None:
-            for key in list(state_dict.keys()):
-                v = state_dict[key]
-                v = v.detach().clone().to("cpu").to(dtype)
-                state_dict[key] = v
-
-        if os.path.splitext(file)[1] == ".safetensors":
-            from safetensors.torch import save_file
+        save_as_safetensors = os.path.splitext(file)[1] == ".safetensors"
+        if dtype is not None or save_as_safetensors:
             from library import train_util
+
+            state_dict = train_util.prepare_safetensors_state_dict(state_dict, dtype=dtype)
+
+        if save_as_safetensors:
+            from safetensors.torch import save_file
 
             # Precalculate model hashes to save time on indexing
             if metadata is None:

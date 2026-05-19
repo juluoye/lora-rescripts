@@ -21,6 +21,7 @@ from mikazuki.plugins.training_hooks import (
     emit_before_forward_event,
     emit_before_optimizer_step_event,
 )
+from mikazuki.training_route_contract import resolve_training_route_contract
 from lulynx.experimental_core import (
     PeakVramDiagnosticsRecorder,
     AutoVramProtectionController,
@@ -137,6 +138,14 @@ class NewbieCachedTrainer:
             **{field_name: getattr(self.config, field_name) for field_name in self.config.__dataclass_fields__}
         )
         normalize_lulynx_args(lulynx_args, route_label='Newbie LoRA', route_kind='newbie')
+        route_contract = resolve_training_route_contract(
+            getattr(self.config, "model_train_type", ""),
+            config=self.config.__dict__,
+            route_kind_override=getattr(lulynx_args, "lulynx_route_kind", None),
+            route_label_override=getattr(lulynx_args, "lulynx_route_label", None),
+        )
+        lulynx_args._lulynx_route_contract = route_contract.as_metadata_fields()
+        lulynx_args._lulynx_route_capabilities = list(route_contract.capability_flags)
         lulynx_core = create_lulynx_core(lulynx_args, route_kind='newbie', route_label='Newbie LoRA')
 
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
@@ -847,7 +856,6 @@ class NewbieCachedTrainer:
             total_params=total_params,
             saved_adapter_path=str(final_adapter_path),
         )
-
 
 
 

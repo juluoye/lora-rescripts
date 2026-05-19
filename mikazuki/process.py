@@ -14,6 +14,7 @@ from mikazuki.app.models import APIResponse
 from mikazuki.launch_utils import base_dir_path
 from mikazuki.log import log
 from mikazuki.tasks import tm
+from mikazuki.training_route_contract import extract_route_contract_metadata, resolve_training_route_contract
 from mikazuki.utils.batch_semantics import resolve_per_device_batch_from_global
 from mikazuki.utils.distributed_sync import resolve_trainer_file_from_runtime_config
 from mikazuki.utils.training_process_runtime import (
@@ -323,6 +324,22 @@ def run_train(
     ensure_repo_on_pythonpath(customize_env)
     apply_windows_accelerate_env(customize_env)
     apply_training_memory_allocator_env(customize_env, config_data)
+    route_contract = extract_route_contract_metadata(config_data) or resolve_training_route_contract(
+        str(config_data.get("model_train_type", "") or ""),
+        config=config_data,
+        route_kind_override=getattr(trainer_definition, "route_kind", None) if trainer_definition else None,
+        route_label_override=getattr(trainer_definition, "route_label", None) if trainer_definition else None,
+    ).as_metadata_fields()
+    customize_env["LULYNX_ROUTE_TRAINING_TYPE"] = str(route_contract.get("lulynx_route_training_type", "") or "")
+    customize_env["LULYNX_ROUTE_KIND"] = str(route_contract.get("lulynx_route_kind", "") or "")
+    customize_env["LULYNX_ROUTE_LABEL"] = str(route_contract.get("lulynx_route_label", "") or "")
+    customize_env["LULYNX_ROUTE_CAPABILITIES"] = str(route_contract.get("lulynx_route_capabilities", "") or "")
+    log.info(
+        "[route-contract] %s [%s] | capabilities=%s",
+        customize_env["LULYNX_ROUTE_LABEL"],
+        customize_env["LULYNX_ROUTE_KIND"],
+        customize_env["LULYNX_ROUTE_CAPABILITIES"],
+    )
 
     direct_launch_summary = (
         trainer_definition.direct_launch_summary
