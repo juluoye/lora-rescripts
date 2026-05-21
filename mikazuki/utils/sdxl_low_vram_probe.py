@@ -371,9 +371,9 @@ def _build_probe_config(
     probe_steps: int,
 ) -> dict:
     probe_config = copy.deepcopy(config_data)
-    probe_config["train_data_dir"] = str(dataset_root)
-    probe_config["output_dir"] = str((probe_root / "output").resolve())
-    probe_config["logging_dir"] = str((probe_root / "logs").resolve())
+    probe_config["train_data_dir"] = dataset_root.resolve().as_posix()
+    probe_config["output_dir"] = (probe_root / "output").resolve().as_posix()
+    probe_config["logging_dir"] = (probe_root / "logs").resolve().as_posix()
     probe_config["output_name"] = f"{_safe_name(probe_config.get('output_name', 'sdxl-probe'))}-probe-{target_edge}"
     probe_config["enable_preview"] = False
     probe_config["sample_at_first"] = False

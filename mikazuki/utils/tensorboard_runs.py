@@ -24,6 +24,11 @@ def resolve_tensorboard_logging_root(config: dict, repo_root: Path) -> Path:
     return resolve_local_path(logging_dir_raw, repo_root)
 
 
+def serialize_tensorboard_config_path(path: Path) -> str:
+    """Write Windows paths with forward slashes so TOML never sees backslash escapes."""
+    return path.resolve().as_posix()
+
+
 def sanitize_tensorboard_component(value: str) -> str:
     cleaned = re.sub(r"[^0-9A-Za-z._-]+", "-", str(value or "").strip())
     cleaned = re.sub(r"-{2,}", "-", cleaned).strip("-_.")
@@ -139,12 +144,12 @@ def apply_tensorboard_runtime_config(config: dict, repo_root: Path) -> dict:
         config["log_with"] = "tensorboard"
         changed = True
 
-    logging_root_str = str(logging_root)
+    logging_root_str = serialize_tensorboard_config_path(logging_root)
     if str(config.get("logging_dir", "") or "").strip() != logging_root_str:
         config["logging_dir"] = logging_root_str
         changed = True
 
-    run_dir_str = str(run_dir)
+    run_dir_str = serialize_tensorboard_config_path(run_dir)
     if str(config.get("logging_run_dir", "") or "").strip() != run_dir_str:
         config["logging_run_dir"] = run_dir_str
         changed = True

@@ -2229,7 +2229,7 @@ class LoRANetwork(torch.nn.Module):
         state_dict.pop(f"{lora_name}.lokr_rank", None)
 
     def _prepare_train_norm_comfyui_export_for_save(self, state_dict, metadata):
-        if self.adapter_type != "lokr" or not self.train_norm:
+        if not self.train_norm:
             return state_dict, metadata
 
         state_dict = dict(state_dict)

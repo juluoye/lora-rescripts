@@ -74,10 +74,19 @@ def test_lokr_decompose_both_low_rank_uses_native_factor_keys():
     _assert_forward_backward(module, linear, 16)
 
 
+def test_lokr_decomposed_keeps_alpha_rank_scale():
+    linear = torch.nn.Linear(16, 16, bias=False)
+    module = LoKrModule("decomposed_scaled", linear, lora_dim=1, alpha=0.25, factor=4, decompose_both=True)
+
+    assert _lokr_keys(module) == ["lokr_rank", "lokr_w1_a", "lokr_w1_b", "lokr_w2_a", "lokr_w2_b"]
+    assert module.scale == 0.25
+
+
 def test_lokr_full_matrix_and_high_rank_use_native_direct_keys():
     full_linear = torch.nn.Linear(16, 16, bias=False)
-    full_module = LoKrModule("full", full_linear, lora_dim=1, alpha=1, factor=4, full_matrix=True)
+    full_module = LoKrModule("full", full_linear, lora_dim=1_000_000, alpha=1, factor=4, full_matrix=True)
     assert _lokr_keys(full_module) == ["lokr_rank", "lokr_w1", "lokr_w2"]
+    assert full_module.scale == 1.0
 
     high_rank_linear = torch.nn.Linear(16, 16, bias=False)
     high_rank_module = LoKrModule(
@@ -89,6 +98,7 @@ def test_lokr_full_matrix_and_high_rank_use_native_direct_keys():
         decompose_both=True,
     )
     assert _lokr_keys(high_rank_module) == ["lokr_rank", "lokr_w1", "lokr_w2"]
+    assert high_rank_module.scale == 1.0
 
 
 def test_lokr_native_decomposed_roundtrip_from_weights():
@@ -185,6 +195,26 @@ def test_lokr_create_network_accepts_native_shape_options():
     assert network.lokr_unbalanced_factorization is True
 
 
+def test_lokr_create_network_uses_full_matrix_dim_sentinel():
+    unet = DummyAnima()
+    network = create_network(
+        1.0,
+        100_000,
+        1,
+        None,
+        None,
+        unet,
+        anima_adapter_type="lokr",
+        lokr_factor=4,
+    )
+    network.apply_to(None, unet, apply_text_encoder=False, apply_unet=True)
+
+    assert network.adapter_type == "lokr"
+    assert network.lokr_full_matrix is True
+    assert _lokr_keys(network.unet_loras[0]) == ["lokr_rank", "lokr_w1", "lokr_w2"]
+    assert network.unet_loras[0].scale == 1.0
+
+
 def test_lokr_native_save_keeps_lokr_keys_without_lora_compatible_weights():
     unet = DummyAnima()
     network = LoRANetwork(
@@ -220,6 +250,7 @@ def test_lokr_native_export_bakes_scale_for_comfyui_loader():
         dict(lora_dim=4, alpha=1, lokr_factor=4, lokr_decompose_both=False),
         dict(lora_dim=2, alpha=1, lokr_factor=2, lokr_decompose_both=True),
         dict(lora_dim=1, alpha=1, lokr_factor=4, lokr_decompose_both=True),
+        dict(lora_dim=1_000_000, alpha=1, lokr_factor=4, lokr_full_matrix=True),
     ]
 
     for index, kwargs in enumerate(cases):
