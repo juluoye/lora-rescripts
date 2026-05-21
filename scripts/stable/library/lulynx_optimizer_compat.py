@@ -88,6 +88,30 @@ class _DelegatingOptimizer(torch.optim.Optimizer):
     def __getattr__(self, name: str):
         return getattr(self._optimizer, name)
 
+    @property
+    def param_groups(self):
+        return self._optimizer.param_groups
+
+    @param_groups.setter
+    def param_groups(self, param_groups):
+        self._optimizer.param_groups = param_groups
+
+    @property
+    def state(self):
+        return self._optimizer.state
+
+    @state.setter
+    def state(self, state):
+        self._optimizer.state = state
+
+    @property
+    def defaults(self):
+        return self._optimizer.defaults
+
+    @defaults.setter
+    def defaults(self, defaults):
+        self._optimizer.defaults = defaults
+
     def state_dict(self):
         return self._optimizer.state_dict()
 

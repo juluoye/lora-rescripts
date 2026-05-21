@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 TRAIN_NORM_PREFIX_ANIMA = "train_norm_unet"
 TRAIN_NORM_PREFIX_TEXT_ENCODER = "train_norm_te"
 COMFYUI_TRAIN_NORM_PREFIX_ANIMA = "lora_unet"
+LOKR_FULL_MATRIX_DIM_SENTINEL = 100000
 
 
 def _lokr_factorization(dimension: int, factor: int) -> Tuple[int, int]:
@@ -196,6 +197,8 @@ class LoKrModule(torch.nn.Module):
         if type(alpha) == torch.Tensor:
             alpha = alpha.detach().float().cpu().item()
         alpha = self.lora_dim if alpha is None or alpha == 0 else float(alpha)
+        if getattr(self, "w1_direct", False) and getattr(self, "w2_direct", False):
+            alpha = float(self.lora_dim)
         self.scale = alpha / self.lora_dim
         self.register_buffer("alpha", torch.tensor(alpha))
         self.register_buffer("lokr_rank", torch.tensor(self.lora_dim))
@@ -989,6 +992,13 @@ def create_network(
     use_dora = adapter_type == "lora" and _parse_bool_arg(kwargs.get("dora_wd", None), default=False)
     lokr_factor = int(kwargs.get("lokr_factor", kwargs.get("factor", 8)) or 8)
     lokr_full_matrix = _parse_bool_arg(kwargs.get("lokr_full_matrix", kwargs.get("full_matrix", None)), default=False)
+    if use_lokr and int(network_dim) >= LOKR_FULL_MATRIX_DIM_SENTINEL and not lokr_full_matrix:
+        logger.info(
+            "Anima LoKr: network_dim=%s >= %s, forcing full_matrix=True (LyCORIS sentinel semantics).",
+            network_dim,
+            LOKR_FULL_MATRIX_DIM_SENTINEL,
+        )
+        lokr_full_matrix = True
     lokr_decompose_both = _parse_bool_arg(
         kwargs.get("lokr_decompose_both", kwargs.get("decompose_both", None)), default=False
     )
@@ -2219,7 +2229,7 @@ class LoRANetwork(torch.nn.Module):
         state_dict.pop(f"{lora_name}.lokr_rank", None)
 
     def _prepare_train_norm_comfyui_export_for_save(self, state_dict, metadata):
-        if self.adapter_type != "lokr":
+        if self.adapter_type != "lokr" or not self.train_norm:
             return state_dict, metadata
 
         state_dict = dict(state_dict)

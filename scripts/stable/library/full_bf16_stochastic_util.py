@@ -65,6 +65,22 @@ class FullBf16StochasticOptimizer(torch.optim.Optimizer):
     def __getattr__(self, name: str):
         return getattr(self._optimizer, name)
 
+    def _sync_optimizer_group_options(self) -> None:
+        inner_param_groups = getattr(self._optimizer, "param_groups", None)
+        outer_param_groups = getattr(self, "param_groups", None)
+        if inner_param_groups is None or outer_param_groups is None:
+            return
+        if inner_param_groups is outer_param_groups:
+            return
+        if len(inner_param_groups) != len(outer_param_groups):
+            return
+
+        for outer_group, inner_group in zip(outer_param_groups, inner_param_groups):
+            for key, value in outer_group.items():
+                if key == "params":
+                    continue
+                inner_group[key] = value
+
     def _align_master_device(self) -> None:
         if self._master_device_aligned:
             return
@@ -120,6 +136,7 @@ class FullBf16StochasticOptimizer(torch.optim.Optimizer):
                 master_param.data.copy_(model_param.data.to(device=master_param.device, dtype=torch.float32))
 
     def state_dict(self):
+        self._sync_optimizer_group_options()
         return self._optimizer.state_dict()
 
     def load_state_dict(self, state_dict):
@@ -137,6 +154,7 @@ class FullBf16StochasticOptimizer(torch.optim.Optimizer):
                 model_param.grad.zero_()
 
     def step(self, closure=None):
+        self._sync_optimizer_group_options()
         self.sync_model_grads_to_master()
         loss = self._optimizer.step(closure)
         self.sync_master_params_to_model()

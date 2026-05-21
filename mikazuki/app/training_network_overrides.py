@@ -285,11 +285,17 @@ def apply_anima_ui_overrides(config: dict) -> None:
             config["full_matrix"] = full_matrix_enabled
             config["decompose_both"] = decompose_both_enabled
             config["unbalanced_factorization"] = unbalanced_factorization_enabled
+            existing_lokr_factor = get_network_arg_value(network_args, "lokr_factor")
             legacy_factor = get_network_arg_value(network_args, "factor")
-            if legacy_factor not in (None, "") and "lokr_factor" not in config:
-                config["lokr_factor"] = legacy_factor
+            if "lokr_factor" not in config:
+                if existing_lokr_factor not in (None, ""):
+                    config["lokr_factor"] = existing_lokr_factor
+                elif legacy_factor not in (None, ""):
+                    config["lokr_factor"] = legacy_factor
+            lokr_factor = int(config.get("lokr_factor", 8) or 8)
+            config["lokr_factor"] = lokr_factor
             network_args = upsert_network_arg(network_args, "anima_adapter_type", "lokr")
-            network_args = upsert_network_arg(network_args, "lokr_factor", int(config.get("lokr_factor", 8) or 8))
+            network_args = upsert_network_arg(network_args, "lokr_factor", lokr_factor)
             network_args = upsert_network_arg(network_args, "lokr_export_mode", lokr_export_mode)
             network_args = upsert_network_arg(network_args, "full_matrix", "True" if full_matrix_enabled else None)
             network_args = upsert_network_arg(network_args, "decompose_both", "True" if decompose_both_enabled else None)
