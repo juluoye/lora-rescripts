@@ -1724,15 +1724,14 @@ class LoRANetwork(torch.nn.Module):
         state_dict, metadata = self._prepare_vera_export_for_save(state_dict, metadata)
         state_dict, metadata = self._prepare_pissa_export_for_save(state_dict, metadata)
 
-        if dtype is not None:
-            for key in list(state_dict.keys()):
-                v = state_dict[key]
-                v = v.detach().clone().to("cpu").to(dtype)
-                state_dict[key] = v
-
-        if os.path.splitext(file)[1] == ".safetensors":
-            from safetensors.torch import save_file
+        save_as_safetensors = os.path.splitext(file)[1] == ".safetensors"
+        if dtype is not None or save_as_safetensors:
             from library import train_util
+
+            state_dict = train_util.prepare_safetensors_state_dict(state_dict, dtype=dtype)
+
+        if save_as_safetensors:
+            from safetensors.torch import save_file
 
             # Precalculate model hashes to save time on indexing
             if metadata is None:

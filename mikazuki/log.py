@@ -20,6 +20,9 @@ try:
                 'inspect.value.border': 'black',
             }
         ),
+        legacy_windows=True,  # 使用传统 Windows 模式，减少闪烁
+        force_terminal=True,   # 强制终端模式
+        no_color=False,        # 保留颜色
     )
     pretty_install(console=console)
     rh = RichHandler(
@@ -32,6 +35,7 @@ try:
         log_time_format='%H:%M:%S-%f',
         level=logging.INFO,
         console=console,
+        enable_link_path=False,  # 禁用路径链接，减少 ANSI 序列
     )
     rh.set_name(logging.INFO)
     while log.hasHandlers() and len(log.handlers) > 0:

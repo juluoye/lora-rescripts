@@ -148,6 +148,32 @@ def python_supports_tensorboard(python_exe: str) -> bool:
         return False
 
 
+def python_supports_modules(python_exe: str, modules: list[str]) -> tuple[bool, list[str]]:
+    try:
+        probe = (
+            "import importlib.util, json, sys;"
+            "mods=sys.argv[1:];"
+            "missing=[m for m in mods if importlib.util.find_spec(m) is None];"
+            "print(json.dumps({'ok': not missing, 'missing': missing}))"
+        )
+        result = subprocess.run(
+            [python_exe, "-c", probe, *modules],
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if result.returncode != 0:
+            return False, list(modules)
+        payload = json.loads((result.stdout or "").strip() or "{}")
+        return bool(payload.get("ok", False)), list(payload.get("missing", []) or [])
+    except Exception:
+        return False, list(modules)
+
+
 def resolve_tensorboard_python():
     for python_exe in iter_tensorboard_python_candidates():
         if python_supports_tensorboard(python_exe):
@@ -196,13 +222,29 @@ def update_tageditor_status(status: str, detail: str = "") -> None:
 
 
 def resolve_tag_editor_python():
-    dedicated_python = next((path for path in DEDICATED_TAGEDITOR_PYTHONS if path.exists()), None)
-    if dedicated_python is not None:
-        return str(dedicated_python), "dedicated", ""
-
     runtime_name = infer_runtime_environment_name()
-    if is_amd_rocm_runtime(runtime_name) or is_intel_xpu_runtime(runtime_name):
-        runtime_label = "AMD ROCm" if is_amd_rocm_runtime(runtime_name) else "Intel XPU"
+    runtime_is_experimental = is_amd_rocm_runtime(runtime_name) or is_intel_xpu_runtime(runtime_name)
+    runtime_label = "AMD ROCm" if is_amd_rocm_runtime(runtime_name) else ("Intel XPU" if is_intel_xpu_runtime(runtime_name) else "")
+    dedicated_python = next((path for path in DEDICATED_TAGEDITOR_PYTHONS if path.exists()), None)
+    dedicated_detail = ""
+    if dedicated_python is not None:
+        supported, missing_modules = python_supports_modules(str(dedicated_python), TAGEDITOR_REQUIRED_MODULES)
+        if supported:
+            return str(dedicated_python), "dedicated", ""
+        dedicated_detail = (
+            "Dedicated tag editor runtime is present but incomplete. "
+            f"Missing modules: {', '.join(missing_modules)}. "
+            "Run install_tageditor.ps1 (Windows) or install_tageditor.sh (Linux) to finish preparing it."
+        )
+
+    if runtime_is_experimental:
+        if dedicated_detail:
+            detail = (
+                dedicated_detail
+                + "\n"
+                + f"{runtime_label} experimental mode requires a dedicated tag editor runtime."
+            )
+            return None, "dedicated_missing_dependencies", detail
         detail = (
             f"Dedicated tag editor runtime required for {runtime_label} experimental mode. "
             "Run install_tageditor.ps1 (Windows) or install_tageditor.sh (Linux) to prepare env/python_tageditor, env/venv-tageditor, or the legacy root folders.\n"
@@ -211,7 +253,17 @@ def resolve_tag_editor_python():
         )
         return None, "dedicated_runtime_required", detail
 
-    missing_modules = [name for name in TAGEDITOR_REQUIRED_MODULES if importlib.util.find_spec(name) is None]
+    main_supported, missing_modules = python_supports_modules(sys.executable, TAGEDITOR_REQUIRED_MODULES)
+    if main_supported:
+        return sys.executable, ("main_fallback" if dedicated_detail else "main"), dedicated_detail
+
+    if dedicated_detail:
+        detail = (
+            dedicated_detail
+            + "\n"
+            + f"Current runtime is also missing modules: {', '.join(missing_modules)}."
+        )
+        return None, "missing_dependencies", detail
     if missing_modules:
         return None, "missing_dependencies", f"Missing modules: {', '.join(missing_modules)}"
 
@@ -238,8 +290,13 @@ def run_tag_editor():
         return
 
     os.environ["MIKAZUKI_TAGEDITOR_RUNTIME"] = runtime_kind
+    if runtime_kind == "main_fallback" and detail:
+        log.warning("tag editor dedicated runtime is unavailable, falling back to the current runtime: %s", detail)
     log.info("Starting tageditor...")
     update_tageditor_status("starting", f"Launching tag editor subprocess on port {TAGEDITOR_PORT}...")
+    tag_editor_env = os.environ.copy()
+    tag_editor_env["PYTHONUTF8"] = "1"
+    tag_editor_env["PYTHONIOENCODING"] = "utf-8"
     cmd = [
         python_exe,
         TAGEDITOR_LAUNCH,
@@ -249,7 +306,7 @@ def run_tag_editor():
     ]
     localization = args.localization or "zh-Hans"
     cmd.extend(["--localization", localization])
-    subprocess.Popen(cmd, cwd=TAGEDITOR_ROOT)
+    subprocess.Popen(cmd, cwd=TAGEDITOR_ROOT, env=tag_editor_env)
 
 
 def apply_listen_host_overrides() -> None:

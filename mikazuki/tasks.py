@@ -454,6 +454,18 @@ class TaskManager:
         if task is not None:
             task.wait()
 
+    def request_terminate_all_active(self) -> list[str]:
+        with self._tasks_lock:
+            active_tasks = [task for task in self.tasks.values() if task.is_active()]
+        results: list[str] = []
+        for task in active_tasks:
+            try:
+                result = task.request_terminate()
+            except Exception:
+                result = "error"
+            results.append(result)
+        return results
+
     def dump(self) -> List[Dict]:
         with self._tasks_lock:
             tasks = list(self.tasks.values())

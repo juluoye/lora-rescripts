@@ -562,7 +562,7 @@ class Api:
         window_width: Optional[int] = None,
         window_height: Optional[int] = None,
     ) -> None:
-        """Perform shutdown preparation without blocking the window close event."""
+        """Perform shutdown preparation before the window is allowed to close."""
 
         self._shutting_down = True
 
@@ -580,23 +580,27 @@ class Api:
         # Detach the JS bridge first so background threads stop trying to emit.
         self._window = None
 
-        self._start_close_cleanup()
+        self._start_close_cleanup(wait=True)
 
-    def _start_close_cleanup(self) -> None:
+    def _start_close_cleanup(self, *, wait: bool = False) -> None:
         with self._close_cleanup_lock:
             if self._close_cleanup_started:
                 return
             self._close_cleanup_started = True
 
+        if wait:
+            self._run_close_cleanup()
+            return
+
         thread = threading.Thread(
             target=self._run_close_cleanup,
             name="launcher-close-cleanup",
-            daemon=True,
+            daemon=False,
         )
         thread.start()
 
     def _run_close_cleanup(self) -> None:
         try:
-            self._executor._terminate_process(timeout=0.25)
+            self._executor._force_kill_process()
         except Exception:
             pass

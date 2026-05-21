@@ -75,7 +75,7 @@ def _sanitize_dimension(value: object, fallback: int) -> int:
 
 
 def _on_closing(api: Api, window: webview.Window) -> None:
-    """Clean up on window close without blocking the GUI shutdown path."""
+    """Prompt before force-closing an active training run, then clean up."""
     width = None
     height = None
     try:
@@ -86,6 +86,20 @@ def _on_closing(api: Api, window: webview.Window) -> None:
         height = int(window.height)
     except Exception:
         pass
+
+    try:
+        if api.is_running():
+            confirmed = window.create_confirmation_dialog(
+                "训练进行中 / Training In Progress",
+                "训练进行中，您确定要关闭启动器吗？这会强制结束训练进程。\n\n"
+                "Training is still running. Are you sure you want to close the launcher? "
+                "This will force-terminate the training process.",
+            )
+            if not confirmed:
+                return False
+    except Exception:
+        pass
+
     try:
         api.prepare_for_close(window_width=width, window_height=height)
     except Exception:

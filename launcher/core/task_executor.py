@@ -2131,42 +2131,54 @@ class LauncherTaskExecutor:
         process = self._process
         if not process:
             return
+        pid = process.pid
         try:
             if process.poll() is not None:
+                if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+                    subprocess.run(
+                        ["taskkill", "/PID", str(pid), "/T", "/F"],
+                        capture_output=True,
+                        check=False,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        **hidden_subprocess_kwargs(),
+                    )
                 return
         except Exception:
-            return
+            pass
         try:
             process.terminate()
             process.wait(timeout=timeout)
-            return
         except subprocess.TimeoutExpired:
             pass
         except Exception:
-            return
+            pass
         self._force_kill_process(process=process)
 
     def _force_kill_process(self, process: Optional[subprocess.Popen] = None) -> None:
         process = process or self._process
         if not process:
             return
+        pid = process.pid
         try:
-            if process.poll() is None:
-                if process.stdout:
-                    try:
-                        process.stdout.close()
-                    except Exception:
-                        pass
-                if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
-                    subprocess.run(
-                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                        capture_output=True,
-                        check=False,
-                        text=True,
-                        **hidden_subprocess_kwargs(),
-                    )
-                else:
-                    process.kill()
-                process.wait(timeout=2.0)
+            if process.stdout:
+                try:
+                    process.stdout.close()
+                except Exception:
+                    pass
+            if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    capture_output=True,
+                    check=False,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    **hidden_subprocess_kwargs(),
+                )
+            elif process.poll() is None:
+                process.kill()
+            process.wait(timeout=2.0)
         except Exception:
             pass

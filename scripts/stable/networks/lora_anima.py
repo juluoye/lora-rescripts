@@ -6,7 +6,7 @@ import os
 import re
 import weakref
 from functools import partial
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Type, Union
 import torch
 import torch.nn.functional as F
@@ -23,6 +23,36 @@ logger = logging.getLogger(__name__)
 
 TRAIN_NORM_PREFIX_ANIMA = "train_norm_unet"
 TRAIN_NORM_PREFIX_TEXT_ENCODER = "train_norm_te"
+COMFYUI_TRAIN_NORM_PREFIX_ANIMA = "lora_unet"
+
+
+def _lokr_factorization(dimension: int, factor: int) -> Tuple[int, int]:
+    dimension = max(1, int(dimension))
+    factor = int(factor)
+    if factor > 0 and dimension % factor == 0:
+        m = factor
+        n = dimension // factor
+        if m > n:
+            n, m = m, n
+        return m, n
+
+    if factor < 0:
+        factor = dimension
+
+    m, n = 1, dimension
+    length = m + n
+    while m < n:
+        new_m = m + 1
+        while dimension % new_m != 0:
+            new_m += 1
+        new_n = dimension // new_m
+        if new_m + new_n > length or new_m > factor:
+            break
+        m, n = new_m, new_n
+
+    if m > n:
+        n, m = m, n
+    return m, n
 
 
 def _parse_bool_arg(value, default: bool = False) -> bool:
@@ -66,9 +96,37 @@ class TrainNormRef:
     lora_name: str
     original_name: str
     org_module: torch.nn.Module
+    base_params: Dict[str, torch.Tensor] = field(default_factory=dict)
 
     def named_parameters(self):
         return self.org_module.named_parameters(recurse=False)
+
+
+def _snapshot_train_norm_base_params(module: torch.nn.Module) -> Dict[str, torch.Tensor]:
+    return {name: param.detach().cpu().clone() for name, param in module.named_parameters(recurse=False)}
+
+
+def _train_norm_name_to_comfyui_name(lora_name: str) -> Optional[str]:
+    if lora_name.startswith(TRAIN_NORM_PREFIX_ANIMA):
+        return COMFYUI_TRAIN_NORM_PREFIX_ANIMA + lora_name[len(TRAIN_NORM_PREFIX_ANIMA):]
+    return None
+
+
+def _comfyui_name_to_train_norm_name(lora_name: str) -> Optional[str]:
+    if lora_name.startswith(COMFYUI_TRAIN_NORM_PREFIX_ANIMA):
+        return TRAIN_NORM_PREFIX_ANIMA + lora_name[len(COMFYUI_TRAIN_NORM_PREFIX_ANIMA):]
+    return None
+
+
+def _is_comfyui_train_norm_key(key: str) -> bool:
+    if "." not in key:
+        return False
+    lora_name, param_name = key.rsplit(".", 1)
+    return (
+        lora_name.startswith(COMFYUI_TRAIN_NORM_PREFIX_ANIMA)
+        and "norm" in lora_name
+        and param_name in {"diff", "diff_b"}
+    )
 
 
 class TrainNormParamProxy(torch.nn.Module):
@@ -107,6 +165,10 @@ class LoKrModule(torch.nn.Module):
         rank_dropout=None,
         module_dropout=None,
         factor=8,
+        full_matrix=False,
+        decompose_both=False,
+        unbalanced_factorization=False,
+        lokr_shape: Optional[Dict[str, Tuple[int, ...]]] = None,
     ):
         super().__init__()
         if org_module.__class__.__name__ != "Linear":
@@ -119,17 +181,17 @@ class LoKrModule(torch.nn.Module):
         self.dropout = dropout
         self.rank_dropout = rank_dropout
         self.module_dropout = module_dropout
+        self.full_matrix = bool(full_matrix)
+        self.decompose_both = bool(decompose_both)
+        self.unbalanced_factorization = bool(unbalanced_factorization)
 
         in_dim = org_module.in_features
         out_dim = org_module.out_features
-        self.factor = self._find_factor(in_dim, out_dim, int(factor) if factor is not None else 8)
-        self.lokr_in_dim = in_dim // self.factor
-        self.lokr_out_dim = out_dim // self.factor
-
-        self.lokr_w1 = torch.nn.Parameter(torch.empty(self.factor, self.factor))
-        self.lokr_w2 = torch.nn.Parameter(torch.empty(self.lokr_out_dim, self.lokr_in_dim))
-        torch.nn.init.kaiming_uniform_(self.lokr_w1, a=math.sqrt(5))
-        torch.nn.init.zeros_(self.lokr_w2)
+        self.in_features = int(in_dim)
+        self.out_features = int(out_dim)
+        self.factor = int(factor) if factor is not None else 8
+        self.lokr_shape = {str(k): tuple(v) for k, v in (lokr_shape or {}).items()}
+        self._build_parameters()
 
         if type(alpha) == torch.Tensor:
             alpha = alpha.detach().float().cpu().item()
@@ -154,13 +216,116 @@ class LoKrModule(torch.nn.Module):
                 return factor
         return 1
 
+    def _build_parameters(self) -> None:
+        if self.lokr_shape:
+            self.w1_direct = "w1" in self.lokr_shape
+            self.w2_direct = "w2" in self.lokr_shape
+            missing = []
+            if not self.w1_direct:
+                for key in ("w1_a", "w1_b"):
+                    if key not in self.lokr_shape:
+                        missing.append(key)
+            if not self.w2_direct:
+                for key in ("w2_a", "w2_b"):
+                    if key not in self.lokr_shape:
+                        missing.append(key)
+            if missing:
+                raise ValueError(
+                    f"LoKrModule {self.lora_name}: incomplete LoKr shape metadata, missing {', '.join(missing)}"
+                )
+
+            if self.w1_direct:
+                self.lokr_w1 = torch.nn.Parameter(torch.empty(*self.lokr_shape["w1"]))
+                torch.nn.init.kaiming_uniform_(self.lokr_w1, a=math.sqrt(5))
+            else:
+                self.lokr_w1_a = torch.nn.Parameter(torch.empty(*self.lokr_shape["w1_a"]))
+                self.lokr_w1_b = torch.nn.Parameter(torch.empty(*self.lokr_shape["w1_b"]))
+                torch.nn.init.kaiming_uniform_(self.lokr_w1_a, a=math.sqrt(5))
+                torch.nn.init.kaiming_uniform_(self.lokr_w1_b, a=math.sqrt(5))
+
+            if self.w2_direct:
+                self.lokr_w2 = torch.nn.Parameter(torch.empty(*self.lokr_shape["w2"]))
+                torch.nn.init.zeros_(self.lokr_w2)
+            else:
+                self.lokr_w2_a = torch.nn.Parameter(torch.empty(*self.lokr_shape["w2_a"]))
+                self.lokr_w2_b = torch.nn.Parameter(torch.empty(*self.lokr_shape["w2_b"]))
+                torch.nn.init.kaiming_uniform_(self.lokr_w2_a, a=math.sqrt(5))
+                torch.nn.init.zeros_(self.lokr_w2_b)
+
+            self.lokr_out_dim = self._materialize_w2().shape[0]
+            self.lokr_in_dim = self._materialize_w2().shape[1]
+            return
+
+        if not self.decompose_both and not self.full_matrix and not self.unbalanced_factorization:
+            factor = self._find_factor(self.in_features, self.out_features, self.factor)
+            self.factor = factor
+            self.lokr_in_dim = self.in_features // factor
+            self.lokr_out_dim = self.out_features // factor
+            self.w1_direct = True
+            self.w2_direct = True
+            self.lokr_w1 = torch.nn.Parameter(torch.empty(factor, factor))
+            self.lokr_w2 = torch.nn.Parameter(torch.empty(self.lokr_out_dim, self.lokr_in_dim))
+            torch.nn.init.kaiming_uniform_(self.lokr_w1, a=math.sqrt(5))
+            torch.nn.init.zeros_(self.lokr_w2)
+            return
+
+        out_l, out_k = _lokr_factorization(self.out_features, self.factor)
+        in_m, in_n = _lokr_factorization(self.in_features, self.factor)
+        if self.unbalanced_factorization:
+            out_l, out_k = out_k, out_l
+
+        self.lokr_out_dim = out_k
+        self.lokr_in_dim = in_n
+        w1_threshold = max(out_l, in_m) / 2.0
+        w2_threshold = max(out_k, in_n) / 2.0
+        self.w1_direct = self.full_matrix or not (self.decompose_both and self.lora_dim < w1_threshold)
+        self.w2_direct = self.full_matrix or self.lora_dim >= w2_threshold
+
+        if self.w2_direct and not self.full_matrix and self.decompose_both:
+            logger.info(
+                "Anima LoKr: lora_dim=%s >= %.1f, using direct lokr_w2 full-matrix branch for %s",
+                self.lora_dim,
+                w2_threshold,
+                self.lora_name,
+            )
+
+        if self.w1_direct:
+            self.lokr_w1 = torch.nn.Parameter(torch.empty(out_l, in_m))
+            torch.nn.init.kaiming_uniform_(self.lokr_w1, a=math.sqrt(5))
+        else:
+            self.lokr_w1_a = torch.nn.Parameter(torch.empty(out_l, self.lora_dim))
+            self.lokr_w1_b = torch.nn.Parameter(torch.empty(self.lora_dim, in_m))
+            torch.nn.init.kaiming_uniform_(self.lokr_w1_a, a=math.sqrt(5))
+            torch.nn.init.kaiming_uniform_(self.lokr_w1_b, a=math.sqrt(5))
+
+        if self.w2_direct:
+            self.lokr_w2 = torch.nn.Parameter(torch.empty(out_k, in_n))
+            torch.nn.init.zeros_(self.lokr_w2)
+        else:
+            self.lokr_w2_a = torch.nn.Parameter(torch.empty(out_k, self.lora_dim))
+            self.lokr_w2_b = torch.nn.Parameter(torch.empty(self.lora_dim, in_n))
+            torch.nn.init.kaiming_uniform_(self.lokr_w2_a, a=math.sqrt(5))
+            torch.nn.init.zeros_(self.lokr_w2_b)
+
+    def _materialize_w1(self):
+        if getattr(self, "w1_direct", hasattr(self, "lokr_w1")):
+            return self.lokr_w1
+        return self.lokr_w1_a @ self.lokr_w1_b
+
+    def _materialize_w2(self):
+        if getattr(self, "w2_direct", hasattr(self, "lokr_w2")):
+            return self.lokr_w2
+        return self.lokr_w2_a @ self.lokr_w2_b
+
     def apply_to(self):
         self.org_forward = self.org_module.forward
         self.org_module.forward = self.forward
         del self.org_module
 
     def _compute_weight(self, device=None, dtype=None):
-        weight = torch.kron(self.lokr_w1, self.lokr_w2)
+        weight = torch.kron(self._materialize_w1(), self._materialize_w2()).reshape(
+            self.out_features, self.in_features
+        )
         if device is not None or dtype is not None:
             weight = weight.to(device=device or weight.device, dtype=dtype or weight.dtype)
         return weight
@@ -177,8 +342,38 @@ class LoKrModule(torch.nn.Module):
             lx = F.dropout(lx, p=self.dropout)
 
         weight = self._compute_weight(device=lx.device, dtype=lx.dtype)
+
+        if self.rank_dropout is not None and self.training:
+            mask = (torch.rand(weight.shape[0], device=lx.device) > self.rank_dropout).to(dtype=weight.dtype)
+            weight = weight * mask.view(-1, 1)
+            scale = self.scale * (1.0 / (1.0 - self.rank_dropout))
+        else:
+            scale = self.scale
+
         lx = F.linear(lx, weight)
-        return org_forwarded + lx * self.multiplier * self.scale
+        return org_forwarded + lx * self.multiplier * scale
+
+    @torch.no_grad()
+    def export_standard_lora_weights(self):
+        """Export LoKr as standard LoRA-compatible weights via SVD approximation."""
+        full_weight = self._compute_weight(device=torch.device("cpu"), dtype=torch.float32).detach()
+
+        out_dim, in_dim = full_weight.shape
+        rank = min(self.lora_dim, out_dim, in_dim)
+        if rank <= 0:
+            raise ValueError(f"LoKr export: invalid rank {rank} for shape {full_weight.shape}")
+
+        U, S, Vh = torch.linalg.svd(full_weight, full_matrices=False)
+        U = U[:, :rank]
+        S = S[:rank]
+        Vh = Vh[:rank, :]
+
+        scaled_s = torch.sqrt(S.clamp_min(0))
+        up_weight = U * scaled_s.unsqueeze(0)
+        down_weight = scaled_s.unsqueeze(1) * Vh
+
+        alpha = torch.tensor(float(self.lora_dim), dtype=torch.float32)
+        return down_weight.contiguous(), up_weight.contiguous(), alpha
 
     @property
     def device(self):
@@ -198,6 +393,10 @@ class LoKrInfModule(LoKrModule):
         lora_dim=4,
         alpha=1,
         factor=8,
+        full_matrix=False,
+        decompose_both=False,
+        unbalanced_factorization=False,
+        lokr_shape: Optional[Dict[str, Tuple[int, ...]]] = None,
         **kwargs,
     ):
         super().__init__(
@@ -210,6 +409,10 @@ class LoKrInfModule(LoKrModule):
             rank_dropout=None,
             module_dropout=None,
             factor=factor,
+            full_matrix=full_matrix,
+            decompose_both=decompose_both,
+            unbalanced_factorization=unbalanced_factorization,
+            lokr_shape=lokr_shape,
         )
         self.org_module_ref = [org_module]
         self.enabled = True
@@ -229,9 +432,8 @@ class LoKrInfModule(LoKrModule):
         if device is None:
             device = org_device
 
-        lokr_w1 = sd["lokr_w1"].to(torch.float).to(device)
-        lokr_w2 = sd["lokr_w2"].to(torch.float).to(device)
-        adapter_weight = torch.kron(lokr_w1, lokr_w2)
+        self.load_state_dict(sd, strict=False)
+        adapter_weight = self._compute_weight(device=device, dtype=torch.float)
         org_sd["weight"] = (weight.to(device) + self.multiplier * adapter_weight * self.scale).to(dtype)
         self.org_module.load_state_dict(org_sd)
 
@@ -582,10 +784,14 @@ class VeraModule(torch.nn.Module):
             hidden = F.dropout(hidden, p=self.dropout)
 
         if self.rank_dropout is not None and self.training:
-            mask = torch.rand((hidden.size(0), self.lora_dim), device=hidden.device) > self.rank_dropout
+            # Create mask with correct shape for broadcasting
             if hidden.ndim == 3:
-                mask = mask.unsqueeze(1)
-            hidden = hidden * mask
+                # hidden: (batch, seq_len, lora_dim)
+                mask = (torch.rand(self.lora_dim, device=hidden.device) > self.rank_dropout).view(1, 1, -1)
+            else:
+                # hidden: (batch, lora_dim)
+                mask = (torch.rand(self.lora_dim, device=hidden.device) > self.rank_dropout).view(1, -1)
+            hidden = hidden * mask.to(hidden.dtype)
 
         delta = F.linear(hidden, lambda_b.unsqueeze(1) * vera_B)
         return delta * self.multiplier
@@ -782,6 +988,11 @@ def create_network(
     use_vera = adapter_type == "vera"
     use_dora = adapter_type == "lora" and _parse_bool_arg(kwargs.get("dora_wd", None), default=False)
     lokr_factor = int(kwargs.get("lokr_factor", kwargs.get("factor", 8)) or 8)
+    lokr_full_matrix = _parse_bool_arg(kwargs.get("lokr_full_matrix", kwargs.get("full_matrix", None)), default=False)
+    lokr_decompose_both = _parse_bool_arg(
+        kwargs.get("lokr_decompose_both", kwargs.get("decompose_both", None)), default=False
+    )
+    lokr_unbalanced_factorization = _parse_bool_arg(kwargs.get("unbalanced_factorization", None), default=False)
     train_norm = _parse_bool_arg(kwargs.get("train_norm", None), default=False)
     bypass_mode = _parse_bool_arg(kwargs.get("bypass_mode", None), default=False)
     pissa_init = _parse_bool_arg(kwargs.get("pissa_init", None), default=False)
@@ -790,6 +1001,12 @@ def create_network(
     pissa_oversample = int(kwargs.get("pissa_oversample", 8) or 8)
     pissa_apply_conv2d = _parse_bool_arg(kwargs.get("pissa_apply_conv2d", None), default=False)
     pissa_export_mode = _normalize_pissa_export_mode(kwargs.get("pissa_export_mode", "lossless"))
+    # Keep Anima LoKr checkpoints in native LoKr form by default. Explicitly use
+    # lora_compatible only when a standard LoRA-style export is required.
+    lokr_export_mode = str(kwargs.get("lokr_export_mode", "native")).strip().lower().replace("-", "_")
+    if lokr_export_mode not in ("native", "lora_compatible"):
+        logger.warning(f"Invalid lokr_export_mode '{lokr_export_mode}', defaulting to 'native'")
+        lokr_export_mode = "native"
     vera_projection_prng_key = int(kwargs.get("vera_projection_prng_key", 0) or 0)
     vera_d_initial = float(kwargs.get("vera_d_initial", 0.1) or 0.1)
 
@@ -910,8 +1127,12 @@ def create_network(
         vera_d_initial=vera_d_initial,
         use_dora=use_dora,
         bypass_mode=bypass_mode,
+        lokr_full_matrix=lokr_full_matrix,
+        lokr_decompose_both=lokr_decompose_both,
+        lokr_unbalanced_factorization=lokr_unbalanced_factorization,
     )
     network.pissa_export_mode = pissa_export_mode
+    network.lokr_export_mode = lokr_export_mode
 
     loraplus_lr_ratio = kwargs.get("loraplus_lr_ratio", None)
     loraplus_unet_lr_ratio = kwargs.get("loraplus_unet_lr_ratio", None)
@@ -937,6 +1158,7 @@ def create_network_from_weights(multiplier, file, ae, text_encoders, unet, weigh
     modules_dim = {}
     modules_alpha = {}
     modules_factor = {}
+    modules_lokr_shape = {}
     train_llm_adapter = False
     is_lokr = False
     is_dora = False
@@ -958,18 +1180,37 @@ def create_network_from_weights(multiplier, file, ae, text_encoders, unet, weigh
         if lora_name.startswith(TRAIN_NORM_PREFIX_ANIMA) or lora_name.startswith(TRAIN_NORM_PREFIX_TEXT_ENCODER):
             train_norm = True
             continue
+        if _is_comfyui_train_norm_key(key):
+            train_norm = True
+            continue
         if "alpha" in key:
             modules_alpha[lora_name] = value
         elif "lokr_rank" in key:
             modules_dim[lora_name] = int(value.detach().float().cpu().item())
             is_lokr = True
-        elif "lokr_w1" in key:
+        elif key.endswith(".lokr_w1"):
             modules_factor[lora_name] = value.size(0)
+            modules_lokr_shape.setdefault(lora_name, {})["w1"] = tuple(value.shape)
+            is_lokr = True
+        elif key.endswith(".lokr_w2"):
+            modules_lokr_shape.setdefault(lora_name, {})["w2"] = tuple(value.shape)
+            is_lokr = True
+        elif key.endswith(".lokr_w1_a"):
+            modules_lokr_shape.setdefault(lora_name, {})["w1_a"] = tuple(value.shape)
+            modules_dim[lora_name] = int(value.size(1))
+            is_lokr = True
+        elif key.endswith(".lokr_w1_b"):
+            modules_lokr_shape.setdefault(lora_name, {})["w1_b"] = tuple(value.shape)
             if lora_name not in modules_dim:
                 alpha_value = modules_alpha.get(lora_name)
                 modules_dim[lora_name] = int(alpha_value.detach().float().cpu().item()) if alpha_value is not None else 4
             is_lokr = True
-        elif "lokr_w2" in key:
+        elif key.endswith(".lokr_w2_a"):
+            modules_lokr_shape.setdefault(lora_name, {})["w2_a"] = tuple(value.shape)
+            modules_dim[lora_name] = int(value.size(1))
+            is_lokr = True
+        elif key.endswith(".lokr_w2_b"):
+            modules_lokr_shape.setdefault(lora_name, {})["w2_b"] = tuple(value.shape)
             if lora_name not in modules_dim:
                 alpha_value = modules_alpha.get(lora_name)
                 modules_dim[lora_name] = int(alpha_value.detach().float().cpu().item()) if alpha_value is not None else 4
@@ -982,6 +1223,15 @@ def create_network_from_weights(multiplier, file, ae, text_encoders, unet, weigh
 
         if "llm_adapter" in lora_name:
             train_llm_adapter = True
+
+    if is_lokr:
+        for lora_name in modules_lokr_shape.keys():
+            if lora_name not in modules_dim:
+                alpha_value = modules_alpha.get(lora_name)
+                modules_dim[lora_name] = int(alpha_value.detach().float().cpu().item()) if alpha_value is not None else 4
+        for lora_name, dim in modules_dim.items():
+            if lora_name not in modules_alpha:
+                modules_alpha[lora_name] = dim
 
     if is_lokr:
         module_class = LoKrInfModule if for_inference else LoKrModule
@@ -1008,6 +1258,7 @@ def create_network_from_weights(multiplier, file, ae, text_encoders, unet, weigh
         use_lokr=is_lokr,
         lokr_factor=next(iter(modules_factor.values())) if modules_factor else 8,
         modules_factor=modules_factor if is_lokr else None,
+        modules_lokr_shape=modules_lokr_shape if is_lokr else None,
         train_norm=train_norm,
         adapter_type=("lokr" if is_lokr else ("lora" if is_dora else requested_adapter_type)),
         use_dora=is_dora,
@@ -1048,12 +1299,16 @@ class LoRANetwork(torch.nn.Module):
         use_lokr: bool = False,
         lokr_factor: int = 8,
         modules_factor: Optional[Dict[str, int]] = None,
+        modules_lokr_shape: Optional[Dict[str, Dict[str, Tuple[int, ...]]]] = None,
         train_norm: bool = False,
         adapter_type: Optional[str] = None,
         vera_projection_prng_key: int = 0,
         vera_d_initial: float = 0.1,
         use_dora: bool = False,
         bypass_mode: bool = False,
+        lokr_full_matrix: bool = False,
+        lokr_decompose_both: bool = False,
+        lokr_unbalanced_factorization: bool = False,
     ) -> None:
         super().__init__()
         self.multiplier = multiplier
@@ -1068,6 +1323,10 @@ class LoRANetwork(torch.nn.Module):
         self.use_lokr = use_lokr
         self.lokr_factor = lokr_factor
         self.modules_factor = modules_factor or {}
+        self.modules_lokr_shape = modules_lokr_shape or {}
+        self.lokr_full_matrix = bool(lokr_full_matrix)
+        self.lokr_decompose_both = bool(lokr_decompose_both)
+        self.lokr_unbalanced_factorization = bool(lokr_unbalanced_factorization)
         self.vera_projection_prng_key = int(vera_projection_prng_key)
         self.vera_d_initial = float(vera_d_initial)
         normalized_adapter_type = str(adapter_type or ("lokr" if self.use_lokr else "lora")).strip().lower()
@@ -1092,6 +1351,14 @@ class LoRANetwork(torch.nn.Module):
             logger.info(
                 f"neuron dropout: p={self.dropout}, rank dropout: p={self.rank_dropout}, module dropout: p={self.module_dropout}"
             )
+            if self.use_lokr:
+                logger.info(
+                    "Anima LoKr config: factor=%s, full_matrix=%s, decompose_both=%s, unbalanced_factorization=%s",
+                    self.lokr_factor,
+                    self.lokr_full_matrix,
+                    self.lokr_decompose_both,
+                    self.lokr_unbalanced_factorization,
+                )
 
         # compile regular expression if specified
         def str_to_re_patterns(patterns: Optional[List[str]]) -> List[re.Pattern]:
@@ -1164,7 +1431,12 @@ class LoRANetwork(torch.nn.Module):
                     if self.train_norm and original_name not in seen_norm_names and is_trainable_norm_module(child_module):
                         if is_allowed_module(original_name):
                             norm_name = f"{norm_prefix}_{original_name}".replace(".", "_")
-                            norm_ref = TrainNormRef(norm_name, original_name, child_module)
+                            norm_ref = TrainNormRef(
+                                norm_name,
+                                original_name,
+                                child_module,
+                                _snapshot_train_norm_base_params(child_module),
+                            )
                             norm_refs.append(norm_ref)
                             seen_norm_names.add(original_name)
 
@@ -1215,6 +1487,11 @@ class LoRANetwork(torch.nn.Module):
                     )
                     if self.use_lokr:
                         module_kwargs["factor"] = factor_val
+                        module_kwargs["full_matrix"] = self.lokr_full_matrix
+                        module_kwargs["decompose_both"] = self.lokr_decompose_both
+                        module_kwargs["unbalanced_factorization"] = self.lokr_unbalanced_factorization
+                        if lora_name in self.modules_lokr_shape:
+                            module_kwargs["lokr_shape"] = self.modules_lokr_shape[lora_name]
                     if self.adapter_type == "vera":
                         module_kwargs["network_ref"] = self
                         module_kwargs["d_initial"] = self.vera_d_initial
@@ -1349,7 +1626,14 @@ class LoRANetwork(torch.nn.Module):
                 yield norm_ref, name, param
 
     def _apply_train_norm_state_dict(self, state_dict):
-        norm_ref_map = {norm_ref.lora_name: norm_ref for norm_ref in self._iter_train_norm_refs()}
+        train_norm_refs = self._iter_train_norm_refs()
+        norm_ref_map = {norm_ref.lora_name: norm_ref for norm_ref in train_norm_refs}
+        comfy_norm_ref_map = {
+            comfy_name: norm_ref
+            for norm_ref in train_norm_refs
+            for comfy_name in [_train_norm_name_to_comfyui_name(norm_ref.lora_name)]
+            if comfy_name is not None
+        }
         missing_norm_keys = []
         unexpected_norm_keys = []
         expected_norm_keys = {
@@ -1361,6 +1645,41 @@ class LoRANetwork(torch.nn.Module):
         for key, value in state_dict.items():
             if "." not in key:
                 continue
+
+            if _is_comfyui_train_norm_key(key):
+                saw_train_norm_key = True
+                lora_name, param_name = key.rsplit(".", 1)
+                norm_ref = comfy_norm_ref_map.get(lora_name)
+                if norm_ref is None:
+                    unexpected_norm_keys.append(key)
+                    continue
+
+                target_name = "weight" if param_name == "diff" else "bias"
+                params_by_name = dict(norm_ref.named_parameters())
+                target_param = params_by_name.get(target_name)
+                if target_param is None:
+                    unexpected_norm_keys.append(key)
+                    continue
+
+                base_param = norm_ref.base_params.get(target_name)
+                if base_param is None:
+                    raise RuntimeError(f"missing base train_norm snapshot for {norm_ref.lora_name}.{target_name}")
+                if tuple(target_param.shape) != tuple(value.shape):
+                    raise RuntimeError(
+                        f"size mismatch for {key}: copying a diff with shape {tuple(value.shape)} "
+                        f"to a param with shape {tuple(target_param.shape)}."
+                    )
+                if tuple(base_param.shape) != tuple(target_param.shape):
+                    raise RuntimeError(
+                        f"size mismatch for base snapshot {norm_ref.lora_name}.{target_name}: "
+                        f"base shape {tuple(base_param.shape)}, current shape {tuple(target_param.shape)}."
+                    )
+
+                restored = base_param.to(dtype=torch.float32) + value.detach().cpu().to(dtype=torch.float32)
+                target_param.data.copy_(restored.to(device=target_param.device, dtype=target_param.dtype))
+                expected_norm_keys.discard(f"{norm_ref.lora_name}.{target_name}")
+                continue
+
             lora_name, param_name = key.split(".", 1)
             if not (
                 lora_name.startswith(TRAIN_NORM_PREFIX_ANIMA) or lora_name.startswith(TRAIN_NORM_PREFIX_TEXT_ENCODER)
@@ -1398,6 +1717,8 @@ class LoRANetwork(torch.nn.Module):
                 continue
             lora_name = key.split(".", 1)[0]
             if lora_name.startswith(TRAIN_NORM_PREFIX_ANIMA) or lora_name.startswith(TRAIN_NORM_PREFIX_TEXT_ENCODER):
+                continue
+            if _is_comfyui_train_norm_key(key):
                 continue
             lora_state_dict[key] = value
 
@@ -1690,6 +2011,33 @@ class LoRANetwork(torch.nn.Module):
             metadata["ss_vera_compatible_export"] = "true"
             return metadata
 
+        if self.adapter_type == "lokr":
+            metadata = {} if metadata is None else dict(metadata)
+            lokr_export_mode = str(getattr(self, "lokr_export_mode", "native")).strip().lower().replace("-", "_")
+            if lokr_export_mode not in ("native", "lora_compatible"):
+                lokr_export_mode = "native"
+
+            metadata.setdefault("ss_training_network_module", "networks.lora_anima")
+            metadata.setdefault("ss_training_anima_adapter_type", "lokr")
+            metadata["ss_training_lokr_factor"] = str(getattr(self, "lokr_factor", ""))
+            metadata["ss_training_lokr_full_matrix"] = str(bool(getattr(self, "lokr_full_matrix", False))).lower()
+            metadata["ss_training_lokr_decompose_both"] = str(bool(getattr(self, "lokr_decompose_both", False))).lower()
+            metadata["ss_training_lokr_unbalanced_factorization"] = str(
+                bool(getattr(self, "lokr_unbalanced_factorization", False))
+            ).lower()
+            metadata["ss_network_module"] = "networks.lora_anima"
+            metadata["ss_adapter_variant"] = "lokr"
+            metadata["ss_lokr_export_mode"] = lokr_export_mode
+            if lokr_export_mode == "lora_compatible":
+                metadata["ss_anima_adapter_type"] = "lora"
+                metadata["ss_lokr_compatible_export"] = "true"
+                metadata.pop("ss_lokr_native_export", None)
+            else:
+                metadata["ss_anima_adapter_type"] = "lokr"
+                metadata["ss_lokr_native_export"] = "true"
+                metadata.pop("ss_lokr_compatible_export", None)
+            return metadata
+
         if self.adapter_type != "lora_fa":
             return metadata
 
@@ -1743,6 +2091,169 @@ class LoRANetwork(torch.nn.Module):
 
         return state_dict, metadata
 
+    def _prepare_lokr_export_for_save(self, state_dict, metadata):
+        """Prepare LoKr weights for native save or explicit LoRA-compatible export."""
+        if self.adapter_type != "lokr":
+            return state_dict, metadata
+
+        lokr_loras = [lora for lora in (self.text_encoder_loras + self.unet_loras) if isinstance(lora, LoKrModule)]
+        if not lokr_loras:
+            return state_dict, metadata
+
+        lokr_export_mode = str(getattr(self, "lokr_export_mode", "native")).strip().lower().replace("-", "_")
+        if lokr_export_mode not in ("native", "lora_compatible"):
+            lokr_export_mode = "native"
+
+        if lokr_export_mode == "native":
+            state_dict = dict(state_dict)
+            for lora in lokr_loras:
+                self._prepare_native_lokr_module_for_comfyui(state_dict, lora)
+
+            metadata = {} if metadata is None else dict(metadata)
+            metadata["ss_network_module"] = "networks.lora_anima"
+            metadata["ss_anima_adapter_type"] = "lokr"
+            metadata["ss_adapter_variant"] = "lokr"
+            metadata["ss_lokr_native_export"] = "true"
+            metadata["ss_lokr_export_mode"] = "native"
+            metadata["ss_lokr_rank_exported"] = "false"
+            metadata["ss_lokr_scale_export_format"] = "comfyui_baked_single_scale"
+            metadata.pop("ss_lokr_compatible_export", None)
+            return state_dict, metadata
+
+        state_dict = dict(state_dict)
+        for lora in lokr_loras:
+            down_weight, up_weight, alpha = lora.export_standard_lora_weights()
+            state_dict[f"{lora.lora_name}.lora_down.weight"] = down_weight.contiguous()
+            state_dict[f"{lora.lora_name}.lora_up.weight"] = up_weight.contiguous()
+            state_dict[f"{lora.lora_name}.alpha"] = alpha
+            state_dict.pop(f"{lora.lora_name}.lokr_w1", None)
+            state_dict.pop(f"{lora.lora_name}.lokr_w2", None)
+            state_dict.pop(f"{lora.lora_name}.lokr_w1_a", None)
+            state_dict.pop(f"{lora.lora_name}.lokr_w1_b", None)
+            state_dict.pop(f"{lora.lora_name}.lokr_w2_a", None)
+            state_dict.pop(f"{lora.lora_name}.lokr_w2_b", None)
+            state_dict.pop(f"{lora.lora_name}.lokr_rank", None)
+
+        if lokr_export_mode == "lora_compatible":
+            metadata = {} if metadata is None else dict(metadata)
+            metadata.setdefault("ss_training_network_module", "networks.lora_anima")
+            metadata.setdefault("ss_training_anima_adapter_type", "lokr")
+            metadata["ss_network_module"] = "networks.lora_anima"
+            metadata["ss_anima_adapter_type"] = "lora"
+            metadata["ss_adapter_variant"] = "lokr"
+            metadata["ss_lokr_compatible_export"] = "true"
+            metadata["ss_lokr_export_mode"] = "lora_compatible"
+            metadata.pop("ss_lokr_native_export", None)
+
+            raw_network_args = metadata.get("ss_network_args")
+            if raw_network_args:
+                try:
+                    parsed = json.loads(raw_network_args)
+                    if isinstance(parsed, dict):
+                        parsed.pop("anima_adapter_type", None)
+                        parsed.pop("adapter_type", None)
+                        parsed.pop("lokr_factor", None)
+                        parsed.pop("lokr_export_mode", None)
+                        parsed.pop("full_matrix", None)
+                        parsed.pop("lokr_full_matrix", None)
+                        parsed.pop("decompose_both", None)
+                        parsed.pop("lokr_decompose_both", None)
+                        parsed.pop("unbalanced_factorization", None)
+                    elif isinstance(parsed, list):
+                        parsed = [
+                            item
+                            for item in parsed
+                            if not str(item).startswith(
+                                (
+                                    "anima_adapter_type=",
+                                    "adapter_type=",
+                                    "lokr_factor=",
+                                    "lokr_export_mode=",
+                                    "full_matrix=",
+                                    "lokr_full_matrix=",
+                                    "decompose_both=",
+                                    "lokr_decompose_both=",
+                                    "unbalanced_factorization=",
+                                )
+                            )
+                        ]
+                    metadata["ss_network_args"] = json.dumps(parsed, ensure_ascii=False)
+                except Exception:
+                    pass
+
+        return state_dict, metadata
+
+    def _native_lokr_neutral_alpha(self, state_dict, lora):
+        lora_name = lora.lora_name
+        ranks = []
+        for key in (f"{lora_name}.lokr_w1_b", f"{lora_name}.lokr_w2_b"):
+            tensor = state_dict.get(key)
+            if tensor is not None and tensor.ndim >= 1:
+                ranks.append(int(tensor.shape[0]))
+
+        if ranks and all(rank == ranks[0] for rank in ranks):
+            return float(ranks[0])
+
+        lora_dim = getattr(lora, "lora_dim", None)
+        if lora_dim is not None:
+            return float(lora_dim)
+        if ranks:
+            return float(ranks[0])
+        return 1.0
+
+    def _prepare_native_lokr_module_for_comfyui(self, state_dict, lora):
+        lora_name = lora.lora_name
+        effective_scale = float(getattr(lora, "scale", 1.0))
+
+        w2_key = f"{lora_name}.lokr_w2"
+        w2_b_key = f"{lora_name}.lokr_w2_b"
+        if w2_key in state_dict:
+            state_dict[w2_key] = (state_dict[w2_key].detach().clone() * effective_scale).contiguous()
+        elif w2_b_key in state_dict:
+            state_dict[w2_b_key] = (state_dict[w2_b_key].detach().clone() * effective_scale).contiguous()
+
+        state_dict[f"{lora_name}.alpha"] = torch.tensor(
+            self._native_lokr_neutral_alpha(state_dict, lora),
+            dtype=torch.float32,
+        )
+        state_dict.pop(f"{lora_name}.lokr_rank", None)
+
+    def _prepare_train_norm_comfyui_export_for_save(self, state_dict, metadata):
+        if self.adapter_type != "lokr":
+            return state_dict, metadata
+
+        state_dict = dict(state_dict)
+        converted = 0
+        suffix_by_param = {"weight": "diff", "bias": "diff_b"}
+        for norm_ref, name, param in self._iter_train_norm_param_items():
+            comfy_lora_name = _train_norm_name_to_comfyui_name(norm_ref.lora_name)
+            if comfy_lora_name is None:
+                continue
+
+            suffix = suffix_by_param.get(name)
+            if suffix is None:
+                continue
+
+            base_param = norm_ref.base_params.get(name)
+            if base_param is None:
+                raise RuntimeError(f"missing base train_norm snapshot for {norm_ref.lora_name}.{name}")
+            if tuple(base_param.shape) != tuple(param.shape):
+                raise RuntimeError(
+                    f"size mismatch for base snapshot {norm_ref.lora_name}.{name}: "
+                    f"base shape {tuple(base_param.shape)}, current shape {tuple(param.shape)}."
+                )
+
+            diff = param.detach().cpu().to(dtype=torch.float32) - base_param.to(dtype=torch.float32)
+            state_dict[f"{comfy_lora_name}.{suffix}"] = diff.contiguous()
+            state_dict.pop(f"{norm_ref.lora_name}.{name}", None)
+            converted += 1
+
+        if converted > 0:
+            metadata = {} if metadata is None else dict(metadata)
+            metadata["ss_train_norm_export_format"] = "comfyui_diff"
+            metadata["ss_train_norm_exported_count"] = str(converted)
+        return state_dict, metadata
+
     def _prepare_dora_export_metadata(self, metadata):
         if not self.use_dora:
             return metadata
@@ -1778,19 +2289,20 @@ class LoRANetwork(torch.nn.Module):
 
         state_dict = self.state_dict()
         state_dict, metadata = self._prepare_vera_export_for_save(state_dict, metadata)
+        state_dict, metadata = self._prepare_lokr_export_for_save(state_dict, metadata)
+        state_dict, metadata = self._prepare_train_norm_comfyui_export_for_save(state_dict, metadata)
         metadata = self._prepare_adapter_export_metadata(metadata)
         metadata = self._prepare_dora_export_metadata(metadata)
         state_dict, metadata = self._prepare_pissa_export_for_save(state_dict, metadata)
 
-        if dtype is not None:
-            for key in list(state_dict.keys()):
-                v = state_dict[key]
-                v = v.detach().clone().to("cpu").to(dtype)
-                state_dict[key] = v
-
-        if os.path.splitext(file)[1] == ".safetensors":
-            from safetensors.torch import save_file
+        save_as_safetensors = os.path.splitext(file)[1] == ".safetensors"
+        if dtype is not None or save_as_safetensors:
             from library import train_util
+
+            state_dict = train_util.prepare_safetensors_state_dict(state_dict, dtype=dtype)
+
+        if save_as_safetensors:
+            from safetensors.torch import save_file
 
             if metadata is None:
                 metadata = {}

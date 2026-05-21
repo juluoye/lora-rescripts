@@ -302,44 +302,55 @@ class App(ctk.CTk):
         process = self._process
         if not process:
             return
+        pid = process.pid
 
         try:
             if process.poll() is not None:
+                # Even if the launcher process already exited, its children may have been orphaned.
+                # Continue with a tree kill on Windows to make shutdown deterministic.
+                if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+                    subprocess.run(
+                        ["taskkill", "/PID", str(pid), "/T", "/F"],
+                        capture_output=True,
+                        check=False,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                    )
                 return
         except Exception:
-            return
+            pass
 
         try:
             process.terminate()
             if log_to_console:
                 self._safe_after(0, self._console_page.append_line, "> Sending terminate signal...")
             process.wait(timeout=timeout)
-            return
         except subprocess.TimeoutExpired:
             if log_to_console:
                 self._safe_after(0, self._console_page.append_line, "> Process did not exit in time, forcing shutdown...")
         except Exception as e:
             if log_to_console:
                 self._safe_after(0, self._console_page.append_line, f"> Error stopping: {e}")
-            return
 
         try:
-            if process.poll() is None:
-                if process.stdout:
-                    try:
-                        process.stdout.close()
-                    except Exception:
-                        pass
-                if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
-                    subprocess.run(
-                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                        capture_output=True,
-                        check=False,
-                        text=True,
-                    )
-                else:
-                    process.kill()
-                process.wait(timeout=2.0)
+            if process.stdout:
+                try:
+                    process.stdout.close()
+                except Exception:
+                    pass
+            if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    capture_output=True,
+                    check=False,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            elif process.poll() is None:
+                process.kill()
+            process.wait(timeout=2.0)
         except Exception as e:
             if log_to_console:
                 self._safe_after(0, self._console_page.append_line, f"> Error forcing stop: {e}")

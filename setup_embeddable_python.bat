@@ -110,6 +110,13 @@ if errorlevel 1 (
     echo [WARN] Failed to upgrade pip/setuptools/wheel, keeping current bootstrap packages.
 )
 
+echo.
+echo [4/4] Provisioning Python dev files for torch.compile and Triton...
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\runtime\provision_embeddable_python_devfiles.ps1" -RepoRoot "%REPO_ROOT%" -RuntimeDir "%PYTHON_DIR%" -PythonExe "%PYTHON_EXE%"
+if errorlevel 1 (
+    echo [WARN] Failed to provision Python dev files. torch.compile cold-start may still fail until Include\Python.h and libs\python*.lib are available.
+)
+
 echo.>"%PYTHON_DIR%\.portable_ready"
 
 echo.

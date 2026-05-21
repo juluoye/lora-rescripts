@@ -11,6 +11,7 @@ from library import deepspeed_utils
 from library import full_bf16_stochastic_util
 from lulynx.experimental_core import create_lulynx_core
 import library.train_util as train_util
+from mikazuki.training_route_contract import get_route_kind, get_route_label
 
 
 def import_network_module(args, accelerator):
@@ -87,6 +88,8 @@ def prepare_network_setup(
     prepared_cls,
     logger,
 ):
+    default_route_kind = "sdxl" if trainer.is_sdxl else "stable"
+    default_route_label = "SDXL LoRA" if trainer.is_sdxl else "Stable LoRA"
     network_module = import_network_module(args, accelerator)
     merge_base_network_weights(args, accelerator, network_module, vae, text_encoder, unet, weight_dtype)
 
@@ -123,8 +126,8 @@ def prepare_network_setup(
 
     lulynx_core = create_lulynx_core(
         args,
-        route_kind="sdxl" if trainer.is_sdxl else "stable",
-        route_label="SDXL LoRA" if trainer.is_sdxl else "Stable LoRA",
+        route_kind=get_route_kind(vars(args), default_route_kind),
+        route_label=get_route_label(vars(args), default_route_label),
     )
     if lulynx_core is not None:
         lulynx_core.apply_pre_optimizer_settings(network)

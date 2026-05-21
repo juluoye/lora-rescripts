@@ -7,6 +7,7 @@ from typing import Any, Callable, Mapping, NamedTuple
 import library.train_util as train_util
 from library.train_util import DreamBoothDataset
 from mikazuki.compliance import build_lulynx_metadata_fields
+from mikazuki.training_route_contract import extract_route_contract_metadata, resolve_training_route_contract
 
 
 class PreparedMetadataBundle(NamedTuple):
@@ -330,6 +331,14 @@ def add_runtime_metadata(metadata, args, net_kwargs, extra_metadata: Mapping[str
     if args.network_args:
         metadata["ss_network_args"] = json.dumps(net_kwargs)
     metadata.update(build_compatibility_metadata(args, net_kwargs))
+    route_contract_metadata = extract_route_contract_metadata(vars(args))
+    if not route_contract_metadata:
+        resolved_contract = resolve_training_route_contract(
+            getattr(args, "model_train_type", ""),
+            config=vars(args),
+        )
+        route_contract_metadata = resolved_contract.as_metadata_fields()
+    metadata.update(route_contract_metadata)
     if extra_metadata is not None:
         metadata.update(extra_metadata)
 

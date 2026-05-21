@@ -16,7 +16,20 @@ import logging
 logger = logging.getLogger(__name__)
 
 from library import sdxl_original_unet
-from library.sdxl_model_util import convert_sdxl_unet_state_dict_to_diffusers, convert_diffusers_unet_state_dict_to_sdxl
+
+
+def _convert_diffusers_unet_state_dict_to_sdxl(state_dict):
+    # Delay this import to avoid a Windows spawn circular import during trainer bootstrap.
+    from library.sdxl_model_util import convert_diffusers_unet_state_dict_to_sdxl
+
+    return convert_diffusers_unet_state_dict_to_sdxl(state_dict)
+
+
+def _convert_sdxl_unet_state_dict_to_diffusers(state_dict):
+    # Delay this import to avoid a Windows spawn circular import during trainer bootstrap.
+    from library.sdxl_model_util import convert_sdxl_unet_state_dict_to_diffusers
+
+    return convert_sdxl_unet_state_dict_to_diffusers(state_dict)
 
 
 class ControlNetConditioningEmbedding(nn.Module):
@@ -84,7 +97,7 @@ class SdxlControlNet(sdxl_original_unet.SdxlUNet2DConditionModel):
         for k in list(state_dict.keys()):
             if not k.startswith("controlnet_"):
                 unet_sd[k] = state_dict.pop(k)
-        unet_sd = convert_diffusers_unet_state_dict_to_sdxl(unet_sd)
+        unet_sd = _convert_diffusers_unet_state_dict_to_sdxl(unet_sd)
         state_dict.update(unet_sd)
         super().load_state_dict(state_dict, strict=strict, assign=assign)
 
@@ -95,7 +108,7 @@ class SdxlControlNet(sdxl_original_unet.SdxlUNet2DConditionModel):
         for k in list(state_dict.keys()):
             if k.startswith("controlnet_"):
                 control_net_sd[k] = state_dict.pop(k)
-        state_dict = convert_sdxl_unet_state_dict_to_diffusers(state_dict)
+        state_dict = _convert_sdxl_unet_state_dict_to_diffusers(state_dict)
         state_dict.update(control_net_sd)
         return state_dict
 

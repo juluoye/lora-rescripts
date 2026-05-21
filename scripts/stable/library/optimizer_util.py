@@ -260,6 +260,40 @@ def _sanitize_optimizer_kwargs(
     return sanitized
 
 
+def _filter_kwargs_for_optimizer_signature(
+    optimizer_class,
+    optimizer_kwargs: dict[str, Any],
+    *,
+    optimizer_label: str,
+    logger: logging.Logger,
+) -> dict[str, Any]:
+    try:
+        signature = inspect.signature(optimizer_class.__init__)
+    except (TypeError, ValueError):
+        return dict(optimizer_kwargs)
+
+    parameters = signature.parameters
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+        return dict(optimizer_kwargs)
+
+    supported = {name for name in parameters.keys() if name != "self"}
+    filtered: dict[str, Any] = {}
+    dropped: list[str] = []
+
+    for key, value in optimizer_kwargs.items():
+        if key in supported:
+            filtered[key] = value
+        else:
+            dropped.append(key)
+
+    if dropped:
+        logger.warning(
+            f"{optimizer_label}: dropping unsupported optimizer kwargs: {', '.join(sorted(dropped))}"
+        )
+
+    return filtered
+
+
 def parse_optimizer_kwargs(args: argparse.Namespace, logger: logging.Logger) -> dict[str, Any]:
     optimizer_kwargs: dict[str, Any] = {}
     if args.optimizer_args is not None and len(args.optimizer_args) > 0:
@@ -651,7 +685,13 @@ def _build_custom_optimizer(args: argparse.Namespace, trainable_params, optimize
         case_sensitive_optimizer_type = values[-1]
 
     optimizer_class = getattr(optimizer_module, case_sensitive_optimizer_type)
-    optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+    filtered_kwargs = _filter_kwargs_for_optimizer_signature(
+        optimizer_class,
+        optimizer_kwargs,
+        optimizer_label=case_sensitive_optimizer_type,
+        logger=logger,
+    )
+    optimizer = optimizer_class(trainable_params, lr=lr, **filtered_kwargs)
     return optimizer_class, optimizer
 
 

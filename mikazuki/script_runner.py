@@ -6,13 +6,18 @@ from pathlib import Path
 def _emit_runtime_banner(base_dir: Path, target_path: Path, runtime_mode: str | None = None) -> None:
     try:
         from mikazuki.compliance import emit_runtime_banner
+        from mikazuki.utils.trainer_registry import get_trainer_definition_by_file
         from library import train_util
 
+        trainer_definition = get_trainer_definition_by_file(str(target_path))
         emit_runtime_banner(
             printer=lambda line: print(line, flush=True),
             script_path=str(target_path),
             git_commit=train_util.get_git_revision_hash(),
             runtime_mode=runtime_mode,
+            training_type=getattr(trainer_definition, "train_type", None) if trainer_definition else None,
+            route_kind=getattr(trainer_definition, "route_kind", None) if trainer_definition else None,
+            route_label=getattr(trainer_definition, "route_label", None) if trainer_definition else None,
         )
     except Exception:
         # Keep script runner resilient even if optional compliance helpers fail.

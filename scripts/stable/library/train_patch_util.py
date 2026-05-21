@@ -150,12 +150,24 @@ def precalculate_safetensors_hashes(tensors, metadata):
     # calculating the hash, as they are meant to be immutable
     metadata = {k: v for k, v in metadata.items() if k.startswith("ss_")}
 
-    bytes = safetensors.torch.save(tensors, metadata)
+    bytes = safetensors.torch.save(prepare_safetensors_state_dict(tensors), metadata)
     b = BytesIO(bytes)
 
     model_hash = addnet_hash_safetensors(b)
     legacy_hash = addnet_hash_legacy(b)
     return model_hash, legacy_hash
+
+
+def prepare_safetensors_state_dict(tensors, dtype=None):
+    prepared = {}
+    for key, tensor in tensors.items():
+        if not torch.is_tensor(tensor):
+            tensor = torch.as_tensor(tensor)
+        tensor = tensor.detach().to("cpu")
+        if dtype is not None:
+            tensor = tensor.to(dtype)
+        prepared[key] = tensor.contiguous()
+    return prepared
 
 
 def addnet_hash_legacy(b):
@@ -498,6 +510,7 @@ __all__ = [
     'model_hash',
     'calculate_sha256',
     'precalculate_safetensors_hashes',
+    'prepare_safetensors_state_dict',
     'addnet_hash_legacy',
     'addnet_hash_safetensors',
     'get_git_revision_hash',

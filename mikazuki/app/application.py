@@ -17,6 +17,7 @@ from mikazuki.app.tooling_registry import load_presets, load_schemas
 # from mikazuki.app.ipc import router as ipc_router
 from mikazuki.app.proxy import router as proxy_router
 from mikazuki.plugins.runtime import plugin_runtime
+from mikazuki.tasks import tm
 from mikazuki.utils.devices import check_torch_gpu
 from mikazuki.utils.frontend_profiles import BUILTIN_PROFILE_ID, resolve_frontend_profile
 from mikazuki.utils.backend_status import write_backend_status
@@ -91,7 +92,10 @@ async def app_startup():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await app_startup()
-    yield
+    try:
+        yield
+    finally:
+        await asyncio.to_thread(tm.request_terminate_all_active)
 
 
 app = FastAPI(lifespan=lifespan)

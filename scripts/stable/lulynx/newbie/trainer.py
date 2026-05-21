@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from mikazuki.training_route_contract import resolve_training_route_contract
+
 from .config import NewbieRuntimeConfig
 from .dataset import NewbieDatasetReport, build_newbie_dataset_report
 
@@ -161,10 +163,18 @@ class NewbieTrainer:
         return phases
 
     def format_preparation_summary(self, result: NewbiePreparationResult) -> list[str]:
+        route_contract = resolve_training_route_contract(
+            result.config.model_train_type,
+            config=result.config.__dict__,
+            route_kind_override="newbie",
+            route_label_override="Newbie LoRA",
+        )
         lines = [
             "========================================",
             "Lulynx Newbie Trainer Preparation",
             "========================================",
+            f"route_contract={route_contract.route_label} [{route_contract.route_kind}]",
+            f"route_capabilities={', '.join(route_contract.capability_flags)}",
         ]
         lines.extend(result.config.describe())
         lines.append(

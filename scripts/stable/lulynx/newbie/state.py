@@ -8,6 +8,8 @@ from pathlib import Path
 import torch
 from diffusers.optimization import get_scheduler
 from peft import get_peft_model_state_dict, set_peft_model_state_dict
+from mikazuki.compliance import build_lulynx_metadata_fields
+from mikazuki.training_route_contract import resolve_training_route_contract
 
 try:
     import bitsandbytes as bnb
@@ -225,11 +227,23 @@ def save_newbie_adapter(output_dir: str | Path, output_name: str, model, step: i
         if lyco_net is None:
             raise RuntimeError('LyCORIS network not initialized')
         weights_path = save_dir / 'adapter_model.safetensors'
+        route_contract = resolve_training_route_contract(
+            "newbie-lora",
+            route_kind_override="newbie",
+            route_label_override="Newbie LoRA",
+        )
         metadata = {
             'adapter_type': 'lyco_lokr',
             'lora_rank': str(getattr(model, '_adapter_rank', '')),
             'lora_alpha': str(getattr(model, '_adapter_alpha', '')),
         }
+        metadata.update(route_contract.as_metadata_fields())
+        metadata.update(
+            build_lulynx_metadata_fields(
+                metadata=metadata,
+                git_commit="",
+            )
+        )
         lyco_net.save_weights(str(weights_path), dtype=None, metadata=metadata)
         config_path = save_dir / 'adapter_config.json'
         config_path.write_text(
@@ -240,6 +254,7 @@ def save_newbie_adapter(output_dir: str | Path, output_name: str, model, step: i
                     'lycoris_type': 'lokr',
                     'r': getattr(model, '_adapter_rank', None),
                     'lora_alpha': getattr(model, '_adapter_alpha', None),
+                    **route_contract.as_metadata_fields(),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -249,12 +264,18 @@ def save_newbie_adapter(output_dir: str | Path, output_name: str, model, step: i
         return weights_path
 
     model.save_pretrained(str(save_dir), safe_serialization=True)
+    route_contract = resolve_training_route_contract(
+        "newbie-lora",
+        route_kind_override="newbie",
+        route_label_override="Newbie LoRA",
+    )
     if adapter_type == 'lora_fa':
         config_path = save_dir / 'adapter_config.json'
         if config_path.exists():
             config_payload = json.loads(config_path.read_text(encoding='utf-8'))
             config_payload['lulynx_adapter_type'] = 'lora_fa'
             config_payload['lulynx_lora_fa'] = True
+            config_payload.update(route_contract.as_metadata_fields())
             config_path.write_text(json.dumps(config_payload, ensure_ascii=False, indent=2), encoding='utf-8')
     elif adapter_type == 'vera':
         config_path = save_dir / 'adapter_config.json'
@@ -262,5 +283,12 @@ def save_newbie_adapter(output_dir: str | Path, output_name: str, model, step: i
             config_payload = json.loads(config_path.read_text(encoding='utf-8'))
             config_payload['lulynx_adapter_type'] = 'vera'
             config_payload['lulynx_vera'] = True
+            config_payload.update(route_contract.as_metadata_fields())
+            config_path.write_text(json.dumps(config_payload, ensure_ascii=False, indent=2), encoding='utf-8')
+    else:
+        config_path = save_dir / 'adapter_config.json'
+        if config_path.exists():
+            config_payload = json.loads(config_path.read_text(encoding='utf-8'))
+            config_payload.update(route_contract.as_metadata_fields())
             config_path.write_text(json.dumps(config_payload, ensure_ascii=False, indent=2), encoding='utf-8')
     return save_dir
