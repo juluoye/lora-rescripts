@@ -399,10 +399,6 @@ class LoRAInfModule(LoRAModule):
                 down_weight = sd[f"lora_down.{i}.weight"].to(torch.float).to(device)  # (rank, in_dim)
                 up_weight = sd[f"lora_up.{i}.weight"].to(torch.float).to(device)  # (split dim, rank)
 
-                # pad up_weight -> (total_dims, rank)
-                padded_up_weight = torch.zeros((total_dims, up_weight.size(0)), device=device, dtype=torch.float)
-                padded_up_weight[sum(self.split_dims[:i]) : sum(self.split_dims[: i + 1])] = up_weight
-
                 # merge weight
                 weight = weight + self.multiplier * (up_weight @ down_weight) * self.scale
 

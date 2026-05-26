@@ -119,7 +119,7 @@ export function ConsolePage() {
 
   const handleCopy = () => {
     const text = consoleLines.join('\n');
-    navigator.clipboard.writeText(text);
+    navigator.clipboard.writeText(text).catch(() => {});
   };
 
   const handleTaskRowClick = (task: TaskResultRecord) => {
@@ -135,12 +135,12 @@ export function ConsolePage() {
 
   const handleCopyTask = () => {
     if (!selectedTask) return;
-    navigator.clipboard.writeText(JSON.stringify(selectedTask, null, 2));
+    navigator.clipboard.writeText(JSON.stringify(selectedTask, null, 2)).catch(() => {});
   };
 
   const handleCopyTaskLogs = () => {
     if (!selectedTask?.log_lines || selectedTask.log_lines.length === 0) return;
-    navigator.clipboard.writeText(selectedTask.log_lines.join('\n'));
+    navigator.clipboard.writeText(selectedTask.log_lines.join('\n')).catch(() => {});
   };
 
   const handleExportTaskBundle = () => {

@@ -89,7 +89,7 @@ Schema.intersect([
             Schema.object({
                 lora_type: Schema.const("lora").default("lora"),
                 network_module: Schema.const("networks.lora_anima").default("networks.lora_anima").hidden(),
-                network_dropout: Schema.number().step(0.01).default(0).description("LoRA dropout 概率"),
+                network_dropout: Schema.number().min(0).max(1).step(0.01).default(0).description("LoRA dropout 概率"),
                 dora_wd: Schema.boolean().default(false).description("启用 DoRA（Weight-Decomposed Low-Rank Adaptation）训练"),
                 bypass_mode: Schema.boolean().default(false).description("兼容字段。启用 DoRA 时会自动强制关闭"),
                 pissa_init: Schema.boolean().default(false).description("启用 PiSSA 初始化（实验性，仅在 LoRA 适配器类型下生效）"),
@@ -106,7 +106,7 @@ Schema.intersect([
             Schema.object({
                 lora_type: Schema.const("lora_fa").required(),
                 network_module: Schema.const("networks.lora_anima").default("networks.lora_anima").hidden(),
-                network_dropout: Schema.number().step(0.01).default(0).description("LoRA-FA dropout 概率"),
+                network_dropout: Schema.number().min(0).max(1).step(0.01).default(0).description("LoRA-FA dropout 概率"),
                 dora_wd: Schema.boolean().hidden(),
                 bypass_mode: Schema.boolean().hidden(),
                 pissa_init: Schema.boolean().hidden(),
@@ -123,7 +123,7 @@ Schema.intersect([
             Schema.object({
                 lora_type: Schema.const("vera").required(),
                 network_module: Schema.const("networks.lora_anima").default("networks.lora_anima").hidden(),
-                network_dropout: Schema.number().step(0.01).default(0).description("VeRA dropout 概率"),
+                network_dropout: Schema.number().min(0).max(1).step(0.01).default(0).description("VeRA dropout 概率"),
                 dora_wd: Schema.boolean().hidden(),
                 bypass_mode: Schema.boolean().hidden(),
                 pissa_init: Schema.boolean().hidden(),
@@ -140,7 +140,7 @@ Schema.intersect([
             Schema.object({
                 lora_type: Schema.const("tlora").required(),
                 network_module: Schema.const("networks.tlora_anima").default("networks.tlora_anima").hidden(),
-                network_dropout: Schema.number().step(0.01).default(0).description("T-LoRA dropout 概率"),
+                network_dropout: Schema.number().min(0).max(1).step(0.01).default(0).description("T-LoRA dropout 概率"),
                 dora_wd: Schema.boolean().hidden(),
                 bypass_mode: Schema.boolean().hidden(),
                 tlora_min_rank: Schema.number().min(1).default(1).description("T-LoRA 最小动态 rank"),

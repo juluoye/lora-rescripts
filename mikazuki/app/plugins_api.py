@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from mikazuki.app.config import app_config
 from mikazuki.app.models import APIResponse, APIResponseFail, APIResponseSuccess
@@ -51,9 +51,19 @@ async def get_plugin_training_protocol() -> APIResponse:
     return APIResponseSuccess(data=plugin_runtime.get_training_event_protocol_status())
 
 
+async def _parse_json_body(request: Request) -> dict:
+    try:
+        payload = json.loads((await request.body()).decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="请求体不是合法 JSON。")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="请求体必须是 JSON 对象。")
+    return payload
+
+
 @router.post("/plugins/developer_mode")
 async def set_plugin_developer_mode(request: Request) -> APIResponse:
-    payload = json.loads((await request.body()).decode("utf-8"))
+    payload = await _parse_json_body(request)
     enabled = parse_boolish(payload.get("enabled", False))
     plugin_runtime.set_developer_mode(enabled)
     app_config["plugin_developer_mode"] = enabled
@@ -66,7 +76,7 @@ async def set_plugin_developer_mode(request: Request) -> APIResponse:
 
 @router.post("/plugins/set_enabled")
 async def set_plugin_enabled_state(request: Request) -> APIResponse:
-    payload = json.loads((await request.body()).decode("utf-8"))
+    payload = await _parse_json_body(request)
     plugin_id = str(payload.get("plugin_id", "")).strip()
     if not plugin_id:
         return APIResponseFail(message="plugin_id is required")
@@ -87,7 +97,7 @@ async def set_plugin_enabled_state(request: Request) -> APIResponse:
 
 @router.post("/plugins/reset_enabled")
 async def reset_plugin_enabled_state(request: Request) -> APIResponse:
-    payload = json.loads((await request.body()).decode("utf-8"))
+    payload = await _parse_json_body(request)
     plugin_id = str(payload.get("plugin_id", "")).strip()
     if not plugin_id:
         return APIResponseFail(message="plugin_id is required")
@@ -107,7 +117,7 @@ async def reset_plugin_enabled_state(request: Request) -> APIResponse:
 
 @router.post("/plugins/approve")
 async def approve_plugin(request: Request) -> APIResponse:
-    payload = json.loads((await request.body()).decode("utf-8"))
+    payload = await _parse_json_body(request)
     plugin_id = str(payload.get("plugin_id", "")).strip()
     approved_by = str(payload.get("approved_by", "")).strip() or "local-user"
     if not plugin_id:
@@ -124,7 +134,7 @@ async def approve_plugin(request: Request) -> APIResponse:
 
 @router.post("/plugins/revoke_approval")
 async def revoke_plugin_approval(request: Request) -> APIResponse:
-    payload = json.loads((await request.body()).decode("utf-8"))
+    payload = await _parse_json_body(request)
     plugin_id = str(payload.get("plugin_id", "")).strip()
     if not plugin_id:
         return APIResponseFail(message="plugin_id is required")
@@ -167,7 +177,7 @@ async def get_ui_profiles() -> APIResponse:
 
 @router.post("/ui_profiles/activate")
 async def activate_ui_profile(request: Request) -> APIResponse:
-    payload = json.loads((await request.body()).decode("utf-8"))
+    payload = await _parse_json_body(request)
     profile_id = str(payload.get("profile_id", "")).strip()
     if not profile_id:
         return APIResponseFail(message="profile_id is required")
@@ -192,7 +202,7 @@ async def activate_ui_profile(request: Request) -> APIResponse:
 
 @router.post("/ui_profiles/install")
 async def install_ui_profile(request: Request) -> APIResponse:
-    payload = json.loads((await request.body()).decode("utf-8"))
+    payload = await _parse_json_body(request)
     repo_url = str(payload.get("repo_url", "")).strip()
     replace_existing = bool(payload.get("replace_existing", False))
 
@@ -233,7 +243,7 @@ async def install_ui_profile(request: Request) -> APIResponse:
 
 @router.post("/ui_profiles/uninstall")
 async def uninstall_ui_profile(request: Request) -> APIResponse:
-    payload = json.loads((await request.body()).decode("utf-8"))
+    payload = await _parse_json_body(request)
     profile_id = str(payload.get("profile_id", "")).strip()
     if not profile_id:
         return APIResponseFail(message="profile_id is required")

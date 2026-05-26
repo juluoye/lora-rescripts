@@ -232,7 +232,20 @@ class RuntimeDependencyInstaller:
             for line in process.stdout:
                 self.append_log(line)
 
-            return_code = process.wait()
+            try:
+                return_code = process.wait(timeout=1800)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+                self.write_status(
+                    "failed",
+                    detail="pip install timed out after 30 minutes.",
+                    requirements=requirements,
+                    started_at=started_at,
+                    finished_at=datetime.now().isoformat(timespec="seconds"),
+                    installer_pid=installer_pid,
+                )
+                return
             finished_at = datetime.now().isoformat(timespec="seconds")
             if return_code == 0:
                 self.write_status(

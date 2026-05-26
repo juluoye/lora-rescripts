@@ -99,7 +99,11 @@ class MemoryEfficientSafeOpen:
         """
         self.filename = filename
         self.file = open(filename, "rb")
-        self.header, self.header_size = self._read_header()
+        try:
+            self.header, self.header_size = self._read_header()
+        except Exception:
+            self.file.close()
+            raise
         self.disable_numpy_memmap = disable_numpy_memmap
 
     def __enter__(self):
@@ -310,7 +314,7 @@ def load_safetensors(
     else:
         try:
             state_dict = load_file(path, device=device)
-        except:
+        except (RuntimeError, OSError):
             state_dict = load_file(path)  # prevent device invalid Error
         if dtype is not None:
             for key in state_dict.keys():

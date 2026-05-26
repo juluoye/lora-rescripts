@@ -83,9 +83,10 @@ class ImageLoadingPrepDataset(torch.utils.data.Dataset):
             img_path = str(self.image_paths[idx])
 
             try:
-                image = Image.open(img_path)
-                image_size = image.size
-                image = preprocess_image(image)
+                _img = Image.open(img_path)
+                image_size = _img.size
+                image = preprocess_image(_img)
+                _img.close()
 
                 batch_image_paths.append(img_path)
                 images.append(image)
@@ -563,9 +564,10 @@ def main(args):
             images = []
             image_sizes = []
             for image_path, _, _ in data_entry:
-                image = Image.open(image_path)
-                image_size = image.size
-                image = preprocess_image(image)
+                _img = Image.open(image_path)
+                image_size = _img.size
+                image = preprocess_image(_img)
+                _img.close()
                 images.append(image)
                 image_sizes.append(image_size)
             b_imgs = ([ip for ip, _, _ in data_entry], np.stack(images), image_sizes)

@@ -523,9 +523,6 @@ def apply_flux_tlora_ui_overrides(config: dict) -> None:
     network_module = str(config.get("network_module", "") or "").strip().lower()
     network_args = filter_network_args(network_args, TLORA_STALE_NETWORK_ARG_PREFIXES)
 
-    if network_module == "networks.tlora_flux":
-        network_args = apply_tlora_rank_overrides(config, network_args)
-
     assign_network_args(config, network_args)
 
     sample_scheduler = str(config.get("sample_scheduler", "") or "").strip()

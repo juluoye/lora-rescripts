@@ -1,12 +1,12 @@
 {
-  "version": "v1.6.1",
+  "version": "v1.6.2",
   "channels": {
     "stable": {
-      "version": "v1.6.1",
+      "version": "v1.6.2",
       "release_url": "https://github.com/WhitecrowAurora/lora-rescripts/releases"
     },
     "beta": {
-      "version": "v1.6.1",
+      "version": "v1.6.2",
       "release_url": "https://github.com/WhitecrowAurora/lora-rescripts/releases"
     }
   }

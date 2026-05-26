@@ -339,7 +339,7 @@ class FluxNetworkTrainer(train_network.NetworkTrainer):
 
         # get guidance
         # ensure guidance_scale in args is float
-        guidance_vec = torch.full((bsz,), float(args.guidance_scale), device=accelerator.device)
+        guidance_vec = torch.full((bsz,), float(args.guidance_scale), device=accelerator.device, dtype=weight_dtype)
 
         # get modulation vectors for Chroma
         with accelerator.autocast(), torch.no_grad():

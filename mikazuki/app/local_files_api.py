@@ -247,6 +247,10 @@ async def open_local_folder(request: Request):
     else:
         target_dir = target_dir.resolve()
 
+    allowed_roots = [REPO_ROOT.resolve()] + [Path(v).resolve() for v in BUILTIN_PICKER_ROOTS.values()]
+    if not any(target_dir == root or target_dir.is_relative_to(root) for root in allowed_roots):
+        return _json_error("不允许打开项目目录以外的路径。", status_code=403)
+
     target_dir.mkdir(parents=True, exist_ok=True)
     try:
         await asyncio.to_thread(open_directory_in_shell, target_dir)

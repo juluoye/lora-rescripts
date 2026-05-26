@@ -55,7 +55,11 @@ function emit(event: string, data: any) {
   onInstallDone: (data: InstallDoneEvent) => emit('install_done', data),
 };
 
+let _listenersAttached = false;
+
 function setupEventListener() {
+  if (_listenersAttached) return;
+  _listenersAttached = true;
   // pywebview dispatches CustomEvents via window.emit()
   // This works when emit is called from the main thread
   const eventNames = ['console_line', 'process_exit', 'install_log', 'install_done', 'task_state', 'task_stage', 'task_result', 'task_history_cleared'];

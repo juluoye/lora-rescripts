@@ -53,14 +53,14 @@ Schema.intersect([
 
     Schema.intersect([
         Schema.object({
-            network_module: Schema.union(["networks.lora_flux", "networks.tlora_flux", "networks.oft_flux", "lycoris.kohya"]).default("networks.lora_flux").description("训练网络模块"),
+            network_module: Schema.union(["networks.lora_flux", "networks.oft_flux", "lycoris.kohya"]).default("networks.lora_flux").description("训练网络模块"),
             network_weights: Schema.string().role('filepicker').description("从已有的 LoRA 模型上继续训练，填写路径"),
             network_dim: Schema.number().min(1).default(2).description("网络维度，常用 4~128，不是越大越好, 低dim可以降低显存占用"),
             network_alpha: Schema.number().min(1).default(16).description("常用值：等于 network_dim 或 network_dim*1/2 或 1。使用较小的 alpha 需要提升学习率"),
-            network_dropout: Schema.number().step(0.01).default(0).description('dropout 概率 （与 lycoris 不兼容，需要用 lycoris 自带的）'),
-            tlora_min_rank: Schema.number().min(1).default(1).description("T-LoRA 最小动态 rank。仅在 network_module=networks.tlora_flux 时生效"),
-            tlora_rank_schedule: Schema.union(["cosine", "linear"]).default("cosine").description("T-LoRA 动态 rank 调度。仅在 network_module=networks.tlora_flux 时生效"),
-            tlora_orthogonal_init: Schema.boolean().default(false).description("T-LoRA 对 lora_down 使用正交初始化（实验性，仅在 network_module=networks.tlora_flux 时生效）"),
+            network_dropout: Schema.number().min(0).max(1).step(0.01).default(0).description('dropout 概率 （与 lycoris 不兼容，需要用 lycoris 自带的）'),
+            tlora_min_rank: Schema.number().min(1).default(1).description("T-LoRA 最小动态 rank"),
+            tlora_rank_schedule: Schema.union(["cosine", "linear"]).default("cosine").description("T-LoRA 动态 rank 调度"),
+            tlora_orthogonal_init: Schema.boolean().default(false).description("T-LoRA 对 lora_down 使用正交初始化（实验性）"),
             dim_from_weights: Schema.boolean().default(false).description("从已有 network_weights 自动推断 rank / dim"),
             scale_weight_norms: Schema.number().step(0.01).min(0).description("最大范数正则化。如果使用，推荐为 1"),
             network_args_custom: Schema.array(String).role('table').description('自定义 network_args，一行一个'),

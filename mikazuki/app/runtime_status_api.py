@@ -235,7 +235,7 @@ async def terminate_task(task_id: str):
 
 @router.get("/task_output/{task_id}", response_model_exclude_none=True)
 async def get_task_output(task_id: str, tail: int = 50) -> APIResponse:
-    task = tm.tasks.get(task_id)
+    task = tm.get_task(task_id)
     if task is None:
         return APIResponseFail(message="Task not found")
 

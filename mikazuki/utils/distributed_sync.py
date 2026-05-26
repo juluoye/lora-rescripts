@@ -854,7 +854,7 @@ def run_ssh_command(remote_host: str, remote_command: str, sync_runtime: dict) -
     if cmd is None:
         return None, "failed to build ssh command"
 
-    result = subprocess.run(cmd, text=True, capture_output=True)
+    result = subprocess.run(cmd, text=True, capture_output=True, timeout=300)
     if result.returncode != 0:
         return None, result.stderr.strip() or result.stdout.strip() or "<empty>"
     return result, ""
@@ -941,7 +941,7 @@ def copy_remote_path(remote_path: str, local_path: Path, sync_runtime: dict) -> 
         cmd = build_sshpass_wrapper(cmd, sync_runtime)
         if cmd is not None:
             local_path.mkdir(parents=True, exist_ok=True)
-            result = subprocess.run(cmd, text=True, capture_output=True)
+            result = subprocess.run(cmd, text=True, capture_output=True, timeout=300)
             if result.returncode == 0:
                 return True, ""
             log.warning(
@@ -958,7 +958,7 @@ def scp_remote_file(remote_host: str, remote_path: str, local_path: Path, sync_r
     cmd = build_scp_command(remote_spec, str(local_path), sync_runtime, recursive=False)
     if cmd is None:
         return False, "failed to build scp command"
-    result = subprocess.run(cmd, text=True, capture_output=True)
+    result = subprocess.run(cmd, text=True, capture_output=True, timeout=300)
     if result.returncode != 0:
         return False, result.stderr.strip() or result.stdout.strip() or "<empty>"
     return True, ""
@@ -970,7 +970,7 @@ def scp_remote_dir(remote_host: str, remote_path: str, local_path: Path, sync_ru
     cmd = build_scp_command(remote_spec, str(local_path.parent), sync_runtime, recursive=True)
     if cmd is None:
         return False, "failed to build scp command"
-    result = subprocess.run(cmd, text=True, capture_output=True)
+    result = subprocess.run(cmd, text=True, capture_output=True, timeout=300)
     if result.returncode != 0:
         return False, result.stderr.strip() or result.stdout.strip() or "<empty>"
     return True, ""

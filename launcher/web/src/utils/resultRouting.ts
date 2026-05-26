@@ -1,6 +1,6 @@
 import type { ApiResult, PageId } from '../api/types';
 
-const PAGE_IDS: PageId[] = ['launch', 'runtime', 'advanced', 'install', 'dependencies', 'extensions', 'console', 'about'];
+const PAGE_IDS: PageId[] = ['launch', 'runtime', 'advanced', 'install', 'dependencies', 'extensions', 'console', 'about', 'managed'];
 
 function isPageId(value: unknown): value is PageId {
   return typeof value === 'string' && PAGE_IDS.includes(value as PageId);

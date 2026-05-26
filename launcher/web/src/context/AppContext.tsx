@@ -1196,19 +1196,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
       const nextTheme: Theme = prev === 'dark' ? 'light' : 'dark';
-      setSettings((current) => {
-        const next = { ...current, theme: nextTheme };
-        settingsRef.current = next;
-        return next;
-      });
-      pendingSettingsRef.current = { ...pendingSettingsRef.current, theme: nextTheme };
-      if (settingsTimerRef.current) clearTimeout(settingsTimerRef.current);
-      settingsTimerRef.current = window.setTimeout(async () => {
-        await flushSettingsNow();
-      }, 250);
       return nextTheme;
     });
-  }, [flushSettingsNow]);
+  }, []);
+
+  useEffect(() => {
+    setSettings((current) => {
+      const next = { ...current, theme };
+      settingsRef.current = next;
+      return next;
+    });
+    pendingSettingsRef.current = { ...pendingSettingsRef.current, theme };
+    if (settingsTimerRef.current) clearTimeout(settingsTimerRef.current);
+    settingsTimerRef.current = window.setTimeout(async () => {
+      await flushSettingsNow();
+    }, 250);
+  }, [theme, flushSettingsNow]);
 
   const clearConsole = useCallback(() => {
     setConsoleLines([]);

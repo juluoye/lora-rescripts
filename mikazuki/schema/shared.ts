@@ -235,7 +235,7 @@
                 keep_tokens: Schema.number().min(0).max(255).step(1).default(0).description("在随机打乱 tokens 时，保留前 N 个不变"),
                 keep_tokens_separator: Schema.string().description("保留 tokens 时使用的分隔符"),
                 max_token_length: Schema.number().default(255).description("最大 token 长度"),
-                caption_dropout_rate: Schema.number().min(0).step(0.01).description("丢弃全部标签的概率，对一个图片概率不使用 caption 或 class token"),
+                caption_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("丢弃全部标签的概率，对一个图片概率不使用 caption 或 class token"),
                 caption_dropout_every_n_epochs: Schema.number().min(0).max(100).step(1).description("每 N 个 epoch 丢弃全部标签"),
                 caption_tag_dropout_rate: Schema.number().min(0).step(0.01).description("按逗号分隔的标签来随机丢弃 tag 的概率"),
                 caption_tag_dropout_targets: Schema.string().role('textarea').description("指定要处理的 tag 列表。一行一个，也支持逗号分隔"),

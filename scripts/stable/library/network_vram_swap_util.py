@@ -16,7 +16,6 @@ SUPPORTED_NETWORK_MODULES = {
     "networks.tlora",
     "networks.vera",
     "networks.lora_flux",
-    "networks.tlora_flux",
     "networks.lora_sd3",
     "networks.lora_lumina",
     "networks.lora_hunyuan_image",

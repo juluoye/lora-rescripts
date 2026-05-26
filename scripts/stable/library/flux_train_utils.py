@@ -248,7 +248,9 @@ def sample_image_inference(
     t5_attn_mask = t5_attn_mask.to(accelerator.device) if args.apply_t5_attn_mask else None
 
     if controlnet_image is not None:
-        controlnet_image = Image.open(controlnet_image).convert("RGB")
+        _img = Image.open(controlnet_image)
+        controlnet_image = _img.convert("RGB")
+        _img.close()
         controlnet_image = controlnet_image.resize((width, height), Image.LANCZOS)
         controlnet_image = torch.from_numpy((np.array(controlnet_image) / 127.5) - 1)
         controlnet_image = controlnet_image.permute(2, 0, 1).unsqueeze(0).to(weight_dtype).to(accelerator.device)

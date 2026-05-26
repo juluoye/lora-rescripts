@@ -11,7 +11,7 @@ Schema.intersect([
         conditioning_data_dir: Schema.string().role('filepicker', { type: "folder" }).description("条件图数据集路径"),
         cond_emb_dim: Schema.number().min(1).default(32).description("条件嵌入维度"),
         network_dim: Schema.number().min(1).default(64).description("LLLite 网络维度"),
-        network_dropout: Schema.number().step(0.01).default(0).description("网络 dropout 概率"),
+        network_dropout: Schema.number().min(0).max(1).step(0.01).default(0).description("网络 dropout 概率"),
         no_half_vae: Schema.boolean().default(false).description("混合精度下也不使用半精度 VAE"),
     }).description("LLLite 专用参数"),
 

@@ -191,7 +191,7 @@ def run(command,
         cwd: Optional[str] = None):
 
     if shell is None:
-        shell = False if sys.platform == "win32" else True
+        shell = False
 
     if desc is not None:
         print(desc)

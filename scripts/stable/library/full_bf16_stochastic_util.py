@@ -60,7 +60,6 @@ class FullBf16StochasticOptimizer(torch.optim.Optimizer):
                 "full_bf16 stochastic optimizer received mismatched model/master parameter counts."
             )
         self._param_pairs = list(zip(self._model_params, self._master_params))
-        self._master_device_aligned = False
 
     def __getattr__(self, name: str):
         return getattr(self._optimizer, name)
@@ -82,15 +81,12 @@ class FullBf16StochasticOptimizer(torch.optim.Optimizer):
                 inner_group[key] = value
 
     def _align_master_device(self) -> None:
-        if self._master_device_aligned:
-            return
         for model_param, master_param in self._param_pairs:
             target_device = model_param.device
             if master_param.device != target_device:
                 master_param.data = master_param.data.to(device=target_device)
                 if master_param.grad is not None:
                     master_param.grad = master_param.grad.to(device=target_device)
-        self._master_device_aligned = True
 
     @staticmethod
     def _clone_param_groups(param_groups):

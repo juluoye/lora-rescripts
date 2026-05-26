@@ -418,6 +418,10 @@ class TaskManager:
         with self._tasks_lock:
             self.tasks[task_id] = task
 
+    def get_task(self, task_id: str):
+        with self._tasks_lock:
+            return self.tasks.get(task_id)
+
     def terminate_task(self, task_id: str):
         with self._tasks_lock:
             task = self.tasks.get(task_id)

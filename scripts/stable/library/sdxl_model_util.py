@@ -199,11 +199,12 @@ def load_models_from_sdxl_checkpoint(model_version, ckpt_path, map_location, dty
     if model_util.is_safetensors(ckpt_path):
         checkpoint = None
         if disable_mmap:
-            state_dict = safetensors.torch.load(open(ckpt_path, "rb").read())
+            with open(ckpt_path, "rb") as f:
+                state_dict = safetensors.torch.load(f.read())
         else:
             try:
                 state_dict = load_file(ckpt_path, device=map_location)
-            except:
+            except (RuntimeError, OSError):
                 state_dict = load_file(ckpt_path)  # prevent device invalid Error
         epoch = None
         global_step = None

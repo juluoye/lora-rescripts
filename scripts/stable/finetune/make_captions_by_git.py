@@ -129,9 +129,12 @@ def main(args):
             image, image_path = data
             if image is None:
                 try:
-                    image = Image.open(image_path)
-                    if image.mode != "RGB":
-                        image = image.convert("RGB")
+                    _img = Image.open(image_path)
+                    if _img.mode != "RGB":
+                        image = _img.convert("RGB")
+                        _img.close()
+                    else:
+                        image = _img
                 except Exception as e:
                     logger.error(f"Could not load image path / 画像を読み込めません: {image_path}, error: {e}")
                     continue

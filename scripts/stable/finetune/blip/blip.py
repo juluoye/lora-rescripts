@@ -230,13 +230,14 @@ def load_checkpoint(model,url_or_filename):
         
     state_dict = checkpoint['model']
     
-    state_dict['visual_encoder.pos_embed'] = interpolate_pos_embed(state_dict['visual_encoder.pos_embed'],model.visual_encoder) 
-    if 'visual_encoder_m.pos_embed' in model.state_dict().keys():
+    state_dict['visual_encoder.pos_embed'] = interpolate_pos_embed(state_dict['visual_encoder.pos_embed'],model.visual_encoder)
+    model_sd = model.state_dict()
+    if 'visual_encoder_m.pos_embed' in model_sd.keys():
         state_dict['visual_encoder_m.pos_embed'] = interpolate_pos_embed(state_dict['visual_encoder_m.pos_embed'],
-                                                                         model.visual_encoder_m)    
-    for key in model.state_dict().keys():
+                                                                         model.visual_encoder_m)
+    for key in model_sd.keys():
         if key in state_dict.keys():
-            if state_dict[key].shape!=model.state_dict()[key].shape:
+            if state_dict[key].shape!=model_sd[key].shape:
                 del state_dict[key]
     
     msg = model.load_state_dict(state_dict,strict=False)
