@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import threading
+import time
 from typing import Any, Callable, Dict, Optional
 
 from launcher.config import DEFAULT_HOST, DEFAULT_PORT, RUNTIME_MAP, RuntimeDef
@@ -62,9 +64,41 @@ class RuntimeCoordinator:
     def __init__(self, repo_root: Path, settings_provider: Callable[[], Dict[str, Any]]) -> None:
         self._repo_root = repo_root
         self._settings_provider = settings_provider
+        self._status_cache_ttl_seconds = 3.0
+        self._status_cache_lock = threading.Condition()
+        self._status_cache: Optional[tuple[float, Dict[str, RuntimeStatus]]] = None
+        self._status_cache_loading = False
 
-    def get_statuses(self) -> Dict[str, RuntimeStatus]:
-        return detect_all(self._repo_root)
+    def invalidate_status_cache(self) -> None:
+        with self._status_cache_lock:
+            self._status_cache = None
+
+    def get_statuses(self, *, force_refresh: bool = False) -> Dict[str, RuntimeStatus]:
+        while True:
+            with self._status_cache_lock:
+                now = time.monotonic()
+                if not force_refresh and self._status_cache is not None:
+                    cached_at, cached_statuses = self._status_cache
+                    if now - cached_at < self._status_cache_ttl_seconds:
+                        return dict(cached_statuses)
+
+                if self._status_cache_loading:
+                    self._status_cache_lock.wait()
+                    continue
+
+                self._status_cache_loading = True
+                break
+
+        try:
+            statuses = detect_all(self._repo_root)
+        finally:
+            with self._status_cache_lock:
+                if 'statuses' in locals():
+                    self._status_cache = (time.monotonic(), statuses)
+                self._status_cache_loading = False
+                self._status_cache_lock.notify_all()
+
+        return dict(statuses)
 
     def get_serialized_statuses(self) -> Dict[str, Dict[str, Any]]:
         statuses = self.get_statuses()

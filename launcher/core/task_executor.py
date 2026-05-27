@@ -448,7 +448,7 @@ class LauncherTaskExecutor:
         """Wait briefly for runtime filesystem markers to become visible to detector logic."""
         deadline = time.monotonic() + max(0.0, timeout_seconds)
         while time.monotonic() < deadline:
-            status = self._runtime_coordinator.get_statuses().get(runtime_id)
+            status = self._runtime_coordinator.get_statuses(force_refresh=True).get(runtime_id)
             if not status:
                 time.sleep(poll_interval_seconds)
                 continue
@@ -872,6 +872,7 @@ class LauncherTaskExecutor:
                     "success": success,
                     "action": "initialize",
                 }
+                self._runtime_coordinator.invalidate_status_cache()
                 if success:
                     self._wait_for_runtime_detection(runtime_id, require_installed=False)
                     self._finish_task(
@@ -1133,6 +1134,7 @@ class LauncherTaskExecutor:
                     "success": success,
                     "action": "install",
                 }
+                self._runtime_coordinator.invalidate_status_cache()
                 if success:
                     self._wait_for_runtime_detection(runtime_id, require_installed=True)
                     self._finish_task(
@@ -1508,6 +1510,7 @@ class LauncherTaskExecutor:
                     "action": "uninstall",
                     "details": final_details,
                 }
+                self._runtime_coordinator.invalidate_status_cache()
                 if success:
                     self._wait_for_runtime_detection(runtime_id, require_installed=False)
                     self._finish_task(
