@@ -115,8 +115,15 @@ class AnimaConceptEditTrainerMixin:
         self._concept_edit_latent_cache: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
         self._concept_edit_text_cond_cache: dict[tuple[Any, ...], list[torch.Tensor]] = {}
 
-    def build_metadata(self, args, session_id, training_started_at, optimizer_name, optimizer_args):
-        metadata, minimum_metadata = super().build_metadata(args, session_id, training_started_at, optimizer_name, optimizer_args)
+    def build_metadata(self, args, session_id, training_started_at, optimizer_name, optimizer_args, **metadata_kwargs):
+        metadata, minimum_metadata = super().build_metadata(
+            args,
+            session_id,
+            training_started_at,
+            optimizer_name,
+            optimizer_args,
+            **metadata_kwargs,
+        )
         metadata["ss_training_task"] = "concept_edit"
         metadata["ss_concept_edit_mode"] = str(getattr(args, "concept_edit_mode", "") or "")
         metadata["ss_concept_edit_fixed_timestep_per_batch"] = str(

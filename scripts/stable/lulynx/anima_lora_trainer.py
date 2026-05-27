@@ -35,6 +35,7 @@ from library import (
     sd3_train_utils,
     strategy_anima,
     strategy_base,
+    train_metadata_util,
     train_util,
 )
 from library.config_util import BlueprintGenerator, ConfigSanitizer
@@ -841,7 +842,47 @@ class AnimaNetworkTrainer:
             if param.grad is not None:
                 param.grad = accelerator.reduce(param.grad, reduction="mean")
 
-    def build_metadata(self, args, session_id, training_started_at, optimizer_name, optimizer_args):
+    @staticmethod
+    def _resolve_metadata_resolution(args, train_dataset_group=None):
+        resolution = getattr(args, "resolution", None)
+        if resolution not in (None, ""):
+            return resolution
+
+        if train_dataset_group is not None:
+            get_resolutions = getattr(train_dataset_group, "get_resolutions", None)
+            if callable(get_resolutions):
+                for width, height in get_resolutions():
+                    if width is not None and height is not None:
+                        return (width, height)
+
+            for dataset in getattr(train_dataset_group, "datasets", []) or []:
+                width = getattr(dataset, "width", None)
+                height = getattr(dataset, "height", None)
+                if width is not None and height is not None:
+                    return (width, height)
+
+        return ""
+
+    def build_metadata(
+        self,
+        args,
+        session_id,
+        training_started_at,
+        optimizer_name,
+        optimizer_args,
+        *,
+        net_kwargs=None,
+        train_dataset_group=None,
+        train_dataloader=None,
+        num_train_epochs=None,
+        num_processes=1,
+    ):
+        net_kwargs = dict(net_kwargs or {})
+        total_batch_size = (
+            int(getattr(args, "train_batch_size", 1) or 1)
+            * int(num_processes or 1)
+            * int(getattr(args, "gradient_accumulation_steps", 1) or 1)
+        )
         metadata = {
             "ss_session_id": str(session_id),
             "ss_training_started_at": str(training_started_at),
@@ -854,6 +895,17 @@ class AnimaNetworkTrainer:
             "ss_network_alpha": str(args.network_alpha),
             "ss_network_dropout": str(args.network_dropout),
             "ss_mixed_precision": str(args.mixed_precision),
+            "ss_batch_size_per_device": str(getattr(args, "train_batch_size", "")),
+            "ss_total_batch_size": str(total_batch_size),
+            "ss_gradient_checkpointing": str(bool(getattr(args, "gradient_checkpointing", False))),
+            "ss_gradient_accumulation_steps": str(getattr(args, "gradient_accumulation_steps", "")),
+            "ss_max_train_steps": str(getattr(args, "max_train_steps", "")),
+            "ss_num_epochs": str(num_train_epochs if num_train_epochs is not None else ""),
+            "ss_lr_warmup_steps": str(getattr(args, "lr_warmup_steps", "")),
+            "ss_lr_scheduler": str(getattr(args, "lr_scheduler", "")),
+            "ss_resolution": str(self._resolve_metadata_resolution(args, train_dataset_group)),
+            "ss_training_comment": str(getattr(args, "training_comment", "")),
+            "ss_sd_scripts_commit_hash": str(train_util.get_git_revision_hash()),
             "ss_cache_latents": str(bool(args.cache_latents)),
             "ss_seed": str(args.seed),
             "ss_optimizer": optimizer_name + (f"({optimizer_args})" if len(optimizer_args) > 0 else ""),
@@ -863,6 +915,14 @@ class AnimaNetworkTrainer:
             "ss_attn_mode": str(args.attn_mode),
             "ss_attention_backend": str(train_util.resolve_attention_backend(args)),
         }
+        if train_dataset_group is not None:
+            metadata["ss_num_train_images"] = str(getattr(train_dataset_group, "num_train_images", ""))
+            metadata["ss_num_reg_images"] = str(getattr(train_dataset_group, "num_reg_images", ""))
+        if train_dataloader is not None:
+            metadata["ss_num_batches_per_epoch"] = str(len(train_dataloader))
+        if net_kwargs:
+            metadata["ss_network_args"] = json.dumps(net_kwargs, ensure_ascii=False)
+        metadata.update({k: str(v) for k, v in train_metadata_util.build_compatibility_metadata(args, net_kwargs).items()})
         if args.pretrained_model_name_or_path is not None:
             metadata["ss_sd_model_name"] = str(args.pretrained_model_name_or_path)
         if args.vae is not None:
@@ -1434,7 +1494,18 @@ class AnimaNetworkTrainer:
         def get_effective_epoch_no(epoch_index: int) -> int:
             return max(1, epoch_index + 1 + mixed_resolution_epoch_display_offset)
 
-        metadata, minimum_metadata = self.build_metadata(args, session_id, training_started_at, optimizer_name, optimizer_args)
+        metadata, minimum_metadata = self.build_metadata(
+            args,
+            session_id,
+            training_started_at,
+            optimizer_name,
+            optimizer_args,
+            net_kwargs=net_kwargs,
+            train_dataset_group=train_dataset_group,
+            train_dataloader=train_dataloader,
+            num_train_epochs=displayed_num_train_epochs,
+            num_processes=accelerator.num_processes,
+        )
         if lulynx_core is not None:
             metadata.update(lulynx_core.get_metadata())
             minimum_metadata.update(lulynx_core.get_metadata())
