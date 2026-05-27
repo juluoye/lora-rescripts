@@ -504,6 +504,7 @@
         ]),
 
         VALIDATION_SETTINGS: Schema.object({
+            validation_data_dir: Schema.string().role('filepicker', { type: "folder" }).description("独立验证集路径。填写后会把该目录作为独立验证集，不会从训练集中切走图片"),
             validation_split: Schema.number().min(0).max(1).step(0.01).default(0).description("验证集划分比例。会从训练集中自动切出一部分做验证"),
             validation_seed: Schema.number().description("验证集切分随机种子。不填写时沿用训练随机种子"),
             validate_every_n_steps: Schema.number().min(1).description("每 N 步执行一次验证"),

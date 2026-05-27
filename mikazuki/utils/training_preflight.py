@@ -438,6 +438,7 @@ def analyze_training_preflight(
     notes: list[str] = []
 
     train_data_dir = str(payload.get("train_data_dir", "")).strip()
+    validation_data_dir = str(payload.get("validation_data_dir", "")).strip()
     conditioning_data_dir = str(payload.get("conditioning_data_dir", "")).strip()
     resume_path = str(payload.get("resume", "")).strip()
     model_path = str(payload.get("pretrained_model_name_or_path", "")).strip()
@@ -453,6 +454,16 @@ def analyze_training_preflight(
     dataset_config_error = validate_dataset_config_reference(payload, training_type=training_type, root_dir=root_dir)
     if dataset_config_error:
         errors.append(dataset_config_error)
+
+    if validation_data_dir:
+        if str(payload.get("dataset_config", "") or "").strip():
+            notes.append("validation_data_dir 已填写，但当前 dataset_config 已存在，独立验证集路径会被忽略。")
+        elif not os.path.isdir(validation_data_dir):
+            errors.append(f"validation_data_dir is not a directory: {validation_data_dir}")
+        elif not train_utils.get_total_images(validation_data_dir):
+            errors.append(f"No validation images found in validation_data_dir: {validation_data_dir}")
+        else:
+            notes.append("独立验证集路径已填写。启动时会自动生成临时 dataset_config，并禁用 validation_split 切分训练集。")
 
     if not trainer_supported:
         errors.append(f"Unsupported trainer type: {training_type}")

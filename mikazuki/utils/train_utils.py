@@ -369,7 +369,7 @@ def suggest_num_repeat(img_count):
 
 def check_training_params(data):
     potential_path = [
-        "train_data_dir", "reg_data_dir", "output_dir"
+        "train_data_dir", "reg_data_dir", "validation_data_dir", "output_dir"
     ]
     file_paths = [
         "sample_prompts"
