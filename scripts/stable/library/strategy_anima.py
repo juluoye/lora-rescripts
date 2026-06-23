@@ -84,24 +84,13 @@ class AnimaTokenizeStrategy(TokenizeStrategy):
         attention_mask = torch.ones((batch_size, 1), dtype=torch.long)
         return input_ids, attention_mask
 
-    @staticmethod
-    def _batch_tokenize(tokenizer, text: List[str], *, max_length: int):
-        tokenize_kwargs = {
-            "return_tensors": "pt",
-            "truncation": True,
-            "padding": True,
-            "max_length": max_length,
-        }
-        batch_encode_plus = getattr(tokenizer, "batch_encode_plus", None)
-        if batch_encode_plus is not None:
-            return batch_encode_plus(text, **tokenize_kwargs)
-        return tokenizer(text, **tokenize_kwargs)
-
     def tokenize(self, text: Union[str, List[str]]) -> List[torch.Tensor]:
         text = [text] if isinstance(text, str) else text
 
         # Tokenize with Qwen3
-        qwen3_encoding = self._batch_tokenize(self.qwen3_tokenizer, text, max_length=self.qwen3_max_length)
+        qwen3_encoding = self.qwen3_tokenizer.batch_encode_plus(
+            text, return_tensors="pt", truncation=True, padding=True, max_length=self.qwen3_max_length
+        )
         qwen3_input_ids, qwen3_attn_mask = self._ensure_min_sequence_length(
             qwen3_encoding["input_ids"],
             qwen3_encoding["attention_mask"],
@@ -109,7 +98,9 @@ class AnimaTokenizeStrategy(TokenizeStrategy):
         )
 
         # Tokenize with T5 (for LLM Adapter target tokens)
-        t5_encoding = self._batch_tokenize(self.t5_tokenizer, text, max_length=self.t5_max_length)
+        t5_encoding = self.t5_tokenizer.batch_encode_plus(
+            text, return_tensors="pt", truncation=True, padding=True, max_length=self.t5_max_length
+        )
         t5_input_ids, t5_attn_mask = self._ensure_min_sequence_length(
             t5_encoding["input_ids"],
             t5_encoding["attention_mask"],

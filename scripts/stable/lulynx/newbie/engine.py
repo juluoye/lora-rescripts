@@ -351,7 +351,6 @@ class NewbieCachedTrainer:
                 self.config.output_name,
                 accelerator.unwrap_model(model),
                 step,
-                self.config,
             )
             last_periodic_save_step = step
             print(
@@ -835,7 +834,6 @@ class NewbieCachedTrainer:
                     self.config.output_name,
                     accelerator.unwrap_model(model),
                     None,
-                    self.config,
                 )
             )
             save_newbie_checkpoint(
@@ -858,6 +856,7 @@ class NewbieCachedTrainer:
             total_params=total_params,
             saved_adapter_path=str(final_adapter_path),
         )
+
 
 
 

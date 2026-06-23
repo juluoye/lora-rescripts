@@ -1,0 +1,7 @@
+enable_conv = false
+unet_target_module = []
+unet_target_name = [
+  'blocks\.[0-9]+\.self_attn\.(q_proj|k_proj|v_proj|output_proj)$',
+]
+text_encoder_target_module = []
+text_encoder_target_name = []

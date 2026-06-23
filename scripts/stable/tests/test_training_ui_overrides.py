@@ -106,3 +106,116 @@ def test_apply_training_ui_overrides_cleans_lokr_options_when_switching_to_lora(
         assert key not in config
     assert all("lokr_" not in item for item in config["network_args"])
     assert all(not item.startswith(("full_matrix=", "decompose_both=", "unbalanced_factorization=")) for item in config["network_args"])
+
+
+def test_apply_training_ui_overrides_maps_anima_loha_to_lycoris_with_anima_preset():
+    config = {
+        "model_train_type": "anima-lora",
+        "lora_type": "loha",
+        "anima_main_block_template": "主干 block + adln（self_attn + cross_attn + mlp + adln）",
+        "dropout": 0.1,
+        "rank_dropout": 0.2,
+        "module_dropout": 0.3,
+        "train_norm": True,
+        "dora_wd": True,
+        "bypass_mode": True,
+        "wd_on_output": False,
+    }
+
+    warnings = apply_training_ui_overrides(config)
+
+    assert warnings == []
+    assert config["network_module"] == "lycoris.kohya"
+    assert config["lycoris_algo"] == "loha"
+    assert "algo=loha" in config["network_args"]
+    assert "preset=./config/lycoris_presets/anima_main_block_with_adln.toml" in config["network_args"]
+    assert "dropout=0.1" in config["network_args"]
+    assert "rank_dropout=0.2" in config["network_args"]
+    assert "module_dropout=0.3" in config["network_args"]
+    assert "train_norm=True" in config["network_args"]
+    assert "dora_wd=True" in config["network_args"]
+    assert "wd_on_output=False" in config["network_args"]
+    assert "bypass_mode=True" in config["network_args"]
+
+
+def test_apply_training_ui_overrides_maps_anima_boft_to_lycoris_with_main_block_preset():
+    config = {
+        "model_train_type": "anima-lora",
+        "lora_type": "boft",
+        "anima_main_block_template": "仅 mlp",
+        "constraint": 0.75,
+        "rescaled": True,
+        "network_args_custom": ["preset=./config/lycoris_presets/custom_override.toml"],
+    }
+
+    warnings = apply_training_ui_overrides(config)
+
+    assert warnings == []
+    assert config["network_module"] == "lycoris.kohya"
+    assert config["lycoris_algo"] == "boft"
+    assert "algo=boft" in config["network_args"]
+    assert "preset=./config/lycoris_presets/anima_mlp_only.toml" in config["network_args"]
+    assert "preset=./config/lycoris_presets/custom_override.toml" in config["network_args"]
+    assert "constraint=0.75" in config["network_args"]
+    assert "rescaled=True" in config["network_args"]
+
+
+def test_apply_training_ui_overrides_maps_anima_glora_to_lycoris_with_anima_preset():
+    config = {
+        "model_train_type": "anima-lora",
+        "lora_type": "glora",
+        "anima_main_block_template": "仅 attention（self_attn + cross_attn）",
+        "dropout": 0.05,
+        "rank_dropout": 0.15,
+        "module_dropout": 0.25,
+        "use_scalar": True,
+        "rs_lora": True,
+        "network_args_custom": ["algo=glora"],
+    }
+
+    warnings = apply_training_ui_overrides(config)
+
+    assert warnings == []
+    assert config["network_module"] == "lycoris.kohya"
+    assert config["lycoris_algo"] == "glora"
+    assert "algo=glora" in config["network_args"]
+    assert "preset=./config/lycoris_presets/anima_attention_only.toml" in config["network_args"]
+    assert "dropout=0.05" in config["network_args"]
+    assert "rank_dropout=0.15" in config["network_args"]
+    assert "module_dropout=0.25" in config["network_args"]
+    assert "use_scalar=True" in config["network_args"]
+    assert "rs_lora=True" in config["network_args"]
+
+
+def test_apply_training_ui_overrides_maps_anima_glokr_to_lycoris_with_anima_preset():
+    config = {
+        "model_train_type": "anima-lora",
+        "lora_type": "glokr",
+        "anima_main_block_template": "主干 block（self_attn + cross_attn + mlp）",
+        "dropout": 0.07,
+        "rank_dropout": 0.17,
+        "module_dropout": 0.27,
+        "use_scalar": True,
+        "rs_lora": True,
+        "full_matrix": True,
+        "decompose_both": True,
+        "unbalanced_factorization": True,
+        "lokr_factor": 6,
+    }
+
+    warnings = apply_training_ui_overrides(config)
+
+    assert warnings == []
+    assert config["network_module"] == "lycoris.kohya"
+    assert config["lycoris_algo"] == "glokr"
+    assert "algo=glokr" in config["network_args"]
+    assert "preset=./config/lycoris_presets/anima_main_block.toml" in config["network_args"]
+    assert "dropout=0.07" in config["network_args"]
+    assert "rank_dropout=0.17" in config["network_args"]
+    assert "module_dropout=0.27" in config["network_args"]
+    assert "use_scalar=True" in config["network_args"]
+    assert "rs_lora=True" in config["network_args"]
+    assert "full_matrix=True" in config["network_args"]
+    assert "decompose_both=True" in config["network_args"]
+    assert "unbalanced_factorization=True" in config["network_args"]
+    assert "lokr_factor=6" in config["network_args"]

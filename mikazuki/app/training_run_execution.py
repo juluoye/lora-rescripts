@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from pathlib import Path
 
 import toml
 
@@ -43,46 +42,6 @@ from mikazuki.utils.training_start_warnings import (
 )
 
 
-DATASET_CONFIG_GENERAL_KEYS = (
-    "resolution",
-    "skip_image_resolution",
-    "enable_bucket",
-    "min_bucket_reso",
-    "max_bucket_reso",
-    "bucket_reso_steps",
-    "bucket_no_upscale",
-    "bucket_selection_mode",
-    "bucket_custom_resos",
-    "caption_extension",
-    "shuffle_caption",
-    "keep_tokens",
-    "keep_tokens_separator",
-    "secondary_separator",
-    "caption_separator",
-    "enable_wildcard",
-    "caption_prefix",
-    "caption_suffix",
-    "resize_interpolation",
-)
-
-DATASET_CONFIG_AUG_KEYS = (
-    "color_aug",
-    "flip_aug",
-    "random_crop",
-    "face_crop_aug_range",
-    "caption_dropout_rate",
-    "caption_dropout_every_n_epochs",
-    "caption_tag_dropout_rate",
-    "caption_tag_dropout_targets",
-    "caption_tag_dropout_target_mode",
-    "caption_tag_dropout_target_count",
-    "token_warmup_min",
-    "token_warmup_step",
-)
-
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-
-
 def apply_attention_backend_fallback(config: dict, gpu_ids) -> str | None:
     if config.get("mem_eff_attn", False):
         return None
@@ -110,165 +69,6 @@ def apply_attention_backend_fallback(config: dict, gpu_ids) -> str | None:
 
     log.warning(message)
     return message
-
-
-def _path_has_images(path: Path) -> bool:
-    if not path.is_dir():
-        return False
-    return any(child.is_file() and child.suffix.lower() in IMAGE_EXTENSIONS for child in path.iterdir())
-
-
-def _extract_repeat_folder_params(path: Path) -> tuple[int, str]:
-    head, sep, tail = path.name.partition("_")
-    if not sep:
-        return 0, ""
-    try:
-        repeats = int(head)
-    except ValueError:
-        return 0, ""
-    return repeats, tail
-
-
-def _build_train_subsets_from_dir(train_data_dir: str, *, is_reg: bool = False) -> list[dict]:
-    root = Path(train_data_dir).expanduser()
-    if not root.is_dir():
-        return []
-
-    direct_repeats, direct_tokens = _extract_repeat_folder_params(root)
-    if direct_repeats >= 1 and _path_has_images(root):
-        return [
-            {
-                "image_dir": str(root),
-                "num_repeats": direct_repeats,
-                "is_reg": bool(is_reg),
-                "class_tokens": direct_tokens,
-            }
-        ]
-
-    subsets: list[dict] = []
-    for child in sorted(root.iterdir(), key=lambda item: item.name.lower()):
-        if not child.is_dir():
-            continue
-        repeats, class_tokens = _extract_repeat_folder_params(child)
-        if repeats < 1:
-            continue
-        subsets.append(
-            {
-                "image_dir": str(child),
-                "num_repeats": repeats,
-                "is_reg": bool(is_reg),
-                "class_tokens": class_tokens,
-            }
-        )
-    return subsets
-
-
-def _build_validation_subsets_from_dir(validation_data_dir: str, *, caption_extension: str | None = None) -> list[dict]:
-    root = Path(validation_data_dir).expanduser()
-    if not root.is_dir():
-        return []
-
-    normalized_caption_extension = str(caption_extension or "").strip()
-
-    def make_subset(path: Path, class_tokens: str = "") -> dict:
-        subset = {
-            "image_dir": str(path),
-            "num_repeats": 1,
-            "is_reg": False,
-            "is_val": True,
-            "class_tokens": class_tokens,
-        }
-        if normalized_caption_extension:
-            subset["caption_extension"] = normalized_caption_extension
-        return subset
-
-    if _path_has_images(root):
-        repeats, class_tokens = _extract_repeat_folder_params(root)
-        return [make_subset(root, class_tokens if repeats >= 1 else "")]
-
-    subsets: list[dict] = []
-    for child in sorted(root.iterdir(), key=lambda item: item.name.lower()):
-        if not child.is_dir() or not _path_has_images(child):
-            continue
-        repeats, class_tokens = _extract_repeat_folder_params(child)
-        subsets.append(make_subset(child, class_tokens if repeats >= 1 else ""))
-    return subsets
-
-
-def _copy_present_config_keys(config: dict, keys: tuple[str, ...]) -> dict:
-    copied = {}
-    for key in keys:
-        value = config.get(key)
-        if value is None or value == "":
-            continue
-        # Let argparse-level config keep handling string forms like "1024,1024".
-        # The dataset_config schema expects numeric scalars or arrays here.
-        if key in {"resolution", "skip_image_resolution", "face_crop_aug_range"} and isinstance(value, str):
-            continue
-        copied[key] = value
-    return copied
-
-
-def _prepare_independent_validation_dataset_config(context: TrainingRunContext) -> APIResponseFail | None:
-    config = context.config
-    validation_data_dir = str(config.pop("validation_data_dir", "") or "").strip()
-    if not validation_data_dir:
-        return None
-
-    validation_root = Path(validation_data_dir).expanduser()
-    if not validation_root.is_dir():
-        return APIResponseFail(message=f"validation_data_dir does not exist or is not a directory: {validation_root}")
-    if not train_utils.get_total_images(str(validation_root), recursive=True):
-        return APIResponseFail(message=f"No validation images found in validation_data_dir: {validation_root}")
-
-    if str(config.get("dataset_config", "") or "").strip():
-        context.start_warnings.append("已填写 dataset_config，独立验证集路径 validation_data_dir 已忽略。")
-        return None
-
-    model_train_type = str(context.model_train_type or "").strip().lower()
-    if model_train_type == "yolo" or "controlnet" in model_train_type:
-        context.start_warnings.append("当前训练类型暂不自动生成独立验证集 dataset_config，validation_data_dir 已忽略。")
-        return None
-
-    train_data_dir = str(config.get("train_data_dir", "") or "").strip()
-    if not train_data_dir:
-        return APIResponseFail(message="validation_data_dir requires train_data_dir when dataset_config is not provided.")
-
-    subsets = _build_train_subsets_from_dir(train_data_dir, is_reg=False)
-    reg_data_dir = str(config.get("reg_data_dir", "") or "").strip()
-    if reg_data_dir:
-        subsets.extend(_build_train_subsets_from_dir(reg_data_dir, is_reg=True))
-
-    if not subsets:
-        return APIResponseFail(message=f"Could not build training subsets from train_data_dir: {train_data_dir}")
-
-    caption_extension = str(config.get("caption_extension", "") or "").strip()
-    validation_subsets = _build_validation_subsets_from_dir(validation_data_dir, caption_extension=caption_extension)
-    if not validation_subsets:
-        return APIResponseFail(message=f"Could not build validation subsets from validation_data_dir: {validation_root}")
-    subsets.extend(validation_subsets)
-
-    dataset_keys = DATASET_CONFIG_GENERAL_KEYS + DATASET_CONFIG_AUG_KEYS
-    dataset_config = {
-        "general": _copy_present_config_keys(config, dataset_keys),
-        "datasets": [
-            {
-                **_copy_present_config_keys(config, dataset_keys),
-                "batch_size": int(config.get("train_batch_size", 1) or 1),
-                "validation_split": 0.0,
-                "subsets": subsets,
-            }
-        ],
-    }
-    dataset_config_path = context.autosave_dir / f"{context.timestamp}-validation-dataset.toml"
-    dataset_config_path.write_text(toml.dumps(dataset_config), encoding="utf-8")
-
-    config["dataset_config"] = str(dataset_config_path)
-    config["validation_split"] = 0.0
-    context.start_warnings.append(
-        f"已启用独立验证集：{validation_root}。训练集不会被 validation_split 切分。"
-    )
-    return None
 
 
 def _validate_training_inputs(context: TrainingRunContext) -> APIResponseFail | None:
@@ -454,10 +254,6 @@ def launch_training(context: TrainingRunContext):
 
 def prepare_training_run(context: TrainingRunContext) -> APIResponseFail | None:
     context.start_warnings.append(build_route_contract_preflight_note(context.config, context.model_train_type))
-
-    validation_dataset_error = _prepare_independent_validation_dataset_config(context)
-    if validation_dataset_error:
-        return validation_dataset_error
 
     validation_error = _validate_training_inputs(context)
     if validation_error:

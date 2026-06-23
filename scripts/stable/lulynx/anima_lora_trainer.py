@@ -27,7 +27,6 @@ from library import (
     anima_train_utils,
     anima_utils,
     config_util,
-    flux_train_utils,
     huggingface_util,
     full_bf16_stochastic_util,
     network_vram_swap_util,
@@ -35,7 +34,6 @@ from library import (
     sd3_train_utils,
     strategy_anima,
     strategy_base,
-    train_metadata_util,
     train_util,
 )
 from library.config_util import BlueprintGenerator, ConfigSanitizer
@@ -212,12 +210,29 @@ class AnimaNetworkTrainer:
         train_dataset_group: Union[train_util.DatasetGroup, train_util.MinimalDataset],
         val_dataset_group: Optional[train_util.DatasetGroup],
     ):
-        if getattr(args, "fp8_base", False) or getattr(args, "fp8_base_unet", False):
-            logger.warning("fp8_base and fp8_base_unet are not supported for Anima LoRA. Disabling them.")
-            args.fp8_base = False
-            args.fp8_base_unet = False
+        fp8_base_requested = bool(getattr(args, "fp8_base", False))
+        fp8_base_unet_requested = bool(getattr(args, "fp8_base_unet", False))
+        fp8_scaled_requested = bool(getattr(args, "fp8_scaled", False))
+        if fp8_base_requested or fp8_base_unet_requested or fp8_scaled_requested:
+            assert hasattr(torch, "float8_e4m3fn"), "Anima fp8 training requires torch with float8_e4m3fn support."
+            assert (
+                args.mixed_precision != "no"
+            ), "Anima fp8 training requires mixed_precision='fp16' or 'bf16'."
 
-        args.fp8_scaled = False
+            if fp8_base_requested and not fp8_base_unet_requested:
+                logger.warning(
+                    "Anima LoRA does not fp8 the Qwen3 text encoder. Interpreting fp8_base as DiT-only scaled fp8."
+                )
+
+            args.fp8_scaled = True
+            args.fp8_base = False
+            args.fp8_base_unet = True
+            logger.info(
+                "Enable scaled fp8 for Anima DiT frozen base. Text encoder remains in mixed precision dtype."
+            )
+        else:
+            args.fp8_scaled = False
+
         args.attn_mode = anima_train_utils.normalize_anima_attn_mode(getattr(args, "attn_mode", None))
         _apply_anima_sageattention_checkpoint_safety(args)
         if args.cache_text_encoder_outputs_to_disk and not args.cache_text_encoder_outputs:
@@ -581,10 +596,9 @@ class AnimaNetworkTrainer:
                 latents = latents.squeeze(2)
             noise = torch.randn_like(latents)
 
-            noisy_model_input, timesteps, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
+            noisy_model_input, timesteps, sigmas = anima_train_utils.get_anima_noisy_model_input_and_timesteps(
                 args, noise_scheduler, latents, noise, accelerator.device, weight_dtype
             )
-            timesteps = timesteps / 1000.0
 
             if run_nan_check and torch.any(torch.isnan(noisy_model_input)):
                 accelerator.print("NaN found in noisy_model_input, replacing with zeros")
@@ -842,47 +856,7 @@ class AnimaNetworkTrainer:
             if param.grad is not None:
                 param.grad = accelerator.reduce(param.grad, reduction="mean")
 
-    @staticmethod
-    def _resolve_metadata_resolution(args, train_dataset_group=None):
-        resolution = getattr(args, "resolution", None)
-        if resolution not in (None, ""):
-            return resolution
-
-        if train_dataset_group is not None:
-            get_resolutions = getattr(train_dataset_group, "get_resolutions", None)
-            if callable(get_resolutions):
-                for width, height in get_resolutions():
-                    if width is not None and height is not None:
-                        return (width, height)
-
-            for dataset in getattr(train_dataset_group, "datasets", []) or []:
-                width = getattr(dataset, "width", None)
-                height = getattr(dataset, "height", None)
-                if width is not None and height is not None:
-                    return (width, height)
-
-        return ""
-
-    def build_metadata(
-        self,
-        args,
-        session_id,
-        training_started_at,
-        optimizer_name,
-        optimizer_args,
-        *,
-        net_kwargs=None,
-        train_dataset_group=None,
-        train_dataloader=None,
-        num_train_epochs=None,
-        num_processes=1,
-    ):
-        net_kwargs = dict(net_kwargs or {})
-        total_batch_size = (
-            int(getattr(args, "train_batch_size", 1) or 1)
-            * int(num_processes or 1)
-            * int(getattr(args, "gradient_accumulation_steps", 1) or 1)
-        )
+    def build_metadata(self, args, session_id, training_started_at, optimizer_name, optimizer_args):
         metadata = {
             "ss_session_id": str(session_id),
             "ss_training_started_at": str(training_started_at),
@@ -895,17 +869,6 @@ class AnimaNetworkTrainer:
             "ss_network_alpha": str(args.network_alpha),
             "ss_network_dropout": str(args.network_dropout),
             "ss_mixed_precision": str(args.mixed_precision),
-            "ss_batch_size_per_device": str(getattr(args, "train_batch_size", "")),
-            "ss_total_batch_size": str(total_batch_size),
-            "ss_gradient_checkpointing": str(bool(getattr(args, "gradient_checkpointing", False))),
-            "ss_gradient_accumulation_steps": str(getattr(args, "gradient_accumulation_steps", "")),
-            "ss_max_train_steps": str(getattr(args, "max_train_steps", "")),
-            "ss_num_epochs": str(num_train_epochs if num_train_epochs is not None else ""),
-            "ss_lr_warmup_steps": str(getattr(args, "lr_warmup_steps", "")),
-            "ss_lr_scheduler": str(getattr(args, "lr_scheduler", "")),
-            "ss_resolution": str(self._resolve_metadata_resolution(args, train_dataset_group)),
-            "ss_training_comment": str(getattr(args, "training_comment", "")),
-            "ss_sd_scripts_commit_hash": str(train_util.get_git_revision_hash()),
             "ss_cache_latents": str(bool(args.cache_latents)),
             "ss_seed": str(args.seed),
             "ss_optimizer": optimizer_name + (f"({optimizer_args})" if len(optimizer_args) > 0 else ""),
@@ -914,15 +877,10 @@ class AnimaNetworkTrainer:
             "ss_discrete_flow_shift": str(args.discrete_flow_shift),
             "ss_attn_mode": str(args.attn_mode),
             "ss_attention_backend": str(train_util.resolve_attention_backend(args)),
+            "ss_fp8_scaled": str(bool(getattr(args, "fp8_scaled", False))),
+            "ss_fp8_base": str(bool(getattr(args, "fp8_base", False))),
+            "ss_fp8_base_unet": str(bool(getattr(args, "fp8_base_unet", False))),
         }
-        if train_dataset_group is not None:
-            metadata["ss_num_train_images"] = str(getattr(train_dataset_group, "num_train_images", ""))
-            metadata["ss_num_reg_images"] = str(getattr(train_dataset_group, "num_reg_images", ""))
-        if train_dataloader is not None:
-            metadata["ss_num_batches_per_epoch"] = str(len(train_dataloader))
-        if net_kwargs:
-            metadata["ss_network_args"] = json.dumps(net_kwargs, ensure_ascii=False)
-        metadata.update({k: str(v) for k, v in train_metadata_util.build_compatibility_metadata(args, net_kwargs).items()})
         if args.pretrained_model_name_or_path is not None:
             metadata["ss_sd_model_name"] = str(args.pretrained_model_name_or_path)
         if args.vae is not None:
@@ -1179,14 +1137,15 @@ class AnimaNetworkTrainer:
         logger.info(f"Loading Anima DiT model with attn_mode={args.attn_mode}, split_attn: {args.split_attn}...")
         self.is_swapping_blocks = args.blocks_to_swap is not None and args.blocks_to_swap > 0
         loading_device = "cpu" if self.is_swapping_blocks else accelerator.device
+        dit_loading_dtype = None if args.fp8_scaled else weight_dtype
         dit = anima_utils.load_anima_model(
-            accelerator.device,
-            args.pretrained_model_name_or_path,
-            args.attn_mode,
-            args.split_attn,
-            loading_device,
-            weight_dtype,
-            False,
+            device=accelerator.device,
+            dit_path=args.pretrained_model_name_or_path,
+            attn_mode=args.attn_mode,
+            split_attn=args.split_attn,
+            loading_device=loading_device,
+            dit_weight_dtype=dit_loading_dtype,
+            fp8_scaled=args.fp8_scaled,
             llm_adapter_path=args.llm_adapter_path,
         )
         anima_train_utils.apply_opt_channels_last_for_anima(args, ("Anima DiT", dit))
@@ -1343,14 +1302,18 @@ class AnimaNetworkTrainer:
             network.to(weight_dtype)
 
         dit.requires_grad_(False)
-        dit.to(dtype=weight_dtype)
+        if not args.fp8_scaled:
+            dit.to(dtype=weight_dtype)
         for encoder in text_encoders:
             encoder.requires_grad_(False)
 
         if train_unet:
             dit = self.prepare_unet_with_accelerator(args, accelerator, dit)
         else:
-            dit.to(accelerator.device, dtype=weight_dtype)
+            if args.fp8_scaled:
+                dit.to(accelerator.device)
+            else:
+                dit.to(accelerator.device, dtype=weight_dtype)
 
         if train_text_encoder:
             text_encoders = [
@@ -1494,18 +1457,7 @@ class AnimaNetworkTrainer:
         def get_effective_epoch_no(epoch_index: int) -> int:
             return max(1, epoch_index + 1 + mixed_resolution_epoch_display_offset)
 
-        metadata, minimum_metadata = self.build_metadata(
-            args,
-            session_id,
-            training_started_at,
-            optimizer_name,
-            optimizer_args,
-            net_kwargs=net_kwargs,
-            train_dataset_group=train_dataset_group,
-            train_dataloader=train_dataloader,
-            num_train_epochs=displayed_num_train_epochs,
-            num_processes=accelerator.num_processes,
-        )
+        metadata, minimum_metadata = self.build_metadata(args, session_id, training_started_at, optimizer_name, optimizer_args)
         if lulynx_core is not None:
             metadata.update(lulynx_core.get_metadata())
             minimum_metadata.update(lulynx_core.get_metadata())
@@ -2161,6 +2113,11 @@ def setup_parser() -> argparse.ArgumentParser:
     train_util.add_dit_training_arguments(parser)
     anima_train_utils.add_anima_training_arguments(parser)
     parser.add_argument(
+        "--fp8_scaled",
+        action="store_true",
+        help="Use scaled fp8 for the Anima DiT frozen base. This is also enabled automatically by fp8_base/fp8_base_unet.",
+    )
+    parser.add_argument(
         "--unsloth_offload_checkpointing",
         action="store_true",
         help="offload activations to CPU RAM using async non-blocking transfers (faster than --cpu_offload_checkpointing). "
@@ -2172,4 +2129,3 @@ def setup_parser() -> argparse.ArgumentParser:
         help="[Deprecated] use 'skip_cache_check' instead",
     )
     return parser
-

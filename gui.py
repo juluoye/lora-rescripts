@@ -1,8 +1,10 @@
 import argparse
+import atexit
 import json
 import importlib.util
 import os
 import platform
+import signal
 import subprocess
 import sys
 import time
@@ -54,6 +56,8 @@ BACKEND_STATUS_FILE = REPO_ROOT / "tmp" / "backend_status.json"
 PROJECT_LOCAL_MAIN_PYTHON_ROOTS = [path.resolve() for path in get_project_local_main_python_roots(REPO_ROOT)]
 DEDICATED_TAGEDITOR_PYTHONS = get_tageditor_python_candidates(REPO_ROOT)
 TAGEDITOR_REQUIRED_MODULES = ["gradio", "transformers", "timm", "print_color"]
+OPTIONAL_SERVICE_PROCESSES: list[tuple[str, subprocess.Popen]] = []
+_OPTIONAL_SERVICE_CLEANUP_DONE = False
 
 
 def write_tageditor_status(status: str, detail: str = ""):
@@ -61,6 +65,69 @@ def write_tageditor_status(status: str, detail: str = ""):
     status_dir.mkdir(parents=True, exist_ok=True)
     with open(TAGEDITOR_STATUS_FILE, "w", encoding="utf-8") as f:
         json.dump({"status": status, "detail": detail}, f, ensure_ascii=False)
+
+
+def _kill_process_tree_windows(pid: int) -> bool:
+    try:
+        completed = subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=15,
+        )
+    except Exception:
+        return False
+    return completed.returncode == 0
+
+
+def _register_optional_service(name: str, process: subprocess.Popen | None) -> subprocess.Popen | None:
+    if process is not None:
+        OPTIONAL_SERVICE_PROCESSES.append((name, process))
+    return process
+
+
+def terminate_optional_services() -> None:
+    global _OPTIONAL_SERVICE_CLEANUP_DONE
+
+    if _OPTIONAL_SERVICE_CLEANUP_DONE:
+        return
+    _OPTIONAL_SERVICE_CLEANUP_DONE = True
+
+    while OPTIONAL_SERVICE_PROCESSES:
+        name, process = OPTIONAL_SERVICE_PROCESSES.pop()
+        try:
+            if process.poll() is not None:
+                continue
+        except Exception:
+            continue
+
+        pid = process.pid
+        try:
+            if os.name == "nt" and _kill_process_tree_windows(pid):
+                process.wait(timeout=2.0)
+                continue
+            process.terminate()
+            process.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            try:
+                if os.name == "nt" and _kill_process_tree_windows(pid):
+                    process.wait(timeout=2.0)
+                    continue
+            except Exception:
+                pass
+            try:
+                process.kill()
+                process.wait(timeout=2.0)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+
+def _handle_exit_signal(signum, frame) -> None:
+    terminate_optional_services()
+    raise SystemExit(0)
 
 
 def path_is_within(path: Path, parent: Path) -> bool:
@@ -213,7 +280,7 @@ def run_tensorboard():
         stderr=subprocess.STDOUT,
     )
     tb_log.close()
-    return process
+    return _register_optional_service("tensorboard", process)
 
 
 def update_tageditor_status(status: str, detail: str = "") -> None:
@@ -297,6 +364,10 @@ def run_tag_editor():
     tag_editor_env = os.environ.copy()
     tag_editor_env["PYTHONUTF8"] = "1"
     tag_editor_env["PYTHONIOENCODING"] = "utf-8"
+    tag_editor_log_dir = LOG_DIR / "launcher"
+    tag_editor_log_dir.mkdir(parents=True, exist_ok=True)
+    tag_editor_log_path = tag_editor_log_dir / f"tageditor-{int(time.time())}.log"
+    log.info("Tag editor log: %s", tag_editor_log_path)
     cmd = [
         python_exe,
         TAGEDITOR_LAUNCH,
@@ -306,7 +377,16 @@ def run_tag_editor():
     ]
     localization = args.localization or "zh-Hans"
     cmd.extend(["--localization", localization])
-    subprocess.Popen(cmd, cwd=TAGEDITOR_ROOT, env=tag_editor_env)
+    tag_editor_log = open(tag_editor_log_path, "a", encoding="utf-8", errors="replace")
+    process = subprocess.Popen(
+        cmd,
+        cwd=TAGEDITOR_ROOT,
+        env=tag_editor_env,
+        stdout=tag_editor_log,
+        stderr=subprocess.STDOUT,
+    )
+    tag_editor_log.close()
+    _register_optional_service("tageditor", process)
 
 
 def apply_listen_host_overrides() -> None:
@@ -419,10 +499,19 @@ def launch():
 
     import uvicorn
     log.info(f"Server started at http://{args.host}:{args.port}")
-    uvicorn.run("mikazuki.app:app", host=args.host, port=args.port, log_level="error", reload=args.dev)
+    try:
+        uvicorn.run("mikazuki.app:app", host=args.host, port=args.port, log_level="error", reload=args.dev)
+    finally:
+        terminate_optional_services()
 
 
 if __name__ == "__main__":
     args, _ = parser.parse_known_args()
+    atexit.register(terminate_optional_services)
+    for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):
+        if sig is not None:
+            try:
+                signal.signal(sig, _handle_exit_signal)
+            except Exception:
+                pass
     launch()
-

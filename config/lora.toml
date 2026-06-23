@@ -29,6 +29,12 @@ lr_scheduler_num_cycles = 1
 [training_arguments]
 train_batch_size = 1
 noise_offset = 0.0
+timestep_sampling = "uniform"
+timestep_sigmoid_scale = 1.0
+timestep_shift = 1.0
+timestep_loss_weighting = "none"
+timestep_loss_weight_sigmoid_scale = 1.0
+timestep_loss_weight_shift = 1.0
 keep_tokens = 0
 min_bucket_reso = 256
 max_bucket_reso = 1024

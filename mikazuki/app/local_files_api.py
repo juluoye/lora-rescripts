@@ -25,20 +25,41 @@ from mikazuki.utils.tk_window import open_directory_selector, open_file_selector
 router = APIRouter()
 
 
+FOLDER_PICKER_TYPES = {"folder", "output-folder", "train-dir"}
+
+FILE_PICKER_TYPES: dict[str, tuple[str, list[tuple[str, str]]]] = {
+    "file": ("Select file", [("all files", "*.*")]),
+    "model-file": ("Select file", [("checkpoints", "*.safetensors;*.ckpt;*.pt"), ("all files", "*.*")]),
+    "output-model-file": ("Select file", [("checkpoints", "*.safetensors;*.ckpt;*.pt"), ("all files", "*.*")]),
+    "model-saved-file": ("Select file", [("checkpoints", "*.safetensors;*.ckpt;*.pt"), ("all files", "*.*")]),
+    "text-file": ("Select prompt file", [("text files", "*.txt;*.text;*.prompt"), ("all files", "*.*")]),
+    "config-file": (
+        "Select config file",
+        [("config files", "*.toml;*.json;*.yaml;*.yml"), ("all files", "*.*")],
+    ),
+    "json-file": ("Select JSON file", [("json files", "*.json"), ("all files", "*.*")]),
+}
+
+MAX_PICKED_TEXT_FILE_BYTES = 8 * 1024 * 1024
+
+
 def _json_error(message: str, status_code: int = 400) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"status": "error", "message": message})
 
 
+def _picker_initialdir(picker_type: str) -> str:
+    root = BUILTIN_PICKER_ROOTS.get(picker_type)
+    return str(root) if root else ""
+
+
 @router.get("/pick_file")
 async def pick_file(picker_type: str):
-    if picker_type in {"folder", "output-folder"}:
-        coro = asyncio.to_thread(open_directory_selector, "")
-    elif picker_type in {"model-file", "output-model-file"}:
-        file_types = [("checkpoints", "*.safetensors;*.ckpt;*.pt"), ("all files", "*.*")]
-        coro = asyncio.to_thread(open_file_selector, "", "Select file", file_types)
-    elif picker_type == "text-file":
-        file_types = [("text files", "*.txt;*.text;*.prompt"), ("all files", "*.*")]
-        coro = asyncio.to_thread(open_file_selector, "", "Select prompt file", file_types)
+    initialdir = _picker_initialdir(picker_type)
+    if picker_type in FOLDER_PICKER_TYPES:
+        coro = asyncio.to_thread(open_directory_selector, initialdir)
+    elif picker_type in FILE_PICKER_TYPES:
+        title, file_types = FILE_PICKER_TYPES[picker_type]
+        coro = asyncio.to_thread(open_file_selector, initialdir, title, file_types)
     else:
         return APIResponseFail(message="Invalid picker type")
 
@@ -48,6 +69,36 @@ async def pick_file(picker_type: str):
 
     return APIResponseSuccess(data={
         "path": result
+    })
+
+
+@router.get("/pick_text_file")
+async def pick_text_file(picker_type: str = "text-file"):
+    if picker_type not in FILE_PICKER_TYPES:
+        return APIResponseFail(message="Invalid picker type")
+
+    initialdir = _picker_initialdir(picker_type)
+    title, file_types = FILE_PICKER_TYPES[picker_type]
+    result = await asyncio.to_thread(open_file_selector, initialdir, title, file_types)
+    if result == "":
+        return APIResponseFail(message="用户取消选择")
+
+    selected_path = Path(result)
+    if not selected_path.is_file():
+        return APIResponseFail(message="Selected path is not a file")
+    if selected_path.stat().st_size > MAX_PICKED_TEXT_FILE_BYTES:
+        return APIResponseFail(message="Selected file is too large")
+
+    raw = selected_path.read_bytes()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("utf-8", errors="replace")
+
+    return APIResponseSuccess(data={
+        "path": str(selected_path),
+        "name": selected_path.name,
+        "text": text,
     })
 
 

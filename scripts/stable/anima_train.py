@@ -14,7 +14,7 @@ import toml
 from tqdm import tqdm
 
 import torch
-from library import flux_train_utils, qwen_image_autoencoder_kl
+from library import qwen_image_autoencoder_kl
 from library.device_utils import init_ipex, clean_memory_on_device
 from library.sd3_train_utils import FlowMatchEulerDiscreteScheduler
 
@@ -203,6 +203,15 @@ def train(args):
 
     # mixed precision dtype
     weight_dtype, save_dtype = train_util.prepare_dtype(args)
+    if (
+        bool(getattr(args, "fp8_base", False))
+        or bool(getattr(args, "fp8_base_unet", False))
+        or bool(getattr(args, "fp8_scaled", False))
+    ):
+        raise ValueError(
+            "Anima fp8 base training is supported for Anima LoRA frozen DiT only. "
+            "Anima finetune trains DiT parameters directly, so fp8 base/scaled mode is intentionally disabled here."
+        )
 
     path_bases = anima_train_utils._get_anima_path_bases(args)
     args.pretrained_model_name_or_path = anima_train_utils.resolve_required_anima_transformer_path(args, "anima-finetune")
@@ -794,10 +803,9 @@ def train(args):
                     with anima_step_profiler.step_section("noise_prepare"):
                         noise = torch.randn_like(latents)
 
-                        noisy_model_input, timesteps, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
+                        noisy_model_input, timesteps, sigmas = anima_train_utils.get_anima_noisy_model_input_and_timesteps(
                             args, noise_scheduler_copy, latents, noise, accelerator.device, dit_weight_dtype
                         )
-                        timesteps = timesteps / 1000.0  # scale to [0, 1] range. timesteps is float32
 
                         if run_nan_check and torch.any(torch.isnan(noisy_model_input)):
                             accelerator.print("NaN found in noisy_model_input, replacing with zeros")
@@ -1185,6 +1193,16 @@ def setup_parser() -> argparse.ArgumentParser:
     add_custom_train_arguments(parser)
     train_util.add_dit_training_arguments(parser)
     anima_train_utils.add_anima_training_arguments(parser)
+    parser.add_argument(
+        "--fp8_base_unet",
+        action="store_true",
+        help="Reserved for Anima LoRA. Anima finetune trains DiT weights directly and does not support fp8 base.",
+    )
+    parser.add_argument(
+        "--fp8_scaled",
+        action="store_true",
+        help="Reserved for Anima LoRA. Anima finetune trains DiT weights directly and does not support scaled fp8 base.",
+    )
     sai_model_spec.add_model_spec_arguments(parser)
 
     parser.add_argument(
@@ -1229,5 +1247,3 @@ if __name__ == "__main__":
         args.attn_mode = "torch"  # backward compatibility
 
     train(args)
-
-

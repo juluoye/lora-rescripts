@@ -1,0 +1,5 @@
+enable_conv = false
+unet_target_module = ["Attention"]
+unet_target_name = []
+text_encoder_target_module = []
+text_encoder_target_name = []

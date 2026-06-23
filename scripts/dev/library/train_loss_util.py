@@ -8,13 +8,132 @@ import torch
 from library import custom_train_functions
 
 
-def get_timesteps(min_timestep: int, max_timestep: int, b_size: int, device: torch.device) -> torch.Tensor:
+def _sample_uniform_timesteps(min_timestep: int, max_timestep: int, b_size: int, device: torch.device) -> torch.Tensor:
     if min_timestep < max_timestep:
         timesteps = torch.randint(min_timestep, max_timestep, (b_size,), device="cpu")
     else:
         timesteps = torch.full((b_size,), max_timestep, device="cpu")
     timesteps = timesteps.long().to(device)
     return timesteps
+
+
+def _sample_sigmoid_density(b_size: int, scale: float) -> torch.Tensor:
+    if scale == 0:
+        return torch.full((b_size,), 0.5, device="cpu")
+    return torch.sigmoid(torch.randn((b_size,), device="cpu") * scale)
+
+
+def _apply_shift_density(u: torch.Tensor, shift: float) -> torch.Tensor:
+    if shift <= 0:
+        raise ValueError("timestep_shift must be greater than 0")
+    if shift == 1.0:
+        return u
+    return (u * shift) / (1 + (shift - 1) * u)
+
+
+def _resolve_timestep_window(args, noise_scheduler) -> tuple[int, int]:
+    min_timestep = 0 if args.min_timestep is None else int(args.min_timestep)
+    max_timestep = noise_scheduler.config.num_train_timesteps if args.max_timestep is None else int(args.max_timestep)
+    if max_timestep <= min_timestep:
+        max_timestep = min_timestep + 1
+    return min_timestep, max_timestep
+
+
+def _normalize_timestep_positions(timesteps: torch.Tensor, min_timestep: int, max_timestep: int) -> torch.Tensor:
+    max_index = max_timestep - 1
+    if max_index <= min_timestep:
+        return torch.zeros_like(timesteps, dtype=torch.float32)
+
+    normalized = (timesteps.to(torch.float32) - float(min_timestep)) / float(max_index - min_timestep)
+    return normalized.clamp(0.0, 1.0)
+
+
+def _compute_timestep_loss_weight_curve(
+    normalized_timesteps: torch.Tensor,
+    mode: str,
+    sigmoid_scale: float,
+    shift: float,
+) -> torch.Tensor:
+    if mode in {"none", "uniform"}:
+        return torch.ones_like(normalized_timesteps, dtype=torch.float32)
+
+    if mode == "linear":
+        curve = 1.0 - normalized_timesteps
+    elif mode == "cosine":
+        curve = 0.5 + 0.5 * torch.cos(normalized_timesteps * math.pi)
+    else:
+        if sigmoid_scale == 0:
+            noise_side = torch.full_like(normalized_timesteps, 0.5, dtype=torch.float32)
+        else:
+            noise_side = torch.sigmoid((normalized_timesteps - 0.5) * float(sigmoid_scale))
+
+        if mode == "shift":
+            noise_side = _apply_shift_density(noise_side, float(shift))
+        elif mode != "sigmoid":
+            raise ValueError(f"Unsupported timestep loss weighting method: {mode}")
+
+        curve = 1.0 - noise_side
+
+    return curve.clamp(min=1e-3)
+
+
+def get_timestep_loss_weights(loss: torch.Tensor, timesteps: torch.IntTensor, args, noise_scheduler) -> torch.Tensor:
+    mode = str(getattr(args, "timestep_loss_weighting", "none") or "none").strip().lower()
+    if mode in {"none", "uniform"}:
+        return torch.ones_like(loss, dtype=torch.float32, device=loss.device)
+
+    min_timestep, max_timestep = _resolve_timestep_window(args, noise_scheduler)
+    normalized_timesteps = _normalize_timestep_positions(timesteps, min_timestep, max_timestep).to(loss.device)
+
+    weights = _compute_timestep_loss_weight_curve(
+        normalized_timesteps,
+        mode,
+        float(getattr(args, "timestep_loss_weight_sigmoid_scale", 1.0) or 0.0),
+        float(getattr(args, "timestep_loss_weight_shift", 1.0) or 1.0),
+    ).to(loss.device)
+
+    reference_timesteps = torch.arange(min_timestep, max_timestep, device=loss.device, dtype=torch.float32)
+    reference_normalized = _normalize_timestep_positions(reference_timesteps, min_timestep, max_timestep)
+    reference_weights = _compute_timestep_loss_weight_curve(
+        reference_normalized,
+        mode,
+        float(getattr(args, "timestep_loss_weight_sigmoid_scale", 1.0) or 0.0),
+        float(getattr(args, "timestep_loss_weight_shift", 1.0) or 1.0),
+    ).to(loss.device)
+    normalization = reference_weights.mean().clamp(min=1e-6)
+    return weights / normalization
+
+
+def apply_timestep_loss_weighting(loss: torch.Tensor, timesteps: torch.IntTensor, args, noise_scheduler) -> torch.Tensor:
+    weights = get_timestep_loss_weights(loss, timesteps, args, noise_scheduler)
+    return loss * weights
+
+
+def get_timesteps(
+    min_timestep: int,
+    max_timestep: int,
+    b_size: int,
+    device: torch.device,
+    timestep_sampling: str = "uniform",
+    timestep_sigmoid_scale: float = 1.0,
+    timestep_shift: float = 1.0,
+) -> torch.Tensor:
+    if min_timestep >= max_timestep:
+        return torch.full((b_size,), max_timestep, device="cpu").long().to(device)
+
+    if timestep_sampling == "uniform":
+        return _sample_uniform_timesteps(min_timestep, max_timestep, b_size, device)
+
+    u = _sample_sigmoid_density(b_size, timestep_sigmoid_scale)
+    if timestep_sampling == "shift":
+        u = _apply_shift_density(u, timestep_shift)
+    elif timestep_sampling != "sigmoid":
+        raise ValueError(f"Unsupported timestep sampling method: {timestep_sampling}")
+
+    t_range = max_timestep - min_timestep
+    timesteps = torch.floor(min_timestep + u * t_range).long()
+    timesteps = torch.clamp(timesteps, min=min_timestep, max=max_timestep - 1)
+    return timesteps.to(device)
 
 
 def get_noise_noisy_latents_and_timesteps(
@@ -35,7 +154,15 @@ def get_noise_noisy_latents_and_timesteps(
     b_size = latents.shape[0]
     min_timestep = 0 if args.min_timestep is None else args.min_timestep
     max_timestep = noise_scheduler.config.num_train_timesteps if args.max_timestep is None else args.max_timestep
-    timesteps = get_timesteps(min_timestep, max_timestep, b_size, latents.device)
+    timesteps = get_timesteps(
+        min_timestep,
+        max_timestep,
+        b_size,
+        latents.device,
+        getattr(args, "timestep_sampling", "uniform"),
+        getattr(args, "timestep_sigmoid_scale", 1.0),
+        getattr(args, "timestep_shift", 1.0),
+    )
 
     if args.ip_noise_gamma:
         if args.ip_noise_gamma_random_strength:
@@ -115,9 +242,11 @@ def append_step_loss_to_logs(logs, *, current_loss=None, average_loss=None):
 
 
 __all__ = [
+    "apply_timestep_loss_weighting",
     "append_step_loss_to_logs",
     "conditional_loss",
     "get_huber_threshold_if_needed",
     "get_noise_noisy_latents_and_timesteps",
+    "get_timestep_loss_weights",
     "get_timesteps",
 ]

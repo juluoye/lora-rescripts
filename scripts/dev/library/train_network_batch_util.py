@@ -147,6 +147,8 @@ def post_process_loss(loss, args, timesteps: torch.IntTensor, noise_scheduler) -
         loss = add_v_prediction_like_loss(loss, timesteps, noise_scheduler, args.v_pred_like_loss)
     if args.debiased_estimation_loss:
         loss = apply_debiased_estimation(loss, timesteps, noise_scheduler, args.v_parameterization)
+    if str(getattr(args, "timestep_loss_weighting", "none") or "none").strip().lower() not in {"none", "uniform"}:
+        loss = train_util.apply_timestep_loss_weighting(loss, timesteps, args, noise_scheduler)
     return loss
 
 

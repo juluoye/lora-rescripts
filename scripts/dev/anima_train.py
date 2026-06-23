@@ -13,7 +13,7 @@ import toml
 from tqdm import tqdm
 
 import torch
-from library import flux_train_utils, qwen_image_autoencoder_kl
+from library import qwen_image_autoencoder_kl
 from library.device_utils import init_ipex, clean_memory_on_device
 from library.sd3_train_utils import FlowMatchEulerDiscreteScheduler
 
@@ -562,11 +562,10 @@ def train(args):
                 # Noise and timesteps
                 noise = torch.randn_like(latents)
 
-                # Get noisy model input and timesteps
-                noisy_model_input, timesteps, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
+                # Get noisy model input and normalized Anima timesteps
+                noisy_model_input, timesteps, sigmas = anima_train_utils.get_anima_noisy_model_input_and_timesteps(
                     args, noise_scheduler_copy, latents, noise, accelerator.device, dit_weight_dtype
                 )
-                timesteps = timesteps / 1000.0  # scale to [0, 1] range. timesteps is float32
 
                 # NaN checks
                 if torch.any(torch.isnan(noisy_model_input)):
@@ -790,4 +789,3 @@ if __name__ == "__main__":
         args.attn_mode = "torch"  # backward compatibility
 
     train(args)
-

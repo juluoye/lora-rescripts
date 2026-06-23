@@ -14,7 +14,6 @@ from library import (
     anima_models,
     anima_train_utils,
     anima_utils,
-    flux_train_utils,
     qwen_image_autoencoder_kl,
     sd3_train_utils,
     strategy_anima,
@@ -273,10 +272,9 @@ class AnimaNetworkTrainer(train_network.NetworkTrainer):
         noise = torch.randn_like(latents)
 
         # Get noisy model input and timesteps
-        noisy_model_input, timesteps, sigmas = flux_train_utils.get_noisy_model_input_and_timesteps(
+        noisy_model_input, timesteps, sigmas = anima_train_utils.get_anima_noisy_model_input_and_timesteps(
             args, noise_scheduler, latents, noise, accelerator.device, weight_dtype
         )
-        timesteps = timesteps / 1000.0  # scale to [0, 1] range. timesteps is float32
 
         # Gradient checkpointing support
         if args.gradient_checkpointing:
