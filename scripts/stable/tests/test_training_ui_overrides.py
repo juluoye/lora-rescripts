@@ -219,3 +219,24 @@ def test_apply_training_ui_overrides_maps_anima_glokr_to_lycoris_with_anima_pres
     assert "decompose_both=True" in config["network_args"]
     assert "unbalanced_factorization=True" in config["network_args"]
     assert "lokr_factor=6" in config["network_args"]
+
+
+def test_apply_training_ui_overrides_normalizes_legacy_anima_glokr_full_matrix_sentinel():
+    config = {
+        "model_train_type": "anima-lora",
+        "lora_type": "glokr",
+        "network_dim": 114514,
+        "network_alpha": 114514,
+        "network_module": "networks.lora_anima",
+        "network_args": ["anima_adapter_type=glokr"],
+    }
+
+    warnings = apply_training_ui_overrides(config)
+
+    assert warnings == []
+    assert config["network_module"] == "lycoris.kohya"
+    assert config["lycoris_algo"] == "glokr"
+    assert config["network_dim"] == 1
+    assert config["network_alpha"] == 1
+    assert "algo=glokr" in config["network_args"]
+    assert "full_matrix=True" in config["network_args"]

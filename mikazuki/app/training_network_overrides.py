@@ -83,6 +83,8 @@ ANIMA_MAIN_BLOCK_TEMPLATE_MANAGED_PREFIXES = (
     "include_patterns=",
     "exclude_patterns=",
 )
+ANIMA_GLOKR_LEGACY_FULL_MATRIX_SENTINEL = 114514
+ANIMA_GLOKR_FULL_MATRIX_COMPAT_DIM = 1
 ANIMA_LYCORIS_PRESET_PATHS = {
     ANIMA_MAIN_BLOCK_TEMPLATE_DEFAULT: "./config/lycoris_presets/anima_main_block.toml",
     ANIMA_MAIN_BLOCK_TEMPLATE_WITH_ADLN: "./config/lycoris_presets/anima_main_block_with_adln.toml",
@@ -204,6 +206,44 @@ def apply_anima_main_block_template(config: dict) -> str:
 def normalize_anima_main_block_template(template: str) -> str:
     template = str(template or "").strip()
     return template if template in ANIMA_LYCORIS_PRESET_PATHS else ANIMA_MAIN_BLOCK_TEMPLATE_DEFAULT
+
+
+def normalize_legacy_anima_glokr_full_matrix_sentinel(config: dict, network_args: list[str] | None = None) -> bool:
+    training_type = str(config.get("model_train_type", "") or "").strip().lower()
+    if training_type != "anima-lora":
+        return False
+
+    network_args = network_args or normalize_network_args(config.get("network_args"))
+    lora_type = str(config.get("lora_type", "") or "").strip().lower()
+    if not lora_type:
+        lora_type = str(config.get("lycoris_algo", "") or get_network_arg_value(network_args, "algo") or "").strip().lower()
+    if lora_type != "glokr":
+        return False
+
+    try:
+        network_dim = int(config.get("network_dim", 0) or 0)
+    except (TypeError, ValueError):
+        network_dim = 0
+
+    try:
+        network_alpha = int(config.get("network_alpha", 0) or 0)
+    except (TypeError, ValueError):
+        network_alpha = 0
+
+    if network_dim != ANIMA_GLOKR_LEGACY_FULL_MATRIX_SENTINEL and network_alpha != ANIMA_GLOKR_LEGACY_FULL_MATRIX_SENTINEL:
+        return False
+
+    changed = False
+    if network_dim != ANIMA_GLOKR_FULL_MATRIX_COMPAT_DIM:
+        config["network_dim"] = ANIMA_GLOKR_FULL_MATRIX_COMPAT_DIM
+        changed = True
+    if network_alpha != ANIMA_GLOKR_FULL_MATRIX_COMPAT_DIM:
+        config["network_alpha"] = ANIMA_GLOKR_FULL_MATRIX_COMPAT_DIM
+        changed = True
+    if not parse_boolish(config.get("full_matrix", False)):
+        config["full_matrix"] = True
+        changed = True
+    return changed
 
 
 def apply_anima_lycoris_overrides(
@@ -470,6 +510,8 @@ def apply_anima_ui_overrides(config: dict) -> None:
         config.pop("lycoris_algo", None)
 
         if lora_type in {"loha", "boft", "glora", "glokr"}:
+            if lora_type == "glokr":
+                normalize_legacy_anima_glokr_full_matrix_sentinel(config, network_args)
             network_args = apply_anima_lycoris_overrides(
                 config,
                 network_args,
