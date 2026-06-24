@@ -1,0 +1,9 @@
+enable_conv = false
+unet_target_module = ["Attention", "GPT2FeedForward"]
+unet_target_name = [
+  'blocks\.[0-9]+\.adaln_modulation_self_attn\.[12]$',
+  'blocks\.[0-9]+\.adaln_modulation_cross_attn\.[12]$',
+  'blocks\.[0-9]+\.adaln_modulation_mlp\.[12]$',
+]
+text_encoder_target_module = []
+text_encoder_target_name = []

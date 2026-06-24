@@ -58,6 +58,68 @@ ANIMA_ADAPTER_ROUTE_TYPES = {
     "anima-multi-addift",
 }
 
+ANIMA_MAIN_BLOCK_TEMPLATE_FIELD = "anima_main_block_template"
+ANIMA_MAIN_BLOCK_TEMPLATE_DEFAULT = "主干 block（self_attn + cross_attn + mlp）"
+ANIMA_MAIN_BLOCK_TEMPLATE_WITH_ADLN = "主干 block + adln（self_attn + cross_attn + mlp + adln）"
+ANIMA_MAIN_BLOCK_TEMPLATE_ARGS = {
+    ANIMA_MAIN_BLOCK_TEMPLATE_DEFAULT: [],
+    ANIMA_MAIN_BLOCK_TEMPLATE_WITH_ADLN: [
+        r"include_patterns=['.*blocks\\.[0-9]+\\.adaln_modulation_.*']",
+    ],
+    "仅 attention（self_attn + cross_attn）": [
+        r"exclude_patterns=['.*mlp.*']",
+    ],
+    "仅 self_attn": [
+        r"exclude_patterns=['.*cross_attn.*', '.*mlp.*']",
+    ],
+    "仅 cross_attn": [
+        r"exclude_patterns=['.*self_attn.*', '.*mlp.*']",
+    ],
+    "仅 mlp": [
+        r"exclude_patterns=['.*self_attn.*', '.*cross_attn.*']",
+    ],
+}
+ANIMA_MAIN_BLOCK_TEMPLATE_MANAGED_PREFIXES = (
+    "include_patterns=",
+    "exclude_patterns=",
+)
+ANIMA_LYCORIS_PRESET_PATHS = {
+    ANIMA_MAIN_BLOCK_TEMPLATE_DEFAULT: "./config/lycoris_presets/anima_main_block.toml",
+    ANIMA_MAIN_BLOCK_TEMPLATE_WITH_ADLN: "./config/lycoris_presets/anima_main_block_with_adln.toml",
+    "仅 attention（self_attn + cross_attn）": "./config/lycoris_presets/anima_attention_only.toml",
+    "仅 self_attn": "./config/lycoris_presets/anima_self_attn_only.toml",
+    "仅 cross_attn": "./config/lycoris_presets/anima_cross_attn_only.toml",
+    "仅 mlp": "./config/lycoris_presets/anima_mlp_only.toml",
+}
+ANIMA_LYCORIS_STALE_NETWORK_ARG_PREFIXES = (
+    "anima_adapter_type=",
+    "algo=",
+    "preset=",
+    "dropout=",
+    "rank_dropout=",
+    "module_dropout=",
+    "train_norm=",
+    "dora_wd=",
+    "wd_on_output=",
+    "bypass_mode=",
+    "conv_dim=",
+    "conv_alpha=",
+    "block_size=",
+    "use_tucker=",
+    "use_scalar=",
+    "constraint=",
+    "rescaled=",
+    "rs_lora=",
+    "full_matrix=",
+    "decompose_both=",
+    "unbalanced_factorization=",
+    "lokr_factor=",
+    "lokr_export_mode=",
+    *TLORA_STALE_NETWORK_ARG_PREFIXES,
+    *PISSA_STALE_NETWORK_ARG_PREFIXES,
+    *ANIMA_MAIN_BLOCK_TEMPLATE_MANAGED_PREFIXES,
+)
+
 
 def normalize_network_args(*values) -> list[str]:
     items = []
@@ -122,6 +184,137 @@ def assign_network_args(config: dict, network_args: list[str]) -> None:
         config["network_args"] = network_args
     else:
         config.pop("network_args", None)
+
+
+def apply_anima_main_block_template(config: dict) -> str:
+    template = str(config.pop(ANIMA_MAIN_BLOCK_TEMPLATE_FIELD, "") or "").strip()
+    if not template:
+        return ""
+
+    template_args = ANIMA_MAIN_BLOCK_TEMPLATE_ARGS.get(template)
+    if template_args is None:
+        return template
+
+    base_network_args = normalize_network_args(config.get("network_args"))
+    base_network_args = filter_network_args(base_network_args, ANIMA_MAIN_BLOCK_TEMPLATE_MANAGED_PREFIXES)
+    config["network_args"] = normalize_network_args(template_args, base_network_args)
+    return template
+
+
+def normalize_anima_main_block_template(template: str) -> str:
+    template = str(template or "").strip()
+    return template if template in ANIMA_LYCORIS_PRESET_PATHS else ANIMA_MAIN_BLOCK_TEMPLATE_DEFAULT
+
+
+def apply_anima_lycoris_overrides(
+    config: dict,
+    network_args: list[str],
+    lora_type: str,
+    train_norm_enabled: bool | None,
+    dora_enabled: bool,
+    bypass_mode: bool,
+    selected_main_block_template: str,
+    custom_network_args: list[str],
+) -> list[str]:
+    config["network_module"] = "lycoris.kohya"
+    config["lycoris_algo"] = lora_type
+    network_args = filter_network_args(network_args, ANIMA_LYCORIS_STALE_NETWORK_ARG_PREFIXES)
+
+    preset_template = normalize_anima_main_block_template(selected_main_block_template)
+    preset_path = ANIMA_LYCORIS_PRESET_PATHS[preset_template]
+    network_args = upsert_network_arg(network_args, "algo", lora_type)
+    network_args = upsert_network_arg(network_args, "preset", preset_path)
+
+    dropout_value = config.get("dropout", get_network_arg_value(network_args, "dropout"))
+    rank_dropout_value = config.get("rank_dropout", get_network_arg_value(network_args, "rank_dropout"))
+    module_dropout_value = config.get("module_dropout", get_network_arg_value(network_args, "module_dropout"))
+
+    network_args = upsert_network_arg(network_args, "dropout", dropout_value)
+    network_args = upsert_network_arg(network_args, "rank_dropout", rank_dropout_value)
+    network_args = upsert_network_arg(network_args, "module_dropout", module_dropout_value)
+    network_args = upsert_network_arg(network_args, "train_norm", "True" if train_norm_enabled else "False")
+    network_args = upsert_network_arg(network_args, "dora_wd", "True" if dora_enabled else None)
+    network_args = upsert_network_arg(network_args, "wd_on_output", "True" if parse_boolish(config.get("wd_on_output", True)) else "False")
+    network_args = upsert_network_arg(network_args, "bypass_mode", "True" if bypass_mode else "False")
+    if lora_type == "boft":
+        constraint_value = config.get("constraint", get_network_arg_value(network_args, "constraint"))
+        rescaled_enabled = normalize_bool_config_or_arg(config, network_args, "rescaled")
+        network_args = upsert_network_arg(network_args, "constraint", constraint_value)
+        network_args = upsert_network_arg(network_args, "rescaled", "True" if rescaled_enabled else None)
+        config["constraint"] = float(constraint_value) if constraint_value not in (None, "") else None
+        config["rescaled"] = rescaled_enabled
+    elif lora_type == "glora":
+        use_scalar_enabled = normalize_bool_config_or_arg(config, network_args, "use_scalar")
+        rs_lora_enabled = normalize_bool_config_or_arg(config, network_args, "rs_lora")
+        network_args = upsert_network_arg(network_args, "use_scalar", "True" if use_scalar_enabled else None)
+        network_args = upsert_network_arg(network_args, "rs_lora", "True" if rs_lora_enabled else None)
+        config["use_scalar"] = use_scalar_enabled
+        config["rs_lora"] = rs_lora_enabled
+    elif lora_type == "glokr":
+        use_scalar_enabled = normalize_bool_config_or_arg(config, network_args, "use_scalar")
+        rs_lora_enabled = normalize_bool_config_or_arg(config, network_args, "rs_lora")
+        full_matrix_enabled = normalize_bool_config_or_arg(config, network_args, "full_matrix", "lokr_full_matrix")
+        decompose_both_enabled = normalize_bool_config_or_arg(config, network_args, "decompose_both", "lokr_decompose_both")
+        unbalanced_factorization_enabled = normalize_bool_config_or_arg(config, network_args, "unbalanced_factorization")
+        existing_lokr_factor = get_network_arg_value(network_args, "lokr_factor")
+        legacy_factor = get_network_arg_value(network_args, "factor")
+        if "lokr_factor" not in config:
+            if existing_lokr_factor not in (None, ""):
+                config["lokr_factor"] = existing_lokr_factor
+            elif legacy_factor not in (None, ""):
+                config["lokr_factor"] = legacy_factor
+        lokr_factor = int(config.get("lokr_factor", 8) or 8)
+        network_args = upsert_network_arg(network_args, "use_scalar", "True" if use_scalar_enabled else None)
+        network_args = upsert_network_arg(network_args, "rs_lora", "True" if rs_lora_enabled else None)
+        network_args = upsert_network_arg(network_args, "full_matrix", "True" if full_matrix_enabled else None)
+        network_args = upsert_network_arg(network_args, "decompose_both", "True" if decompose_both_enabled else None)
+        network_args = upsert_network_arg(
+            network_args, "unbalanced_factorization", "True" if unbalanced_factorization_enabled else None
+        )
+        network_args = upsert_network_arg(network_args, "lokr_factor", lokr_factor)
+        config["use_scalar"] = use_scalar_enabled
+        config["rs_lora"] = rs_lora_enabled
+        config["full_matrix"] = full_matrix_enabled
+        config["decompose_both"] = decompose_both_enabled
+        config["unbalanced_factorization"] = unbalanced_factorization_enabled
+        config["lokr_factor"] = lokr_factor
+    network_args = normalize_network_args(
+        network_args,
+        [item for item in custom_network_args if str(item).startswith(ANIMA_LYCORIS_STALE_NETWORK_ARG_PREFIXES)],
+    )
+
+    config["dropout"] = float(dropout_value or 0)
+    config["rank_dropout"] = float(rank_dropout_value or 0) if rank_dropout_value not in (None, "") else None
+    config["module_dropout"] = float(module_dropout_value or 0) if module_dropout_value not in (None, "") else None
+    config["dora_wd"] = dora_enabled
+    config["bypass_mode"] = bypass_mode
+    config["wd_on_output"] = parse_boolish(config.get("wd_on_output", True))
+    config.pop("network_dropout", None)
+
+    for key in (
+        "lokr_factor",
+        "lokr_export_mode",
+        "full_matrix",
+        "lokr_full_matrix",
+        "decompose_both",
+        "lokr_decompose_both",
+        "unbalanced_factorization",
+        "conv_dim",
+        "conv_alpha",
+        "pissa_init",
+        "pissa_method",
+        "pissa_niter",
+        "pissa_oversample",
+        "pissa_apply_conv2d",
+        "pissa_export_mode",
+        "tlora_min_rank",
+        "tlora_rank_schedule",
+        "tlora_orthogonal_init",
+    ):
+        config.pop(key, None)
+
+    config["pissa_init"] = False
+    return network_args
 
 
 def apply_tlora_rank_overrides(config: dict, network_args: list[str]) -> list[str]:
@@ -207,6 +400,8 @@ def apply_anima_ui_overrides(config: dict) -> None:
     if not model_train_type.startswith("anima"):
         return
 
+    selected_main_block_template = apply_anima_main_block_template(config)
+
     sample_scheduler = str(config.get("sample_scheduler", "") or "").strip().lower()
     if not sample_scheduler:
         config["sample_scheduler"] = "simple"
@@ -229,6 +424,7 @@ def apply_anima_ui_overrides(config: dict) -> None:
         return
 
     lora_type = str(config.pop("lora_type", "")).strip().lower()
+    custom_network_args = normalize_network_args(config.get("network_args_custom"))
     network_args = pop_network_args(config)
     raw_train_norm = config.pop("train_norm", None)
     raw_dora_wd = config.pop("dora_wd", None)
@@ -256,10 +452,14 @@ def apply_anima_ui_overrides(config: dict) -> None:
         legacy_adapter_type = str(get_network_arg_value(network_args, "anima_adapter_type") or "").strip().lower()
         if legacy_network_module == "networks.tlora_anima":
             lora_type = "tlora"
-        elif legacy_adapter_type in {"lora", "lora_fa", "vera", "tlora", "lokr"}:
+        elif legacy_adapter_type in {"lora", "lora_fa", "vera", "tlora", "lokr", "loha", "boft", "glora", "glokr"}:
             lora_type = legacy_adapter_type
         elif legacy_network_module == "lycoris.kohya":
-            lora_type = "lokr"
+            legacy_lycoris_algo = str(config.get("lycoris_algo", "") or get_network_arg_value(network_args, "algo") or "").strip().lower()
+            if legacy_lycoris_algo in {"loha", "boft", "glora", "glokr", "lokr"}:
+                lora_type = legacy_lycoris_algo
+            else:
+                lora_type = "lokr"
         elif str(get_network_arg_value(network_args, "algo") or "").strip().lower() == "lokr":
             lora_type = "lokr"
         else:
@@ -269,7 +469,18 @@ def apply_anima_ui_overrides(config: dict) -> None:
         config["lora_type"] = lora_type
         config.pop("lycoris_algo", None)
 
-        if lora_type == "lokr":
+        if lora_type in {"loha", "boft", "glora", "glokr"}:
+            network_args = apply_anima_lycoris_overrides(
+                config,
+                network_args,
+                lora_type,
+                train_norm_enabled if train_norm_enabled is not None else False,
+                dora_enabled,
+                bypass_mode,
+                selected_main_block_template,
+                custom_network_args,
+            )
+        elif lora_type == "lokr":
             config["network_module"] = "networks.lora_anima"
             config["anima_adapter_type"] = "lokr"
             config["dora_wd"] = False

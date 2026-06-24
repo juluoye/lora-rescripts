@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import locale
+import os
 import subprocess
 import threading
 from pathlib import Path
@@ -31,6 +33,33 @@ from launcher.ui.install_page import InstallPage
 from launcher.ui.extension_page import ExtensionPage
 from launcher.ui.console_page import ConsolePage
 from launcher.ui.about_page import AboutPage
+
+
+def _decode_console_chunk(raw: bytes) -> str:
+    for encoding in ("utf-8", locale.getpreferredencoding(False), "gbk"):
+        if not encoding:
+            continue
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _kill_process_tree_windows(pid: int) -> bool:
+    try:
+        completed = subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            check=False,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+    except Exception:
+        return False
+    return completed.returncode == 0
 
 
 class App(ctk.CTk):
@@ -309,17 +338,25 @@ class App(ctk.CTk):
                 # Even if the launcher process already exited, its children may have been orphaned.
                 # Continue with a tree kill on Windows to make shutdown deterministic.
                 if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
-                    subprocess.run(
-                        ["taskkill", "/PID", str(pid), "/T", "/F"],
-                        capture_output=True,
-                        check=False,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                    )
+                    _kill_process_tree_windows(pid)
                 return
         except Exception:
             pass
+
+        if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+            if log_to_console:
+                self._safe_after(0, self._console_page.append_line, "> Forcing process tree shutdown on Windows...")
+            if _kill_process_tree_windows(pid):
+                try:
+                    if process.stdout:
+                        process.stdout.close()
+                except Exception:
+                    pass
+                try:
+                    process.wait(timeout=2.0)
+                except Exception:
+                    pass
+                return
 
         try:
             process.terminate()
@@ -340,14 +377,7 @@ class App(ctk.CTk):
                 except Exception:
                     pass
             if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
-                subprocess.run(
-                    ["taskkill", "/PID", str(pid), "/T", "/F"],
-                    capture_output=True,
-                    check=False,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
+                _kill_process_tree_windows(pid)
             elif process.poll() is None:
                 process.kill()
             process.wait(timeout=2.0)
@@ -415,8 +445,29 @@ class App(ctk.CTk):
         if not self._process or not self._process.stdout:
             return
         try:
-            for line in self._process.stdout:
-                decoded = line.decode("utf-8", errors="replace").rstrip("\n\r")
+            fd = self._process.stdout.fileno()
+            buffer = b""
+            while True:
+                try:
+                    chunk = os.read(fd, 8192)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                buffer += chunk
+
+                while True:
+                    newline_index = buffer.find(b"\n")
+                    if newline_index == -1:
+                        break
+                    raw_line = buffer[:newline_index]
+                    buffer = buffer[newline_index + 1 :]
+                    decoded = _decode_console_chunk(raw_line).rstrip("\r")
+                    if decoded:
+                        self._safe_after(0, self._console_page.append_line, decoded)
+
+            if buffer:
+                decoded = _decode_console_chunk(buffer).rstrip("\r\n")
                 if decoded:
                     self._safe_after(0, self._console_page.append_line, decoded)
         except Exception:

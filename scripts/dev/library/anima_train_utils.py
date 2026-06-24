@@ -5,7 +5,7 @@ import gc
 import math
 import os
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -189,6 +189,111 @@ def compute_loss_weighting_for_anima(weighting_scheme: str, sigmas: torch.Tensor
     else:
         weighting = torch.ones_like(sigmas)
     return weighting
+
+
+def _sample_anima_density(
+    args,
+    batch_size: int,
+    device: torch.device,
+    sampling: str,
+    sigmoid_scale: float,
+    shift: float,
+    latents: torch.Tensor,
+) -> torch.Tensor:
+    if sampling in {"uniform", "sigma"}:
+        u = torch.rand((batch_size,), device=device)
+    elif sampling == "sigmoid":
+        if sigmoid_scale <= 0:
+            u = torch.full((batch_size,), 0.5, device=device)
+        else:
+            u = torch.sigmoid(torch.randn((batch_size,), device=device) * sigmoid_scale)
+    elif sampling in {"shift", "flux_shift"}:
+        if sigmoid_scale <= 0:
+            u = torch.full((batch_size,), 0.5, device=device)
+        else:
+            u = torch.sigmoid(torch.randn((batch_size,), device=device) * sigmoid_scale)
+    else:
+        raise ValueError(f"Unsupported timestep sampling method for Anima: {sampling}")
+
+    if sampling == "shift":
+        if shift <= 0:
+            raise ValueError("discrete_flow_shift must be greater than 0")
+        u = (u * shift) / (1 + (shift - 1) * u)
+    elif sampling == "flux_shift":
+        h, w = latents.shape[-2], latents.shape[-1]
+        mu = np.interp((h // 2) * (w // 2), [256, 4096], [0.5, 1.15])
+        exp_mu = math.exp(float(mu))
+        u = u.clamp(1e-6, 1.0 - 1e-6)
+        u = exp_mu / (exp_mu + (1 / u - 1))
+
+    return u.clamp(0.0, 1.0)
+
+
+def get_anima_noisy_model_input_and_timesteps(
+    args,
+    noise_scheduler,
+    latents: torch.Tensor,
+    noise: torch.Tensor,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Build Anima rectified-flow inputs and normalized model timesteps.
+
+    Anima's DiT receives timesteps on the same 0..1 sigma scale used by its
+    sampler, while UI min/max timestep values remain on the usual 0..1000
+    training scale.
+    """
+
+    batch_size = int(latents.shape[0])
+    num_train_timesteps = int(noise_scheduler.config.num_train_timesteps)
+    min_timestep = 0 if getattr(args, "min_timestep", None) is None else int(args.min_timestep)
+    max_timestep = num_train_timesteps if getattr(args, "max_timestep", None) is None else int(args.max_timestep)
+    min_timestep = max(0, min(num_train_timesteps - 1, min_timestep))
+    max_timestep = max(min_timestep + 1, min(num_train_timesteps, max_timestep))
+
+    sampling = str(getattr(args, "timestep_sampling", "shift") or "shift").strip().lower()
+    sigmoid_scale = float(getattr(args, "sigmoid_scale", 1.0) or 0.0)
+    shift = float(getattr(args, "discrete_flow_shift", 1.0) or 1.0)
+    density = _sample_anima_density(
+        args=args,
+        batch_size=batch_size,
+        device=device,
+        sampling=sampling,
+        sigmoid_scale=sigmoid_scale,
+        shift=shift,
+        latents=latents,
+    )
+
+    timestep_range = float(max_timestep - min_timestep)
+    raw_timesteps = float(min_timestep) + density * timestep_range
+    raw_timesteps = raw_timesteps.clamp(min=float(min_timestep), max=float(max_timestep))
+    model_timesteps = (raw_timesteps / float(num_train_timesteps)).to(device=device, dtype=torch.float32)
+
+    view_shape = (-1,) + (1,) * (latents.ndim - 1)
+    sigmas = model_timesteps.view(view_shape).to(dtype=dtype)
+
+    if getattr(args, "ip_noise_gamma", 0):
+        xi = torch.randn_like(latents, device=latents.device, dtype=dtype)
+        if getattr(args, "ip_noise_gamma_random_strength", False):
+            ip_noise_gamma = torch.rand(1, device=latents.device, dtype=dtype) * float(args.ip_noise_gamma)
+        else:
+            ip_noise_gamma = float(args.ip_noise_gamma)
+        noisy_model_input = sigmas * (noise.to(dtype=dtype) + ip_noise_gamma * xi) + (1.0 - sigmas) * latents.to(dtype=dtype)
+    else:
+        noisy_model_input = sigmas * noise.to(dtype=dtype) + (1.0 - sigmas) * latents.to(dtype=dtype)
+
+    return noisy_model_input.to(dtype), model_timesteps, sigmas
+
+
+def get_noisy_model_input_and_timesteps_for_anima(
+    args,
+    noise_scheduler,
+    latents: torch.Tensor,
+    noise: torch.Tensor,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    return get_anima_noisy_model_input_and_timesteps(args, noise_scheduler, latents, noise, device, dtype)
 
 
 # Parameter groups (6 groups with separate LRs)

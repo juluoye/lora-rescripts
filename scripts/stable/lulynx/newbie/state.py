@@ -8,7 +8,6 @@ from pathlib import Path
 import torch
 from diffusers.optimization import get_scheduler
 from peft import get_peft_model_state_dict, set_peft_model_state_dict
-from safetensors.torch import load_file as load_safetensors_file, save_file as save_safetensors_file
 from mikazuki.compliance import build_lulynx_metadata_fields
 from mikazuki.training_route_contract import resolve_training_route_contract
 
@@ -216,75 +215,7 @@ def load_newbie_checkpoint(
     return NewbieResumeState()
 
 
-def _build_newbie_adapter_metadata(model, config: NewbieRuntimeConfig | None, step: int | None = None) -> dict[str, str]:
-    adapter_type = str(getattr(model, '_adapter_type', 'lora') or 'lora').strip().lower()
-    training_algo = 'lokr' if adapter_type == 'lyco_lokr' else adapter_type
-    route_contract = resolve_training_route_contract(
-        "newbie-lora",
-        route_kind_override="newbie",
-        route_label_override="Newbie LoRA",
-    )
-    metadata = {
-        'adapter_type': adapter_type,
-        'lora_rank': str(getattr(model, '_adapter_rank', '')),
-        'lora_alpha': str(getattr(model, '_adapter_alpha', '')),
-        'ss_network_module': 'lulynx.newbie',
-        'ss_training_network_module': 'lulynx.newbie',
-        'ss_training_algo': training_algo,
-        'ss_network_type': training_algo,
-        'ss_network_dim': str(getattr(model, '_adapter_rank', '')),
-        'ss_network_alpha': str(getattr(model, '_adapter_alpha', '')),
-        'ss_prediction_type': 'epsilon',
-    }
-    if step is not None:
-        metadata['ss_steps'] = str(step)
-    if config is not None:
-        resolution = f"{getattr(config, 'resolution_width', '')},{getattr(config, 'resolution_height', '')}"
-        metadata.update(
-            {
-                'ss_output_name': str(getattr(config, 'output_name', '') or ''),
-                'ss_sd_model_name': str(getattr(config, 'pretrained_model_name_or_path', '') or ''),
-                'ss_learning_rate': str(getattr(config, 'learning_rate', '') or ''),
-                'ss_batch_size_per_device': str(getattr(config, 'train_batch_size', '') or ''),
-                'ss_total_batch_size': str(getattr(config, 'effective_batch_size', '') or ''),
-                'ss_gradient_accumulation_steps': str(getattr(config, 'gradient_accumulation_steps', '') or ''),
-                'ss_gradient_checkpointing': str(bool(getattr(config, 'gradient_checkpointing', False))),
-                'ss_max_train_steps': str(getattr(config, 'max_train_steps', '') or ''),
-                'ss_num_epochs': str(getattr(config, 'max_train_epochs', '') or ''),
-                'ss_lr_scheduler': str(getattr(config, 'lr_scheduler', '') or ''),
-                'ss_lr_warmup_steps': str(getattr(config, 'lr_warmup_steps', '') or ''),
-                'ss_mixed_precision': str(getattr(config, 'mixed_precision', '') or ''),
-                'ss_seed': str(getattr(config, 'seed', '') or ''),
-                'ss_resolution': resolution,
-                'ss_network_dropout': str(getattr(config, 'network_dropout', '') or ''),
-                'ss_optimizer': str(getattr(config, 'optimizer_type', '') or ''),
-                'ss_cache_latents': str(bool(getattr(config, 'use_cache', False))),
-            }
-        )
-    metadata.update(route_contract.as_metadata_fields())
-    metadata.update(
-        build_lulynx_metadata_fields(
-            metadata=metadata,
-            git_commit="",
-        )
-    )
-    return {key: str(value) for key, value in metadata.items()}
-
-
-def _rewrite_adapter_safetensors_metadata(weights_path: Path, metadata: dict[str, str]) -> None:
-    if not weights_path.exists():
-        return
-    tensors = load_safetensors_file(str(weights_path), device='cpu')
-    save_safetensors_file(tensors, str(weights_path), metadata=metadata)
-
-
-def save_newbie_adapter(
-    output_dir: str | Path,
-    output_name: str,
-    model,
-    step: int | None = None,
-    config: NewbieRuntimeConfig | None = None,
-) -> Path:
+def save_newbie_adapter(output_dir: str | Path, output_name: str, model, step: int | None = None) -> Path:
     output_root = Path(output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
     save_dir = output_root / (f'{output_name}_step_{step}' if step else output_name)
@@ -301,7 +232,18 @@ def save_newbie_adapter(
             route_kind_override="newbie",
             route_label_override="Newbie LoRA",
         )
-        metadata = _build_newbie_adapter_metadata(model, config, step)
+        metadata = {
+            'adapter_type': 'lyco_lokr',
+            'lora_rank': str(getattr(model, '_adapter_rank', '')),
+            'lora_alpha': str(getattr(model, '_adapter_alpha', '')),
+        }
+        metadata.update(route_contract.as_metadata_fields())
+        metadata.update(
+            build_lulynx_metadata_fields(
+                metadata=metadata,
+                git_commit="",
+            )
+        )
         lyco_net.save_weights(str(weights_path), dtype=None, metadata=metadata)
         config_path = save_dir / 'adapter_config.json'
         config_path.write_text(
@@ -322,8 +264,6 @@ def save_newbie_adapter(
         return weights_path
 
     model.save_pretrained(str(save_dir), safe_serialization=True)
-    metadata = _build_newbie_adapter_metadata(model, config, step)
-    _rewrite_adapter_safetensors_metadata(save_dir / 'adapter_model.safetensors', metadata)
     route_contract = resolve_training_route_contract(
         "newbie-lora",
         route_kind_override="newbie",

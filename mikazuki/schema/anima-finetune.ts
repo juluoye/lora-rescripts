@@ -15,6 +15,8 @@ Schema.intersect([
         timestep_sampling: Schema.union(["sigma", "uniform", "sigmoid", "shift", "flux_shift"]).default("sigmoid").description("时间步采样"),
         sigmoid_scale: Schema.number().step(0.001).default(1.0).description("sigmoid 缩放"),
         discrete_flow_shift: Schema.number().step(0.001).default(1.0).description("Rectified Flow 位移"),
+        min_timestep: Schema.number().min(0).description("训练时允许的最小 timestep"),
+        max_timestep: Schema.number().min(1).description("训练时允许的最大 timestep"),
         weighting_scheme: Schema.union(["sigma_sqrt", "logit_normal", "mode", "cosmap", "none", "uniform"]).default("uniform").description("时间步分布权重策略"),
         logit_mean: Schema.number().step(0.01).description("logit_normal 权重策略的均值"),
         logit_std: Schema.number().step(0.01).description("logit_normal 权重策略的标准差"),
@@ -175,7 +177,7 @@ Schema.intersect([
             Schema.object({}),
         ]),
     ]),
-    SHARED_SCHEMAS.NOISE_SETTINGS,
+    Schema.object(UpdateSchema(SHARED_SCHEMAS.RAW.NOISE_SETTINGS, {}, ["min_timestep", "max_timestep"])).description("噪声设置"),
     SHARED_SCHEMAS.DATA_ENCHANCEMENT,
     SHARED_SCHEMAS.OTHER,
     Schema.object(

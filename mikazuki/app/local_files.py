@@ -10,6 +10,7 @@ from mikazuki import launch_utils
 
 REPO_ROOT = launch_utils.base_dir_path()
 LOGS_ROOT = REPO_ROOT / "logs"
+CONFIG_ROOT = REPO_ROOT / "config"
 TRAIN_ROOT = REPO_ROOT / "train"
 OUTPUT_ROOT = REPO_ROOT / "output"
 SAMPLE_OUTPUT_DIR = OUTPUT_ROOT / "sample"
@@ -18,10 +19,15 @@ PREVIEW_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 MODEL_FILE_EXTENSIONS = {".safetensors", ".ckpt", ".pt"}
 BUILTIN_PICKER_ROOTS = {
     "folder": TRAIN_ROOT,
+    "train-dir": TRAIN_ROOT,
     "output-folder": OUTPUT_ROOT,
     "model-file": SD_MODELS_ROOT,
     "file": SD_MODELS_ROOT,
     "model-saved-file": OUTPUT_ROOT,
+    "output-model-file": OUTPUT_ROOT,
+    "text-file": CONFIG_ROOT,
+    "config-file": CONFIG_ROOT,
+    "json-file": CONFIG_ROOT,
 }
 
 

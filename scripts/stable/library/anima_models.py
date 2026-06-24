@@ -40,6 +40,22 @@ def to_cpu(x):
         return x
 
 
+_FLOAT8_DTYPES = tuple(
+    dtype
+    for dtype in (
+        getattr(torch, "float8_e4m3fn", None),
+        getattr(torch, "float8_e4m3fnuz", None),
+        getattr(torch, "float8_e5m2", None),
+        getattr(torch, "float8_e5m2fnuz", None),
+    )
+    if dtype is not None
+)
+
+
+def _is_float8_dtype(dtype: torch.dtype) -> bool:
+    return dtype in _FLOAT8_DTYPES
+
+
 # Unsloth Offloaded Gradient Checkpointing
 # Based on Unsloth Zoo by Daniel Han-Chen & the Unsloth team
 try:
@@ -381,6 +397,10 @@ class RMSNorm(torch.nn.Module):
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if _is_float8_dtype(x.dtype):
+            output = self._norm(x.to(torch.float32)).to(torch.bfloat16)
+            return output * self.weight.to(torch.bfloat16)
+
         with torch.autocast(device_type=x.device.type, dtype=torch.float32):
             output = self._norm(x.float()).type_as(x)
             return output * self.weight
@@ -784,16 +804,33 @@ class TimestepEmbedding(nn.Module):
 
     def forward(self, sample: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         # The AdaLN-LoRA timestep branch can overflow in fp16 on older GPUs.
-        # Run its linear stack in fp32 while keeping the surrounding model under autocast.
-        use_fp32 = sample.dtype == torch.float16
-        with torch.autocast(device_type=sample.device.type, dtype=torch.float32, enabled=use_fp32):
-            emb = self.linear_1(sample)
+        # Use fp32 copies only for that case; otherwise keep dtype compatible with
+        # non-fp8 timestep weights without disabling the outer training autocast.
+        if sample.dtype == torch.float16:
+            bias_1 = self.linear_1.bias.float() if self.linear_1.bias is not None else None
+            bias_2 = self.linear_2.bias.float() if self.linear_2.bias is not None else None
+            emb = F.linear(sample.float(), self.linear_1.weight.float(), bias_1)
+            emb = self.activation(emb)
+            emb = F.linear(emb, self.linear_2.weight.float(), bias_2)
+            if self.linear_2.weight.dtype != torch.float32:
+                emb = emb.to(self.linear_2.weight.dtype)
+        else:
+            linear_sample = sample
+            weight_dtype = self.linear_1.weight.dtype
+            if (
+                sample.is_floating_point()
+                and self.linear_1.weight.is_floating_point()
+                and sample.dtype != weight_dtype
+                and not _is_float8_dtype(weight_dtype)
+            ):
+                linear_sample = sample.to(weight_dtype)
+            emb = self.linear_1(linear_sample)
             emb = self.activation(emb)
             emb = self.linear_2(emb)
 
         if self.use_adaln_lora:
             adaln_lora_B_T_3D = emb
-            emb_B_T_D = sample
+            emb_B_T_D = sample.to(emb.dtype) if sample.is_floating_point() and sample.dtype != emb.dtype else sample
         else:
             adaln_lora_B_T_3D = None
             emb_B_T_D = emb
@@ -1390,6 +1427,16 @@ class Anima(nn.Module):
     def dtype(self):
         return next(self.parameters()).dtype
 
+    @staticmethod
+    def normalize_model_timesteps(timesteps: torch.Tensor) -> torch.Tensor:
+        if not torch.is_tensor(timesteps) or not timesteps.dtype.is_floating_point:
+            return timesteps
+        detached_timesteps = timesteps.detach()
+        finite_timesteps = detached_timesteps[torch.isfinite(detached_timesteps)]
+        if finite_timesteps.numel() > 0 and finite_timesteps.max().item() > 1.0:
+            return timesteps / 1000.0
+        return timesteps
+
     def build_patch_embed(self) -> None:
         in_channels = self.in_channels + 1 if self.concat_padding_mask else self.in_channels
         self.x_embedder = PatchEmbed(
@@ -1587,6 +1634,7 @@ class Anima(nn.Module):
 
         if timesteps_B_T.ndim == 1:
             timesteps_B_T = timesteps_B_T.unsqueeze(1)
+        timesteps_B_T = self.normalize_model_timesteps(timesteps_B_T)
         t_embedding_B_T_D, adaln_lora_B_T_3D = self.t_embedder(timesteps_B_T)
         t_embedding_B_T_D = self.t_embedding_norm(t_embedding_B_T_D)
 
@@ -1652,8 +1700,14 @@ class LLMAdapterRMSNorm(nn.Module):
         self.variance_epsilon = eps
 
     def forward(self, hidden_states):
-        variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
+        input_is_float8 = _is_float8_dtype(hidden_states.dtype)
+        hidden_states = hidden_states.to(torch.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+
+        if input_is_float8:
+            hidden_states = hidden_states.to(torch.bfloat16)
+            return self.weight.to(torch.bfloat16) * hidden_states
 
         if self.weight.dtype in [torch.float16, torch.bfloat16]:
             hidden_states = hidden_states.to(self.weight.dtype)
@@ -2048,4 +2102,3 @@ class LLMAdapter(nn.Module):
 #     dit_config["rope_enable_fps_modulation"] = False
 
 #     return dit_config
-

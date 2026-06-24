@@ -10,11 +10,7 @@ import PIL.Image
 import torch
 from packaging import version
 from tqdm import tqdm
-try:
-    from transformers import CLIPFeatureExtractor
-except ImportError:
-    from transformers import CLIPImageProcessor as CLIPFeatureExtractor
-from transformers import CLIPTextModel, CLIPTokenizer
+from transformers import CLIPFeatureExtractor, CLIPTextModel, CLIPTokenizer
 
 from diffusers import SchedulerMixin, StableDiffusionPipeline
 from diffusers.models import AutoencoderKL

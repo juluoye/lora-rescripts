@@ -23,6 +23,17 @@ PROXY_TARGETS = {
     "tensorboard": ("MIKAZUKI_TENSORBOARD_HOST", "127.0.0.1", "MIKAZUKI_TENSORBOARD_PORT", "6006"),
     "tageditor": ("MIKAZUKI_TAGEDITOR_HOST", "127.0.0.1", "MIKAZUKI_TAGEDITOR_PORT", "28001"),
 }
+STREAMING_RESPONSE_EXCLUDED_HEADERS = {
+    "connection",
+    "content-length",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+}
 TAGEDITOR_UNAVAILABLE_MESSAGES = {
     "disabled": (
         "Tag Editor is disabled for this launch. Restart without --disable-tageditor to use it.\n"
@@ -181,12 +192,16 @@ def build_proxy_error_response(url_type: str, request_method: str):
 
 
 def build_proxy_streaming_response(response: httpx.Response) -> StreamingResponse:
-    return StreamingResponse(
+    proxy_response = StreamingResponse(
         response.aiter_raw(),
         status_code=response.status_code,
-        headers=response.headers,
         background=BackgroundTask(response.aclose),
     )
+    for header_name, header_value in response.headers.multi_items():
+        if header_name.lower() in STREAMING_RESPONSE_EXCLUDED_HEADERS:
+            continue
+        proxy_response.headers.append(header_name, header_value)
+    return proxy_response
 
 
 def reverse_proxy_maker(url_type: str, full_path: bool = False):

@@ -63,6 +63,25 @@ _ETA_RE = re.compile(
     r"(?:eta[:\s]+)?(?P<eta>\d{1,2}:\d{2}(?::\d{2})?)\b",
     re.IGNORECASE,
 )
+
+
+def _kill_process_tree_windows(pid: int) -> bool:
+    try:
+        completed = subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            check=False,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            **hidden_subprocess_kwargs(),
+        )
+    except Exception:
+        return False
+    return completed.returncode == 0
+
+
 _INSTALL_SECTION_SPECS = (
     {
         "patterns": ("provisioning python dev files",),
@@ -2098,7 +2117,8 @@ class LauncherTaskExecutor:
             code = self._process.wait() if self._process else -1
             self._process = None
             self._reader_thread = None
-            if self._task_state.get("task_type") == "stop":
+            task_type = self._task_state.get("task_type")
+            if task_type == "stop":
                 self._finish_task(
                     success=code == 0,
                     stage_code="trainer.stop_completed" if code == 0 else "trainer.stop_failed",
@@ -2109,7 +2129,17 @@ class LauncherTaskExecutor:
                     error=None if code == 0 else f"Process exited with code {code}",
                     details={"exit_code": code},
                 )
-            elif self._task_state.get("task_type") == "launch":
+            elif task_type == "kill":
+                self._record_launch_process_exited(code)
+                self._finish_task(
+                    success=True,
+                    stage_code="trainer.kill_completed",
+                    stage_label_zh="训练进程已强制结束",
+                    stage_label_en="Trainer process was force-killed",
+                    result_code="trainer.kill_completed",
+                    details={"exit_code": code},
+                )
+            elif task_type == "launch":
                 self._record_launch_process_exited(code)
                 self._finish_task(
                     success=code == 0,
@@ -2126,7 +2156,17 @@ class LauncherTaskExecutor:
                 {
                     "code": code,
                     "success": code == 0,
-                    "result_code": "trainer.process_exited_cleanly" if code == 0 else "trainer.process_exited_with_error",
+                    "result_code": (
+                        "trainer.kill_completed"
+                        if task_type == "kill"
+                        else "trainer.stop_completed"
+                        if task_type == "stop" and code == 0
+                        else "trainer.stop_failed"
+                        if task_type == "stop"
+                        else "trainer.process_exited_cleanly"
+                        if code == 0
+                        else "trainer.process_exited_with_error"
+                    ),
                 },
             )
 
@@ -2138,18 +2178,21 @@ class LauncherTaskExecutor:
         try:
             if process.poll() is not None:
                 if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
-                    subprocess.run(
-                        ["taskkill", "/PID", str(pid), "/T", "/F"],
-                        capture_output=True,
-                        check=False,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        **hidden_subprocess_kwargs(),
-                    )
+                    _kill_process_tree_windows(pid)
                 return
         except Exception:
             pass
+        if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP") and _kill_process_tree_windows(pid):
+            try:
+                if process.stdout:
+                    process.stdout.close()
+            except Exception:
+                pass
+            try:
+                process.wait(timeout=2.0)
+            except Exception:
+                pass
+            return
         try:
             process.terminate()
             process.wait(timeout=timeout)
@@ -2170,17 +2213,15 @@ class LauncherTaskExecutor:
                     process.stdout.close()
                 except Exception:
                     pass
-            if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
-                subprocess.run(
-                    ["taskkill", "/PID", str(pid), "/T", "/F"],
-                    capture_output=True,
-                    check=False,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    **hidden_subprocess_kwargs(),
-                )
-            elif process.poll() is None:
+            if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP") and _kill_process_tree_windows(pid):
+                try:
+                    process.wait(timeout=2.0)
+                    return
+                except subprocess.TimeoutExpired:
+                    pass
+                except Exception:
+                    return
+            if process.poll() is None:
                 process.kill()
             process.wait(timeout=2.0)
         except Exception:

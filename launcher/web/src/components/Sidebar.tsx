@@ -22,11 +22,11 @@ import launcherLogo from '../../../assets/favicon-launcher.png';
 const navItems: { id: PageId; icon: React.ElementType; labelKey: string }[] = [
   { id: 'launch', icon: Play, labelKey: 'launch' },
   { id: 'runtime', icon: Layers, labelKey: 'runtime' },
-  { id: 'managed', icon: Cloud, labelKey: 'managed' },
-  { id: 'advanced', icon: Settings, labelKey: 'advanced' },
   { id: 'install', icon: Download, labelKey: 'install' },
   { id: 'dependencies', icon: Package, labelKey: 'dependencies' },
   { id: 'extensions', icon: Puzzle, labelKey: 'extension' },
+  { id: 'managed', icon: Cloud, labelKey: 'managed' },
+  { id: 'advanced', icon: Settings, labelKey: 'advanced' },
   { id: 'console', icon: Terminal, labelKey: 'console' },
   { id: 'about', icon: Info, labelKey: 'about' },
 ];

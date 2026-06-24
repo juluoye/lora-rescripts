@@ -179,7 +179,43 @@ Schema.intersect([
     SHARED_SCHEMAS.LOG_SETTINGS,
     SHARED_SCHEMAS.VALIDATION_SETTINGS,
     Schema.object(SHARED_SCHEMAS.RAW.CAPTION_SETTINGS).description("caption（Tag）选项"),
-    SHARED_SCHEMAS.NOISE_SETTINGS,
+    Schema.intersect([
+        SHARED_SCHEMAS.NOISE_SETTINGS,
+        Schema.object({
+            timestep_sampling: Schema.union(["uniform", "sigmoid", "shift"]).default("uniform").description("SDXL timestep 采样策略。`uniform` 为默认均匀采样；`sigmoid` 为中部更集中；`shift` 可进一步朝低噪声或高噪声侧偏移"),
+            timestep_loss_weighting: Schema.union(["none", "linear", "cosine", "sigmoid", "shift"]).default("none").description("SDXL timestep loss 加权策略。保持采样分布不变，仅按 timestep 曲线调节每个样本的 loss 权重；内部会自动归一化平均权重，尽量避免整体学习率被连带改变"),
+        }),
+        Schema.union([
+            Schema.object({
+                timestep_sampling: Schema.const("sigmoid").required(),
+                timestep_sigmoid_scale: Schema.number().step(0.1).default(1.0).description("sigmoid 采样的曲线缩放。越大越容易采到两端，越小越集中在中部"),
+            }),
+            Schema.object({
+                timestep_sampling: Schema.const("shift").required(),
+                timestep_sigmoid_scale: Schema.number().step(0.1).default(1.0).description("shift 采样的 sigmoid 曲线缩放。越大越容易采到两端，越小越集中在中部"),
+                timestep_shift: Schema.number().min(0.01).step(0.01).default(1.0).description("shift 分布偏移。小于 1 更偏向低 timestep（低噪声区），大于 1 更偏向高 timestep（高噪声区）"),
+            }),
+            Schema.object({}),
+        ]),
+        Schema.union([
+            Schema.object({
+                timestep_loss_weighting: Schema.const("sigmoid").required(),
+                timestep_loss_weight_sigmoid_scale: Schema.number().step(0.1).default(1.0).description("sigmoid loss 加权的曲线缩放。越大，低噪声与高噪声区的权重落差越明显"),
+            }),
+            Schema.object({
+                timestep_loss_weighting: Schema.const("shift").required(),
+                timestep_loss_weight_sigmoid_scale: Schema.number().step(0.1).default(1.0).description("shift loss 加权里的 sigmoid 曲线缩放。越大，低噪声与高噪声区的权重切换越陡"),
+                timestep_loss_weight_shift: Schema.number().min(0.01).step(0.01).default(1.0).description("shift loss 加权的分布偏移。小于 1 更偏向低 timestep（低噪声区）给予更高权重，大于 1 更偏向高 timestep（高噪声区）"),
+            }),
+            Schema.object({
+                timestep_loss_weighting: Schema.const("linear").required(),
+            }),
+            Schema.object({
+                timestep_loss_weighting: Schema.const("cosine").required(),
+            }),
+            Schema.object({}),
+        ]),
+    ]).description("噪声设置"),
     SHARED_SCHEMAS.DATA_ENCHANCEMENT,
     SHARED_SCHEMAS.OTHER,
 

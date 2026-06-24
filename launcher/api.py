@@ -580,7 +580,9 @@ class Api:
         # Detach the JS bridge first so background threads stop trying to emit.
         self._window = None
 
-        self._start_close_cleanup(wait=True)
+        # Do not block the window-closing callback while waiting for process-tree cleanup.
+        # The cleanup thread is non-daemon, so Python will keep running until the kill path finishes.
+        self._start_close_cleanup(wait=False)
 
     def _start_close_cleanup(self, *, wait: bool = False) -> None:
         with self._close_cleanup_lock:

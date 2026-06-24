@@ -288,7 +288,7 @@
         LYCORIS_MAIN: Schema.union([
             Schema.object({
                 network_module: Schema.const('lycoris.kohya').required(),
-                lycoris_algo: Schema.union(["locon", "loha", "lokr", "ia3", "dylora", "glora", "diag-oft", "boft"]).default("locon").description('LyCORIS 网络算法'),
+                lycoris_algo: Schema.union(["locon", "loha", "lokr", "glokr", "ia3", "dylora", "glora", "diag-oft", "boft"]).default("locon").description('LyCORIS 网络算法'),
                 conv_dim: Schema.number().default(4),
                 conv_alpha: Schema.number().default(1),
                 dropout: Schema.number().step(0.01).default(0).description('LyCORIS 主 dropout 概率'),
@@ -305,17 +305,17 @@
                 dora_wd: Schema.boolean().default(false).description('启用 LyCORIS DoRA'),
                 wd_on_output: Schema.boolean().default(true).description('DoRA 范数统计沿输出通道计算'),
                 bypass_mode: Schema.boolean().default(false).description('LyCORIS bypass_mode。启用 DoRA 时建议关闭'),
-                decompose_both: Schema.boolean().default(false).description('LoKr 额外分解较小矩阵'),
-                full_matrix: Schema.boolean().default(false).description('LoKr 强制 full matrix 路线'),
-                unbalanced_factorization: Schema.boolean().default(false).description('LoKr 启用非均衡 factorization'),
+                decompose_both: Schema.boolean().default(false).description('LoKr / GLoKr 额外分解较小矩阵'),
+                full_matrix: Schema.boolean().default(false).description('LoKr / GLoKr 强制 full matrix 路线'),
+                unbalanced_factorization: Schema.boolean().default(false).description('LoKr / GLoKr 启用非均衡 factorization'),
             }),
             Schema.object({}),
         ]),
 
         LYCORIS_LOKR: Schema.union([
             Schema.object({
-                lycoris_algo: Schema.const('lokr').required(),
-                lokr_factor: Schema.number().min(-1).default(-1).description('常用 `4~无穷`（填写 -1 为无穷）'),
+                lycoris_algo: Schema.union(['lokr', 'glokr']).required(),
+                lokr_factor: Schema.number().min(-1).default(-1).description('LoKr / GLoKr 分解因子。常用 `4~无穷`（填写 -1 为自动 / 无穷风格）'),
             }),
             Schema.object({}),
         ]),
@@ -504,7 +504,6 @@
         ]),
 
         VALIDATION_SETTINGS: Schema.object({
-            validation_data_dir: Schema.string().role('filepicker', { type: "folder" }).description("独立验证集路径。填写后会把该目录作为独立验证集，不会从训练集中切走图片"),
             validation_split: Schema.number().min(0).max(1).step(0.01).default(0).description("验证集划分比例。会从训练集中自动切出一部分做验证"),
             validation_seed: Schema.number().description("验证集切分随机种子。不填写时沿用训练随机种子"),
             validate_every_n_steps: Schema.number().min(1).description("每 N 步执行一次验证"),
