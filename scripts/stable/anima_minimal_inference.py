@@ -37,30 +37,6 @@ class GenerationSettings:
         self.dit_weight_dtype = dit_weight_dtype  # not used currently because model may be optimized
 
 
-def build_unconditional_anima_embed(
-    anima: anima_models.Anima,
-    encoded_tokens: List[torch.Tensor],
-) -> torch.Tensor:
-    """Match training-time unconditional semantics for empty negative prompts."""
-    prompt_embeds, attn_mask, t5_input_ids, t5_attn_mask = encoded_tokens
-
-    unconditional_prompt_embeds = torch.zeros_like(prompt_embeds)
-    unconditional_attn_mask = torch.zeros_like(attn_mask)
-    unconditional_t5_input_ids = torch.zeros_like(t5_input_ids)
-    unconditional_t5_attn_mask = torch.zeros_like(t5_attn_mask)
-    unconditional_t5_input_ids[:, 0] = 1
-    unconditional_t5_attn_mask[:, 0] = 1
-
-    crossattn_emb = anima._preprocess_text_embeds(
-        source_hidden_states=unconditional_prompt_embeds.to(anima.device),
-        target_input_ids=unconditional_t5_input_ids.to(anima.device),
-        target_attention_mask=unconditional_t5_attn_mask.to(anima.device),
-        source_attention_mask=unconditional_attn_mask.to(anima.device),
-    )
-    crossattn_emb[~unconditional_t5_attn_mask.bool()] = 0
-    return crossattn_emb
-
-
 def parse_args() -> argparse.Namespace:
     """parse command line arguments"""
     parser = argparse.ArgumentParser(description="HunyuanImage inference script")
@@ -103,8 +79,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--flow_shift",
         type=float,
-        default=5.0,
-        help="Shift factor for flow matching schedulers. Default is 5.0.",
+        default=1.0,
+        help="Shift factor for flow matching schedulers. Default is 1.0.",
     )
 
     parser.add_argument("--fp8", action="store_true", help="use fp8 for DiT model")
@@ -455,21 +431,16 @@ def prepare_text_inputs(
         encoding_strategy = strategy_base.TextEncodingStrategy.get_strategy()
 
         with torch.no_grad():
-            if negative_prompt == "":
-                negative_embed = copy.deepcopy(embed)
-                negative_embed[0] = build_unconditional_anima_embed(anima, negative_embed)
-            else:
-                # negative_embed = anima_text_encoder.get_text_embeds(anima, tokenizer, text_encoder, t5xxl_tokenizer, negative_prompt)
-                tokens = tokenize_strategy.tokenize(negative_prompt)
-                negative_embed = encoding_strategy.encode_tokens(tokenize_strategy, [text_encoder], tokens)
-                crossattn_emb = anima._preprocess_text_embeds(
-                    source_hidden_states=negative_embed[0].to(anima.device),
-                    target_input_ids=negative_embed[2].to(anima.device),
-                    target_attention_mask=negative_embed[3].to(anima.device),
-                    source_attention_mask=negative_embed[1].to(anima.device),
-                )
-                crossattn_emb[~negative_embed[3].bool()] = 0
-                negative_embed[0] = crossattn_emb
+            tokens = tokenize_strategy.tokenize(negative_prompt)
+            negative_embed = encoding_strategy.encode_tokens(tokenize_strategy, [text_encoder], tokens)
+            crossattn_emb = anima._preprocess_text_embeds(
+                source_hidden_states=negative_embed[0].to(anima.device),
+                target_input_ids=negative_embed[2].to(anima.device),
+                target_attention_mask=negative_embed[3].to(anima.device),
+                source_attention_mask=negative_embed[1].to(anima.device),
+            )
+            crossattn_emb[~negative_embed[3].bool()] = 0
+            negative_embed[0] = crossattn_emb
         negative_embed[0] = negative_embed[0].cpu()
 
         conds_cache[cache_key] = negative_embed

@@ -340,6 +340,27 @@ class TestBuildMetadataIntegration:
         assert metadata.prediction_type is None  # Flux doesn't use prediction_type
         assert metadata.additional_fields["trigger_phrase"] == "anime style"
 
+    def test_anima_lora_workflow_uses_flow_prediction_type(self):
+        """Test Anima LoRA metadata is not mislabeled as epsilon prediction."""
+        timestamp = time.time()
+
+        metadata = sai_model_spec.build_metadata_dataclass(
+            state_dict=None,
+            v2=False,
+            v_parameterization=False,
+            sdxl=False,
+            lora=True,
+            textual_inversion=False,
+            timestamp=timestamp,
+            title="Test Anima LoRA",
+            model_config={"anima": "preview"},
+        )
+
+        assert metadata.architecture == "anima-preview/lora"
+        assert metadata.implementation == "https://huggingface.co/circlestone-labs/Anima"
+        assert metadata.resolution == "1024x1024"
+        assert metadata.prediction_type == "flow"
+
     def test_legacy_function_compatibility(self):
         """Test that legacy build_metadata function works correctly."""
         timestamp = time.time()

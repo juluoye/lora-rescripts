@@ -18,7 +18,7 @@ from tqdm import tqdm
 from PIL import Image
 
 from library.device_utils import init_ipex, clean_memory_on_device, synchronize_device
-from library import anima_models, anima_utils, train_util, qwen_image_autoencoder_kl
+from library import anima_models, anima_utils, train_util, qwen_image_autoencoder_kl, hunyuan_image_utils
 from mikazuki.utils.runtime_sageattention import probe_runtime_sageattention
 from mikazuki.utils.runtime_mode import infer_attention_runtime_mode
 from mikazuki.utils.runtime_safe_preview import clamp_safe_preview_request
@@ -107,32 +107,45 @@ def normalize_anima_preview_sampling(
     return sampler, scheduler
 
 
-def build_unconditional_anima_crossattn(
+def build_anima_crossattn(
     dit: anima_models.Anima,
     prompt_embeds: torch.Tensor,
     attn_mask: torch.Tensor,
     t5_input_ids: torch.Tensor,
     t5_attn_mask: torch.Tensor,
 ) -> torch.Tensor:
-    """Match training-time unconditional semantics for empty negative prompts during preview sampling."""
-    unconditional_prompt_embeds = torch.zeros_like(prompt_embeds)
-    unconditional_attn_mask = torch.zeros_like(attn_mask)
-    unconditional_t5_input_ids = torch.zeros_like(t5_input_ids)
-    unconditional_t5_attn_mask = torch.zeros_like(t5_attn_mask)
-    unconditional_t5_input_ids[:, 0] = 1
-    unconditional_t5_attn_mask[:, 0] = 1
-
+    """Build Anima cross-attention embeddings using the model's inference path."""
+    crossattn_emb = dit._preprocess_text_embeds(
+        source_hidden_states=prompt_embeds,
+        target_input_ids=t5_input_ids if dit.use_llm_adapter else None,
+        target_attention_mask=t5_attn_mask,
+        source_attention_mask=attn_mask,
+    )
     if dit.use_llm_adapter:
-        unconditional_crossattn = dit.llm_adapter(
-            source_hidden_states=unconditional_prompt_embeds,
-            target_input_ids=unconditional_t5_input_ids,
-            target_attention_mask=unconditional_t5_attn_mask,
-            source_attention_mask=unconditional_attn_mask,
-        )
-        unconditional_crossattn[~unconditional_t5_attn_mask.bool()] = 0
-        return unconditional_crossattn
+        crossattn_emb[~t5_attn_mask.bool()] = 0
+    return crossattn_emb
 
-    return unconditional_prompt_embeds
+
+def move_anima_text_conditions(
+    encoded,
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    prompt_embeds, attn_mask, t5_input_ids, t5_attn_mask = encoded
+
+    if isinstance(prompt_embeds, np.ndarray):
+        prompt_embeds = torch.from_numpy(prompt_embeds).unsqueeze(0)
+        attn_mask = torch.from_numpy(attn_mask).unsqueeze(0)
+        t5_input_ids = torch.from_numpy(t5_input_ids).unsqueeze(0)
+        t5_attn_mask = torch.from_numpy(t5_attn_mask).unsqueeze(0)
+
+    return (
+        prompt_embeds.to(device, dtype=dtype),
+        attn_mask.to(device),
+        t5_input_ids.to(device, dtype=torch.long),
+        t5_attn_mask.to(device),
+    )
 
 
 class _AnimaTimingSection:
@@ -1469,7 +1482,7 @@ def do_sample(
     dtype: torch.dtype,
     device: torch.device,
     guidance_scale: float = 1.0,
-    flow_shift: float = 3.0,
+    flow_shift: float = 1.0,
     neg_crossattn_emb: Optional[torch.Tensor] = None,
     sample_sampler: str = "euler",
     sample_scheduler: str = "simple",
@@ -1506,7 +1519,7 @@ def do_sample(
     # Latent shape: (1, 16, 1, H/8, W/8) for single image
     latent_h = height // 8
     latent_w = width // 8
-    latent = torch.zeros(1, 16, 1, latent_h, latent_w, device=device, dtype=sample_dtype)
+    latent_shape = (1, anima_models.Anima.LATENT_CHANNELS, 1, latent_h, latent_w)
 
     # UI treats seed=0 as random preview generation.
     if seed == 0:
@@ -1517,13 +1530,15 @@ def do_sample(
         generator = torch.manual_seed(seed)
     else:
         generator = None
-    noise = torch.randn(latent.size(), dtype=torch.float32, generator=generator, device="cpu").to(device=device, dtype=sample_dtype)
+    noise = torch.randn(latent_shape, dtype=torch.float32, generator=generator, device="cpu").to(device=device, dtype=sample_dtype)
 
-    # Timestep schedule: linear from 1.0 to 0.0
-    sigmas = torch.linspace(1.0, 0.0, steps + 1, device=device, dtype=sample_dtype)
-    flow_shift = float(flow_shift)
-    if flow_shift != 1.0:
-        sigmas = (sigmas * flow_shift) / (1 + (flow_shift - 1) * sigmas)
+    timesteps, sigmas = hunyuan_image_utils.get_timesteps_sigmas(
+        steps,
+        float(flow_shift),
+        device,
+    )
+    timesteps = (timesteps / 1000.0).to(device=device, dtype=compute_dtype)
+    sigmas = sigmas.to(device=device, dtype=sample_dtype)
 
     # Start from pure noise
     x = noise.clone()
@@ -1534,8 +1549,7 @@ def do_sample(
     use_cfg = guidance_scale > 1.0 and neg_crossattn_emb is not None
 
     for i in tqdm(range(steps), desc="Sampling"):
-        sigma = sigmas[i]
-        t = sigma.unsqueeze(0).to(dtype=compute_dtype)  # (1,)
+        t = timesteps[i].expand(x.shape[0]).to(dtype=compute_dtype)
         x_in = x.to(dtype=compute_dtype)
 
         if use_cfg:
@@ -1550,9 +1564,7 @@ def do_sample(
             model_output = dit(x_in, t, crossattn_emb, padding_mask=padding_mask)
             model_output = model_output.float()
 
-        # Euler step: x_{t-1} = x_t - (sigma_t - sigma_{t-1}) * model_output
-        dt = sigmas[i + 1] - sigma
-        x = x + model_output * dt
+        x = hunyuan_image_utils.step(x, model_output, sigmas, i).to(sample_dtype)
 
     return x.to(dtype=compute_dtype)
 
@@ -1633,32 +1645,42 @@ def sample_images(
     except Exception:
         pass
 
-    with torch.no_grad(), accelerator.autocast():
-        for prompt_dict in prompts:
-            dit.prepare_block_swap_before_forward()
-            _sample_image_inference(
-                accelerator,
-                args,
-                dit,
-                text_encoder,
-                vae,
-                tokenize_strategy,
-                text_encoding_strategy,
-                save_dir,
-                prompt_dict,
-                epoch,
-                steps,
-                sample_prompts_te_outputs,
-                prompt_replacement,
-            )
+    try:
+        with torch.no_grad(), accelerator.autocast():
+            for prompt_dict in prompts:
+                try:
+                    dit.prepare_block_swap_before_forward()
+                    _sample_image_inference(
+                        accelerator,
+                        args,
+                        dit,
+                        text_encoder,
+                        vae,
+                        tokenize_strategy,
+                        text_encoding_strategy,
+                        save_dir,
+                        prompt_dict,
+                        epoch,
+                        steps,
+                        sample_prompts_te_outputs,
+                        prompt_replacement,
+                    )
+                except torch.OutOfMemoryError:
+                    raise
+                except Exception as exc:
+                    logger.warning(
+                        "Anima preview generation failed for prompt enum=%s at step=%s: %s",
+                        prompt_dict.get("enum", "?"),
+                        steps,
+                        exc,
+                    )
+    finally:
+        torch.set_rng_state(rng_state)
+        if cuda_rng_state is not None:
+            torch.cuda.set_rng_state(cuda_rng_state)
 
-    # Restore RNG state
-    torch.set_rng_state(rng_state)
-    if cuda_rng_state is not None:
-        torch.cuda.set_rng_state(cuda_rng_state)
-
-    dit.switch_block_swap_for_training()
-    clean_memory_on_device(accelerator.device)
+        dit.switch_block_swap_for_training()
+        clean_memory_on_device(accelerator.device)
 
 
 def _decoded_tensor_to_pil_image(decoded: torch.Tensor) -> Image.Image:
@@ -1852,7 +1874,7 @@ def _sample_image_inference(
     seed = prompt_dict.get("seed")
     if seed == 0:
         seed = None
-    flow_shift = prompt_dict.get("flow_shift", getattr(args, "discrete_flow_shift", 3.0) or 3.0)
+    flow_shift = prompt_dict.get("flow_shift", 1.0)
     sample_sampler = prompt_dict.get("sample_sampler", getattr(args, "sample_sampler", "euler"))
     sample_scheduler = getattr(args, "sample_scheduler", "simple")
     sample_sampler, sample_scheduler = normalize_anima_preview_sampling(sample_sampler, sample_scheduler, warn=True)
@@ -1907,68 +1929,24 @@ def _sample_image_inference(
         logger.warning("Cannot encode prompt, skipping sample")
         return
 
-    prompt_embeds, attn_mask, t5_input_ids, t5_attn_mask = encoded
-
-    # Convert to tensors if numpy
-    if isinstance(prompt_embeds, np.ndarray):
-        prompt_embeds = torch.from_numpy(prompt_embeds).unsqueeze(0)
-        attn_mask = torch.from_numpy(attn_mask).unsqueeze(0)
-        t5_input_ids = torch.from_numpy(t5_input_ids).unsqueeze(0)
-        t5_attn_mask = torch.from_numpy(t5_attn_mask).unsqueeze(0)
-
-    prompt_embeds = prompt_embeds.to(accelerator.device, dtype=dit.dtype)
-    attn_mask = attn_mask.to(accelerator.device)
-    t5_input_ids = t5_input_ids.to(accelerator.device, dtype=torch.long)
-    t5_attn_mask = t5_attn_mask.to(accelerator.device)
-
-    # Process through LLM adapter if available
-    if dit.use_llm_adapter:
-        crossattn_emb = dit.llm_adapter(
-            source_hidden_states=prompt_embeds,
-            target_input_ids=t5_input_ids,
-            target_attention_mask=t5_attn_mask,
-            source_attention_mask=attn_mask,
-        )
-        crossattn_emb[~t5_attn_mask.bool()] = 0
-    else:
-        crossattn_emb = prompt_embeds
+    prompt_embeds, attn_mask, t5_input_ids, t5_attn_mask = move_anima_text_conditions(
+        encoded,
+        device=accelerator.device,
+        dtype=dit.dtype,
+    )
+    crossattn_emb = build_anima_crossattn(dit, prompt_embeds, attn_mask, t5_input_ids, t5_attn_mask)
 
     # Encode negative prompt for CFG
     neg_crossattn_emb = None
     if scale > 1.0 and negative_prompt is not None:
-        if negative_prompt == "":
-            neg_crossattn_emb = build_unconditional_anima_crossattn(
-                dit,
-                prompt_embeds,
-                attn_mask,
-                t5_input_ids,
-                t5_attn_mask,
+        neg_encoded = encode_prompt(negative_prompt)
+        if neg_encoded is not None:
+            neg_pe, neg_am, neg_t5_ids, neg_t5_am = move_anima_text_conditions(
+                neg_encoded,
+                device=accelerator.device,
+                dtype=dit.dtype,
             )
-        else:
-            neg_encoded = encode_prompt(negative_prompt)
-            if neg_encoded is not None:
-                neg_pe, neg_am, neg_t5_ids, neg_t5_am = neg_encoded
-                if isinstance(neg_pe, np.ndarray):
-                    neg_pe = torch.from_numpy(neg_pe).unsqueeze(0)
-                    neg_am = torch.from_numpy(neg_am).unsqueeze(0)
-                    neg_t5_ids = torch.from_numpy(neg_t5_ids).unsqueeze(0)
-                    neg_t5_am = torch.from_numpy(neg_t5_am).unsqueeze(0)
-
-                neg_pe = neg_pe.to(accelerator.device, dtype=dit.dtype)
-                neg_am = neg_am.to(accelerator.device)
-                neg_t5_ids = neg_t5_ids.to(accelerator.device, dtype=torch.long)
-                neg_t5_am = neg_t5_am.to(accelerator.device)
-
-                if dit.use_llm_adapter:
-                    neg_crossattn_emb = dit.llm_adapter(
-                        source_hidden_states=neg_pe,
-                        target_input_ids=neg_t5_ids,
-                        target_attention_mask=neg_t5_am,
-                        source_attention_mask=neg_am,
-                    )
-                    neg_crossattn_emb[~neg_t5_am.bool()] = 0
-                else:
-                    neg_crossattn_emb = neg_pe
+            neg_crossattn_emb = build_anima_crossattn(dit, neg_pe, neg_am, neg_t5_ids, neg_t5_am)
 
     # Generate sample
     clean_memory_on_device(accelerator.device)

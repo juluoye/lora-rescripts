@@ -98,6 +98,7 @@ IMPL_ANIMA = "https://huggingface.co/circlestone-labs/Anima"
 
 PRED_TYPE_EPSILON = "epsilon"
 PRED_TYPE_V = "v"
+PRED_TYPE_FLOW = "flow"
 
 
 @dataclass
@@ -426,10 +427,13 @@ def build_metadata_dataclass(
     # Use helper function for resolution
     resolution = determine_resolution(reso, sdxl, model_config, v2, v_parameterization)
 
-    # Handle prediction type - Flux models don't use prediction_type
+    # Handle prediction type. Flow-matching architectures should not be marked
+    # as epsilon, because some loaders use this field for model classification.
     model_config = model_config or {}
     prediction_type = None
-    if "flux" not in model_config:
+    if "anima" in model_config:
+        prediction_type = PRED_TYPE_FLOW
+    elif "flux" not in model_config:
         if v_parameterization:
             prediction_type = PRED_TYPE_V
         else:
