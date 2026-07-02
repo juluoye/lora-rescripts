@@ -186,6 +186,23 @@ def test_parse_optimizer_kwargs_sanitizes_invalid_numeric_values():
         assert kwargs["amp_fac"] == 2.0
 
 
+def test_parse_optimizer_kwargs_unwraps_nested_optimizer_args_string():
+    with patch(
+        "sys.argv",
+        [
+            "",
+            "--optimizer_type",
+            "pytorch_optimizer.AdaMuon",
+            "--optimizer_args",
+            'optimizer_args = "use_muon=True"',
+        ],
+    ):
+        parser = setup_parser()
+        args = parser.parse_args()
+        kwargs = parse_optimizer_kwargs(args, logging.getLogger("test"))
+        assert kwargs == {"use_muon": True}
+
+
 def test_compat_optimizer_aliases_can_be_created():
     compat_optimizers = [
         ("pytorch_optimizer.Compass", Compass),
@@ -203,6 +220,32 @@ def test_compat_optimizer_aliases_can_be_created():
             optimizer_name, _, optimizer = get_optimizer(args, [param])
             assert optimizer_name.endswith(instance_type.__name__)
             assert isinstance(optimizer, instance_type)
+
+
+def test_muon_optimizers_receive_group_use_muon_flags():
+    from pytorch_optimizer import AdaMuon, Muon
+
+    muon_optimizers = [
+        ("pytorch_optimizer.Muon", Muon),
+        ("pytorch_optimizer.AdaMuon", AdaMuon),
+    ]
+
+    for alias, instance_type in muon_optimizers:
+        with patch("sys.argv", ["", "--optimizer_type", alias, "--optimizer_args", '"use_muon=True"']):
+            parser = setup_parser()
+            args = parser.parse_args()
+            matrix_param = Parameter(torch.ones(2, 2))
+            vector_param = Parameter(torch.ones(2))
+            optimizer_name, optimizer_args, optimizer = get_optimizer(args, [matrix_param, vector_param])
+
+            assert optimizer_name.endswith(instance_type.__name__)
+            assert optimizer_args == "use_muon=True"
+            assert isinstance(optimizer, instance_type)
+            assert [group["use_muon"] for group in optimizer.param_groups] == [True, False]
+
+            for param in (matrix_param, vector_param):
+                param.grad = torch.ones_like(param)
+            optimizer.step()
 
 
 def test_full_bf16_optimizer_wraps_master_params():

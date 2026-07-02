@@ -240,3 +240,81 @@ def test_apply_training_ui_overrides_normalizes_legacy_anima_glokr_full_matrix_s
     assert config["network_alpha"] == 1
     assert "algo=glokr" in config["network_args"]
     assert "full_matrix=True" in config["network_args"]
+
+
+def test_apply_training_ui_overrides_keeps_original_muon_branch_by_default():
+    config = {
+        "optimizer_type": "pytorch_optimizer.Muon",
+    }
+
+    warnings = apply_training_ui_overrides(config)
+
+    assert warnings == []
+    assert config["optimizer_args"] == ["use_muon=True"]
+
+
+def test_apply_training_ui_overrides_adds_adamuon_adamw_fallback_arg_by_default():
+    config = {
+        "optimizer_type": "pytorch_optimizer.AdaMuon",
+    }
+
+    warnings = apply_training_ui_overrides(config)
+
+    assert warnings == []
+    assert config["optimizer_args"] == ["use_muon=False"]
+
+
+def test_apply_training_ui_overrides_respects_disabled_muon_switch():
+    config = {
+        "optimizer_type": "pytorch_optimizer.Muon",
+        "muon_use_muon": False,
+    }
+
+    warnings = apply_training_ui_overrides(config)
+
+    assert warnings == []
+    assert config["optimizer_args"] == ["use_muon=False"]
+
+
+def test_apply_training_ui_overrides_replaces_existing_muon_use_muon_arg():
+    config = {
+        "optimizer_type": "AdaMuon",
+        "optimizer_args": ["eps=1e-8", "use_muon=False"],
+        "optimizer_args_custom": ["weight_decay=0.01", "use_muon=False"],
+        "muon_use_muon": "use_muon=True",
+    }
+
+    warnings = apply_training_ui_overrides(config)
+
+    assert warnings == []
+    assert "eps=1e-8" in config["optimizer_args"]
+    assert "weight_decay=0.01" in config["optimizer_args"]
+    assert config["optimizer_args"].count("use_muon=True") == 1
+    assert "use_muon=False" not in config["optimizer_args"]
+    assert "optimizer_args_custom" not in config
+    assert "muon_use_muon" not in config
+
+
+def test_apply_training_ui_overrides_preserves_custom_muon_use_muon_arg_without_ui_field():
+    config = {
+        "optimizer_type": "AdaMuon",
+        "optimizer_args_custom": "use_muon=True",
+    }
+
+    warnings = apply_training_ui_overrides(config)
+
+    assert warnings == []
+    assert config["optimizer_args"] == ["use_muon=True"]
+
+
+def test_apply_training_ui_overrides_drops_muon_ui_field_for_other_optimizers():
+    config = {
+        "optimizer_type": "AdamW8bit",
+        "muon_use_muon": "use_muon=True",
+    }
+
+    warnings = apply_training_ui_overrides(config)
+
+    assert warnings == []
+    assert "optimizer_args" not in config
+    assert "muon_use_muon" not in config

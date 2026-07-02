@@ -119,10 +119,28 @@ Schema.intersect([
                 "Prodigy",
                 "prodigyplus.ProdigyPlusScheduleFree",
                 "pytorch_optimizer.CAME",
+                "pytorch_optimizer.Muon",
+                "pytorch_optimizer.AdaMuon",
+                "pytorch_optimizer.DistributedMuon",
                 "bitsandbytes.optim.AdEMAMix8bit",
                 "bitsandbytes.optim.PagedAdEMAMix8bit"
             ]).default("AdamW8bit").description("优化器设置"),
         }),
+        Schema.union([
+            Schema.object({
+                optimizer_type: Schema.const("pytorch_optimizer.Muon").required().hidden(),
+                muon_use_muon: Schema.boolean().default(true).description("use_muon 开关。开启时二维参数走 Muon 分支；关闭时走 AdamW fallback。"),
+            }),
+            Schema.object({
+                optimizer_type: Schema.const("pytorch_optimizer.AdaMuon").required().hidden(),
+                muon_use_muon: Schema.boolean().default(false).description("AdaMuon 专用额外参数。默认关闭，走 AdamW fallback；开启后二维参数走 Muon 分支。"),
+            }),
+            Schema.object({
+                optimizer_type: Schema.const("pytorch_optimizer.DistributedMuon").required().hidden(),
+                muon_use_muon: Schema.boolean().default(true).description("use_muon 开关。开启时二维参数走 DistributedMuon 分支；关闭时走 AdamW fallback。"),
+            }),
+            Schema.object({}),
+        ]),
         Schema.object({
             optimizer_args_custom: Schema.array(String).role('table').description("自定义 optimizer_args，一行一个"),
         }),

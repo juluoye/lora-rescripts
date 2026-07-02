@@ -236,6 +236,41 @@ def _materialize_optimizer_params(trainable_params):
     return params, tensor_count, element_count
 
 
+def _split_params_for_muon_optimizer(params):
+    muon_params = []
+    fallback_params = []
+    for param in params:
+        if getattr(param, "ndim", 0) >= 2:
+            muon_params.append(param)
+        else:
+            fallback_params.append(param)
+    return muon_params, fallback_params
+
+
+def _materialize_muon_optimizer_param_groups(trainable_params, *, use_muon: bool):
+    if len(trainable_params) == 0:
+        return trainable_params
+
+    if all(isinstance(item, dict) for item in trainable_params):
+        normalized_groups = []
+        for group in trainable_params:
+            params = list(group.get("params", []))
+            muon_params, fallback_params = _split_params_for_muon_optimizer(params)
+            if muon_params:
+                normalized_groups.append({**group, "params": muon_params, "use_muon": bool(use_muon)})
+            if fallback_params:
+                normalized_groups.append({**group, "params": fallback_params, "use_muon": False})
+        return normalized_groups
+
+    muon_params, fallback_params = _split_params_for_muon_optimizer(trainable_params)
+    normalized_groups = []
+    if muon_params:
+        normalized_groups.append({"params": muon_params, "use_muon": bool(use_muon)})
+    if fallback_params:
+        normalized_groups.append({"params": fallback_params, "use_muon": False})
+    return normalized_groups
+
+
 def get_optimizer(args, trainable_params) -> tuple[str, str, object]:
     # "Optimizer to use: AdamW, AdamW8bit, Lion, SGDNesterov, SGDNesterov8bit, PagedAdamW, PagedAdamW8bit, PagedAdamW32bit, Lion8bit, PagedLion8bit, AdEMAMix8bit, PagedAdEMAMix8bit, DAdaptation(DAdaptAdamPreprint), DAdaptAdaGrad, DAdaptAdam, DAdaptAdan, DAdaptAdanIP, DAdaptLion, DAdaptSGD, Adafactor"
 
@@ -252,6 +287,16 @@ def get_optimizer(args, trainable_params) -> tuple[str, str, object]:
     optimizer_type = optimizer_util.resolve_optimizer_type(args, logger)
     optimizer_util.validate_optimizer_choice(args, optimizer_type)
     optimizer_kwargs = optimizer_util.parse_optimizer_kwargs(args, logger)
+    if optimizer_util.is_muon_optimizer_name(getattr(args, "optimizer_type", "")):
+        trainable_params = _materialize_muon_optimizer_param_groups(
+            trainable_params,
+            use_muon=bool(
+                optimizer_kwargs.get(
+                    "use_muon",
+                    optimizer_util.get_default_muon_use_muon(getattr(args, "optimizer_type", "")),
+                )
+            ),
+        )
     lr = args.learning_rate
     optimizer_class, optimizer = optimizer_util.build_optimizer(
         args=args,

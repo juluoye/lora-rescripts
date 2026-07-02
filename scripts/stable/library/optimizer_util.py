@@ -116,6 +116,11 @@ _DEFAULT_EXPERIMENTAL_PYTORCH_OPTIMIZER_ARGS: dict[str, dict[str, Any]] = {
         "eps": _SAFE_MIN_EPS,
     },
 }
+_MUON_OPTIMIZER_DEFAULT_USE_MUON: dict[str, bool] = {
+    "muon": True,
+    "adamuon": False,
+    "distributedmuon": True,
+}
 
 
 def _normalize_optimizer_base_name(raw_optimizer_type: str) -> str:
@@ -123,6 +128,14 @@ def _normalize_optimizer_base_name(raw_optimizer_type: str) -> str:
     if not value:
         return ""
     return value.rsplit(".", 1)[-1].lower()
+
+
+def is_muon_optimizer_name(raw_optimizer_type: str) -> bool:
+    return _normalize_optimizer_base_name(raw_optimizer_type) in _MUON_OPTIMIZER_DEFAULT_USE_MUON
+
+
+def get_default_muon_use_muon(raw_optimizer_type: str) -> bool:
+    return _MUON_OPTIMIZER_DEFAULT_USE_MUON.get(_normalize_optimizer_base_name(raw_optimizer_type), True)
 
 
 def _coerce_finite_float(
@@ -298,8 +311,26 @@ def parse_optimizer_kwargs(args: argparse.Namespace, logger: logging.Logger) -> 
     optimizer_kwargs: dict[str, Any] = {}
     if args.optimizer_args is not None and len(args.optimizer_args) > 0:
         for arg in args.optimizer_args:
-            key, value = arg.split("=")
-            optimizer_kwargs[key] = ast.literal_eval(value)
+            key, separator, value = str(arg).partition("=")
+            if not separator:
+                logger.warning(f"Ignoring malformed optimizer arg without '=': {arg!r}")
+                continue
+
+            key = key.strip()
+            value = value.strip()
+            parsed_value = ast.literal_eval(value)
+
+            if key.lower() == "optimizer_args" and isinstance(parsed_value, str):
+                nested_key, nested_separator, nested_value = parsed_value.partition("=")
+                if not nested_separator:
+                    logger.warning(
+                        f"Ignoring nested optimizer_args payload without '=': {parsed_value!r}"
+                    )
+                    continue
+                key = nested_key.strip()
+                parsed_value = ast.literal_eval(nested_value.strip())
+
+            optimizer_kwargs[key] = parsed_value
 
     configured_weight_decay = getattr(args, "weight_decay", None)
     if configured_weight_decay is not None and "weight_decay" not in optimizer_kwargs:
@@ -310,6 +341,8 @@ def parse_optimizer_kwargs(args: argparse.Namespace, logger: logging.Logger) -> 
                 f"Ignoring invalid weight_decay value: {configured_weight_decay}. "
                 "Please pass a numeric value (for example 0.01)."
             )
+    if is_muon_optimizer_name(getattr(args, "optimizer_type", "")) and "use_muon" not in optimizer_kwargs:
+        optimizer_kwargs["use_muon"] = get_default_muon_use_muon(getattr(args, "optimizer_type", ""))
     return _sanitize_optimizer_kwargs(optimizer_kwargs, optimizer_type=getattr(args, "optimizer_type", ""), logger=logger)
 
 

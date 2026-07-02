@@ -433,6 +433,9 @@
                     "Prodigy",
                     "prodigyplus.ProdigyPlusScheduleFree",
                     "pytorch_optimizer.CAME",
+                    "pytorch_optimizer.Muon",
+                    "pytorch_optimizer.AdaMuon",
+                    "pytorch_optimizer.DistributedMuon",
                     "bitsandbytes.optim.AdEMAMix8bit",
                     "bitsandbytes.optim.PagedAdEMAMix8bit"
                 ]).default("AdamW8bit").description("优化器设置"),
@@ -444,6 +447,22 @@
                     optimizer_type: Schema.const('Prodigy').required(),
                     prodigy_d0: Schema.string(),
                     prodigy_d_coef: Schema.string().default("2.0"),
+                }),
+                Schema.object({}),
+            ]),
+
+            Schema.union([
+                Schema.object({
+                    optimizer_type: Schema.const("pytorch_optimizer.Muon").required().hidden(),
+                    muon_use_muon: Schema.boolean().default(true).description("use_muon 开关。开启时二维参数走 Muon 分支；关闭时走 AdamW fallback。"),
+                }),
+                Schema.object({
+                    optimizer_type: Schema.const("pytorch_optimizer.AdaMuon").required().hidden(),
+                    muon_use_muon: Schema.boolean().default(false).description("AdaMuon 专用额外参数。默认关闭，走 AdamW fallback；开启后二维参数走 Muon 分支。"),
+                }),
+                Schema.object({
+                    optimizer_type: Schema.const("pytorch_optimizer.DistributedMuon").required().hidden(),
+                    muon_use_muon: Schema.boolean().default(true).description("use_muon 开关。开启时二维参数走 DistributedMuon 分支；关闭时走 AdamW fallback。"),
                 }),
                 Schema.object({}),
             ]),
