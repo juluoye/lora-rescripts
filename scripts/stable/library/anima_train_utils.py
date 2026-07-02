@@ -1948,8 +1948,17 @@ def _sample_image_inference(
             )
             neg_crossattn_emb = build_anima_crossattn(dit, neg_pe, neg_am, neg_t5_ids, neg_t5_am)
 
-    # Generate sample
+    # Move text encoders to CPU to free VRAM for sampling
+    if text_encoder is not None:
+        if isinstance(text_encoder, (list, tuple)):
+            for te in text_encoder:
+                if te is not None:
+                    te.to("cpu")
+        else:
+            text_encoder.to("cpu")
     clean_memory_on_device(accelerator.device)
+
+    # Generate sample
     latents = do_sample(
         height,
         width,

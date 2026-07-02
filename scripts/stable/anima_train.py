@@ -396,6 +396,10 @@ def train(args):
     }
     if prefetch_factor is not None:
         train_dataloader_kwargs["prefetch_factor"] = prefetch_factor
+    if n_workers > 0:
+        # Timeout protection: prevent infinite hang if worker process deadlocks
+        # Default 300s (5min) should be enough for normal cache loading
+        train_dataloader_kwargs["timeout"] = 300
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset_group,
         **train_dataloader_kwargs,
