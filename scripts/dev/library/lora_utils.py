@@ -122,6 +122,7 @@ def load_safetensors_with_lora_and_fp8(
                 # check if this weight has LoRA weights
                 lora_name_without_prefix = model_weight_key.rsplit(".", 1)[0]  # remove trailing ".weight"
                 found = False
+                is_lokr = False
                 for prefix in ["lora_unet_", ""]:
                     lora_name = prefix + lora_name_without_prefix.replace(".", "_")
                     down_key = lora_name + ".lora_down.weight"
@@ -130,8 +131,50 @@ def load_safetensors_with_lora_and_fp8(
                     if down_key in lora_weight_keys and up_key in lora_weight_keys:
                         found = True
                         break
+                    # LoKr format: lokr_w1 (or lokr_w1_a/b) + lokr_w2 (or lokr_w2_a/b)
+                    w1_key = lora_name + ".lokr_w1"
+                    w2_key = lora_name + ".lokr_w2"
+                    w1a_key = lora_name + ".lokr_w1_a"
+                    w2a_key = lora_name + ".lokr_w2_a"
+                    if (w1_key in lora_weight_keys or w1a_key in lora_weight_keys) and \
+                       (w2_key in lora_weight_keys or w2a_key in lora_weight_keys):
+                        found = True
+                        is_lokr = True
+                        break
                 if not found:
                     continue  # no LoRA weights for this model weight
+
+                if is_lokr:
+                    # materialize w1: direct or low-rank factored
+                    if w1_key in lora_sd:
+                        w1 = lora_sd[w1_key].to(dtype=torch.float32, device=calc_device)
+                    else:
+                        w1 = (lora_sd[w1a_key].to(dtype=torch.float32, device=calc_device) @
+                              lora_sd[lora_name + ".lokr_w1_b"].to(dtype=torch.float32, device=calc_device))
+                    # materialize w2: direct or low-rank factored
+                    if w2_key in lora_sd:
+                        w2 = lora_sd[w2_key].to(dtype=torch.float32, device=calc_device)
+                    else:
+                        w2 = (lora_sd[w2a_key].to(dtype=torch.float32, device=calc_device) @
+                              lora_sd[lora_name + ".lokr_w2_b"].to(dtype=torch.float32, device=calc_device))
+
+                    alpha_key = lora_name + ".alpha"
+                    lora_dim = w2.shape[0]
+                    alpha = lora_sd.get(alpha_key, lora_dim)
+                    scale = float(alpha) / lora_dim
+
+                    delta = torch.kron(w1, w2).reshape(model_weight.shape[0], model_weight.shape[1])
+                    original_dtype = model_weight.dtype
+                    w_fp32 = model_weight.to(torch.float32)
+                    w_fp32 = w_fp32 + multiplier * delta * scale
+                    model_weight = w_fp32.to(original_dtype)
+
+                    # clean up consumed keys
+                    for k in [w1_key, w2_key, w1a_key, w2a_key,
+                               lora_name + ".lokr_w1_b", lora_name + ".lokr_w2_b", alpha_key]:
+                        if k in lora_weight_keys:
+                            lora_weight_keys.remove(k)
+                    continue
 
                 # get LoRA weights
                 down_weight = lora_sd[down_key]
@@ -174,6 +217,19 @@ def load_safetensors_with_lora_and_fp8(
 
                 if original_dtype.itemsize == 1:  # fp8
                     model_weight = model_weight.to(original_dtype)  # convert back to original dtype
+
+                # DoRA magnitude rescaling — check both key names for compatibility
+                dora_key = lora_name + ".dora_scale"
+                if dora_key not in lora_weight_keys:
+                    dora_key = lora_name + ".dora_magnitude"
+                if dora_key in lora_weight_keys:
+                    magnitude = lora_sd[dora_key].to(dtype=torch.float32, device=calc_device)
+                    w_fp32 = model_weight.to(torch.float32)
+                    norm = torch.linalg.vector_norm(w_fp32, dim=1, keepdim=True).clamp_min(1e-6)
+                    row_scale = magnitude.view(-1, *([1] * (w_fp32.ndim - 1))) / norm
+                    w_fp32 = w_fp32 * row_scale
+                    model_weight = w_fp32.to(original_dtype)
+                    lora_weight_keys.remove(dora_key)
 
                 # remove LoRA keys from set
                 lora_weight_keys.remove(down_key)

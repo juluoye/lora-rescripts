@@ -540,7 +540,7 @@ class DoRALoRAModule(LoRAModule):
         self.bypass_mode = _parse_bool_arg(bypass_mode, default=False)
         self.enabled = True
         magnitude = self._compute_weight_norm(org_module.weight.detach().to(dtype=torch.float32))
-        self.dora_magnitude = torch.nn.Parameter(magnitude.to(dtype=torch.float32))
+        self.dora_scale = torch.nn.Parameter(magnitude.to(dtype=torch.float32))
 
     @staticmethod
     def _compute_weight_norm(weight: torch.Tensor) -> torch.Tensor:
@@ -601,7 +601,7 @@ class DoRALoRAModule(LoRAModule):
         return bias.view(*([1] * (out.ndim - 1)), -1)
 
     def _get_scale_view(self, out: torch.Tensor, dtype: torch.dtype, device: torch.device):
-        scale = (self.dora_magnitude.to(device=device, dtype=dtype) / self._merged_weight_norm(device, dtype)).clamp_min(1e-6)
+        scale = (self.dora_scale.to(device=device, dtype=dtype) / self._merged_weight_norm(device, dtype)).clamp_min(1e-6)
         if out.ndim < 2:
             raise ValueError(f"Unsupported DoRA output ndim: {out.ndim}")
 
@@ -621,7 +621,7 @@ class DoRALoRAModule(LoRAModule):
         org_weight = self.org_module_ref[0].weight.to(device=device, dtype=dtype)
         delta = self._get_delta_weight(multiplier=multiplier).to(device=device, dtype=dtype)
         merged = org_weight + delta
-        row_scale = (self.dora_magnitude.to(device=device, dtype=dtype) / self._compute_weight_norm(merged).detach()).clamp_min(1e-6)
+        row_scale = (self.dora_scale.to(device=device, dtype=dtype) / self._compute_weight_norm(merged).detach()).clamp_min(1e-6)
         view_shape = [merged.shape[0]] + [1] * (merged.ndim - 1)
         return merged * row_scale.view(*view_shape)
 
@@ -644,7 +644,8 @@ class DoRALoRAModule(LoRAModule):
 
         down_weight = sd["lora_down.weight"].to(torch.float32).to(device)
         up_weight = sd["lora_up.weight"].to(torch.float32).to(device)
-        magnitude = sd["dora_magnitude"].to(torch.float32).to(device)
+        _mag_key = "dora_magnitude" if "dora_magnitude" in sd else "dora_scale"
+        magnitude = sd[_mag_key].to(torch.float32).to(device)
 
         if down_weight.ndim == 2:
             delta = up_weight @ down_weight
@@ -1228,7 +1229,7 @@ def create_network_from_weights(multiplier, file, ae, text_encoders, unet, weigh
         elif "lora_down" in key:
             dim = value.size()[0]
             modules_dim[lora_name] = dim
-        elif "dora_magnitude" in key:
+        elif "dora_magnitude" in key or "dora_scale" in key:
             is_dora = True
 
         if "llm_adapter" in lora_name:
