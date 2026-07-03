@@ -145,11 +145,11 @@ function classToStyle(cls: LineClass): React.CSSProperties {
     case 'info':
       return { color: 'var(--accent-text)' };
     case 'muted':
-      return { color: 'var(--text-muted)' };
+      return { color: 'var(--console-muted)' };
     case 'dim':
-      return { color: 'var(--text-dim)' };
+      return { color: 'var(--console-dim)' };
     default:
-      return { color: 'var(--text-secondary)' };
+      return { color: 'var(--console-text)' };
   }
 }
 

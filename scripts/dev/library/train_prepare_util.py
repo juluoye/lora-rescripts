@@ -384,6 +384,8 @@ def prepare_dataset_args(args: argparse.Namespace, support_metadata: bool):
         args.cache_latents_prefetch_batches = cache_latents_runtime["prefetch_batches"]
     if hasattr(args, "latent_cache_disk_format"):
         args.latent_cache_disk_format = cache_latents_runtime["disk_cache_format"]
+    if hasattr(args, "cache_latents_disk_write_workers"):
+        args.cache_latents_disk_write_workers = cache_latents_runtime["npz_write_workers"]
     configure_latents_cache_runtime(**cache_latents_runtime)
 
     if hasattr(args, "bucket_selection_mode") and args.bucket_selection_mode is not None:

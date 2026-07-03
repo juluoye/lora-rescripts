@@ -50,6 +50,9 @@ Light theme → amber-600 primary
   --danger-border: rgba(239, 68, 68, 0.2);
 
   --console-bg: #0f1115;
+  --console-text: #ffffff;
+  --console-muted: #d7deea;
+  --console-dim: #9aa8bd;
   --scrollbar-thumb: rgba(255, 255, 255, 0.05);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.1);
 }
@@ -97,6 +100,9 @@ Light theme → amber-600 primary
   --danger-border: rgba(239, 68, 68, 0.2);
 
   --console-bg: #1e1e2e;
+  --console-text: #ffffff;
+  --console-muted: #dbe4f0;
+  --console-dim: #a7b5c8;
   --scrollbar-thumb: rgba(0, 0, 0, 0.1);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.2);
 }

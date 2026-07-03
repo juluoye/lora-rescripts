@@ -780,11 +780,18 @@ export function ConsolePage() {
       {/* Console output */}
       <div
         ref={scrollRef}
-        className="flex-1 rounded-2xl p-4 font-mono text-xs overflow-y-auto leading-relaxed shadow-inner custom-scrollbar"
-        style={{ backgroundColor: 'var(--console-bg)', border: '1px solid var(--border)', minHeight: '260px' }}
+        className="flex-1 rounded-2xl p-4 font-mono text-xs overflow-y-auto leading-relaxed shadow-inner custom-scrollbar select-text cursor-text"
+        style={{
+          backgroundColor: 'var(--console-bg)',
+          border: '1px solid var(--border)',
+          minHeight: '260px',
+          color: 'var(--console-text)',
+          WebkitUserSelect: 'text',
+          userSelect: 'text',
+        }}
       >
         {consoleLines.length === 0 ? (
-          <p className="italic" style={{ color: 'var(--text-dim)' }}>{t('console_empty')}</p>
+          <p className="italic" style={{ color: 'var(--console-muted)' }}>{t('console_empty')}</p>
         ) : (
           consoleLines.map((line, i) => (
             <Line key={i} text={line} />

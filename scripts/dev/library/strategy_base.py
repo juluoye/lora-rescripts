@@ -1,5 +1,6 @@
 # base class for platform strategies. this file defines the interface for strategies
 
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 import os
 import re
 from typing import Any, List, Optional, Tuple, Union, Callable
@@ -18,6 +19,48 @@ setup_logging()
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_optional_int(value: Optional[Any], *, minimum: int) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        resolved = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(minimum, resolved)
+
+
+_LATENTS_CACHE_RUNTIME_DEFAULTS = {
+    "preprocess_workers": None,
+    "prefetch_batches": None,
+    "disk_cache_format": None,
+    "npz_write_workers": None,
+}
+
+
+def configure_latents_cache_runtime(
+    *,
+    preprocess_workers: Optional[Any] = None,
+    prefetch_batches: Optional[Any] = None,
+    disk_cache_format: Optional[Any] = None,
+    npz_write_workers: Optional[Any] = None,
+) -> None:
+    _LATENTS_CACHE_RUNTIME_DEFAULTS["preprocess_workers"] = _normalize_optional_int(preprocess_workers, minimum=0)
+    _LATENTS_CACHE_RUNTIME_DEFAULTS["prefetch_batches"] = _normalize_optional_int(prefetch_batches, minimum=1)
+    _LATENTS_CACHE_RUNTIME_DEFAULTS["disk_cache_format"] = disk_cache_format
+    _LATENTS_CACHE_RUNTIME_DEFAULTS["npz_write_workers"] = _normalize_optional_int(npz_write_workers, minimum=0)
+
+
+def _resolve_npz_write_workers(env_key: str, default_value: int) -> int:
+    raw_value = os.environ.get(env_key, "")
+    if not raw_value:
+        return max(0, int(default_value))
+    try:
+        resolved = int(raw_value)
+    except (TypeError, ValueError):
+        return max(0, int(default_value))
+    return max(0, resolved)
 
 
 class TokenizeStrategy:
@@ -386,6 +429,19 @@ class LatentsCachingStrategy:
         self._cache_to_disk = cache_to_disk
         self._batch_size = batch_size
         self.skip_disk_cache_validity_check = skip_disk_cache_validity_check
+        runtime_npz_write_workers = _LATENTS_CACHE_RUNTIME_DEFAULTS.get("npz_write_workers")
+        self._npz_write_workers = (
+            _resolve_npz_write_workers("MIKAZUKI_LATENTS_NPZ_WRITE_WORKERS", runtime_npz_write_workers or 2)
+            if cache_to_disk
+            else 0
+        )
+        self._npz_write_executor = (
+            ThreadPoolExecutor(max_workers=self._npz_write_workers, thread_name_prefix="latents-npz")
+            if self._npz_write_workers > 0
+            else None
+        )
+        self._pending_npz_writes: List[Future] = []
+        self._max_pending_npz_writes = max(1, self._npz_write_workers * 4) if self._npz_write_workers > 0 else 0
 
     @classmethod
     def set_strategy(cls, strategy):
@@ -423,6 +479,108 @@ class LatentsCachingStrategy:
 
     def cache_batch_latents(self, model: Any, batch: List, flip_aug: bool, alpha_mask: bool, random_crop: bool):
         raise NotImplementedError
+
+    def finalize_caching(self) -> None:
+        self.flush_pending_disk_cache()
+        self._drain_pending_npz_writes(wait_for_all=True)
+        if self._npz_write_executor is not None:
+            self._npz_write_executor.shutdown(wait=True)
+            self._npz_write_executor = None
+
+    def flush_pending_disk_cache(self) -> None:
+        self._drain_pending_npz_writes(wait_for_all=True)
+
+    def _collect_finished_npz_writes(self) -> None:
+        if not self._pending_npz_writes:
+            return
+
+        pending_writes: List[Future] = []
+        for future in self._pending_npz_writes:
+            if future.done():
+                future.result()
+            else:
+                pending_writes.append(future)
+        self._pending_npz_writes = pending_writes
+
+    def _drain_pending_npz_writes(self, wait_for_all: bool = False) -> None:
+        if self._npz_write_executor is None or not self._pending_npz_writes:
+            return
+
+        self._collect_finished_npz_writes()
+        if not self._pending_npz_writes:
+            return
+
+        if wait_for_all:
+            done, not_done = wait(self._pending_npz_writes)
+        elif len(self._pending_npz_writes) < self._max_pending_npz_writes:
+            return
+        else:
+            done, not_done = wait(self._pending_npz_writes, return_when=FIRST_COMPLETED)
+
+        for future in done:
+            future.result()
+        self._pending_npz_writes = list(not_done)
+
+    def _write_latents_npz(
+        self,
+        npz_path: str,
+        latents_array: np.ndarray,
+        original_size,
+        crop_ltrb,
+        flipped_latents_array: Optional[np.ndarray] = None,
+        alpha_mask_array: Optional[np.ndarray] = None,
+        key_reso_suffix: str = "",
+    ) -> None:
+        kwargs = {}
+
+        if os.path.exists(npz_path):
+            with np.load(npz_path, allow_pickle=False) as npz:
+                for key in npz.files:
+                    kwargs[key] = np.asarray(npz[key])
+
+        kwargs["latents" + key_reso_suffix] = latents_array
+        kwargs["original_size" + key_reso_suffix] = np.asarray(original_size)
+        kwargs["crop_ltrb" + key_reso_suffix] = np.asarray(crop_ltrb)
+        if flipped_latents_array is not None:
+            kwargs["latents_flipped" + key_reso_suffix] = flipped_latents_array
+        if alpha_mask_array is not None:
+            kwargs["alpha_mask" + key_reso_suffix] = alpha_mask_array
+        np.savez(npz_path, **kwargs)
+
+    def _queue_latents_npz_write(
+        self,
+        npz_path: str,
+        latents_array: np.ndarray,
+        original_size,
+        crop_ltrb,
+        flipped_latents_array: Optional[np.ndarray] = None,
+        alpha_mask_array: Optional[np.ndarray] = None,
+        key_reso_suffix: str = "",
+    ) -> None:
+        if self._npz_write_executor is None:
+            self._write_latents_npz(
+                npz_path,
+                latents_array,
+                original_size,
+                crop_ltrb,
+                flipped_latents_array,
+                alpha_mask_array,
+                key_reso_suffix,
+            )
+            return
+
+        self._drain_pending_npz_writes(wait_for_all=False)
+        future = self._npz_write_executor.submit(
+            self._write_latents_npz,
+            npz_path,
+            latents_array,
+            original_size,
+            crop_ltrb,
+            flipped_latents_array,
+            alpha_mask_array,
+            key_reso_suffix,
+        )
+        self._pending_npz_writes.append(future)
 
     def _default_is_disk_cached_latents_expected(
         self,
@@ -528,8 +686,14 @@ class LatentsCachingStrategy:
             key_reso_suffix = f"_{latents_size[0]}x{latents_size[1]}" if multi_resolution else ""  # e.g. "_32x64", HxW
 
             if self.cache_to_disk:
-                self.save_latents_to_disk(
-                    info.latents_npz, latents, original_size, crop_ltrb, flipped_latent, alpha_mask, key_reso_suffix
+                self._queue_latents_npz_write(
+                    info.latents_npz,
+                    latents.float().cpu().numpy(),
+                    original_size,
+                    crop_ltrb,
+                    flipped_latent.float().cpu().numpy() if flipped_latent is not None else None,
+                    alpha_mask.float().cpu().numpy() if alpha_mask is not None else None,
+                    key_reso_suffix,
                 )
             else:
                 info.latents_original_size = original_size
@@ -618,20 +782,12 @@ class LatentsCachingStrategy:
         Returns:
             None
         """
-        kwargs = {}
-
-        if os.path.exists(npz_path):
-            # load existing npz and update it
-            npz = np.load(npz_path)
-            for key in npz.files:
-                kwargs[key] = npz[key]
-
-        # TODO float() is needed if vae is in bfloat16. Remove it if vae is float16.
-        kwargs["latents" + key_reso_suffix] = latents_tensor.float().cpu().numpy()
-        kwargs["original_size" + key_reso_suffix] = np.array(original_size)
-        kwargs["crop_ltrb" + key_reso_suffix] = np.array(crop_ltrb)
-        if flipped_latents_tensor is not None:
-            kwargs["latents_flipped" + key_reso_suffix] = flipped_latents_tensor.float().cpu().numpy()
-        if alpha_mask is not None:
-            kwargs["alpha_mask" + key_reso_suffix] = alpha_mask.float().cpu().numpy()
-        np.savez(npz_path, **kwargs)
+        self._write_latents_npz(
+            npz_path,
+            latents_tensor.float().cpu().numpy(),
+            original_size,
+            crop_ltrb,
+            flipped_latents_tensor.float().cpu().numpy() if flipped_latents_tensor is not None else None,
+            alpha_mask.float().cpu().numpy() if alpha_mask is not None else None,
+            key_reso_suffix,
+        )

@@ -110,10 +110,17 @@ def resolve_cache_latents_runtime_kwargs(args: argparse.Namespace) -> dict:
     except (TypeError, ValueError):
         resolved_prefetch = None
 
+    raw_npz_write_workers = getattr(args, "cache_latents_disk_write_workers", None)
+    try:
+        resolved_npz_write_workers = None if raw_npz_write_workers in (None, "") else max(0, int(raw_npz_write_workers))
+    except (TypeError, ValueError):
+        resolved_npz_write_workers = None
+
     return {
         "preprocess_workers": resolved_workers,
         "prefetch_batches": resolved_prefetch,
         "disk_cache_format": normalize_latents_disk_cache_format(getattr(args, "latent_cache_disk_format", None)),
+        "npz_write_workers": resolved_npz_write_workers,
     }
 
 

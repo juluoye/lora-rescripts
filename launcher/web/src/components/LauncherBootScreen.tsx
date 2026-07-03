@@ -343,7 +343,7 @@ export function LauncherBootScreen({
                   backgroundColor: theme === 'light' ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.04)',
                 }}
               >
-                {version || 'v1.6.1'}
+                {version || 'v1.6.24'}
               </div>
             </div>
           </div>

@@ -94,6 +94,12 @@ def add_dataset_resolution_and_cache_arguments(parser: argparse.ArgumentParser) 
         help="cache latents to disk to reduce VRAM usage (augmentations must be disabled) / VRAM削減のためにlatentをディスクにcacheする（augmentationは使用不可）",
     )
     add(
+        "--cache_latents_disk_write_workers",
+        type=int,
+        default=2,
+        help="number of background workers for cache_latents_to_disk npz writes. 0 disables async writes / cache_latents_to_disk 生成 npz 时的后台写盘线程数。设为 0 可禁用异步写盘",
+    )
+    add(
         "--skip_cache_check",
         action="store_true",
         help="skip the content validation of cache (latent and text encoder output). Cache file existence check is always performed, and cache processing is performed if the file does not exist"

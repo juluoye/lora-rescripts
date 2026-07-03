@@ -42,7 +42,9 @@ def create_window() -> None:
         width=width,
         height=height,
         min_size=(900, 620),
-        text_select=False,
+        # Keep global no-select behavior in the web app, but allow the console
+        # page to opt into text selection for direct mouse copy.
+        text_select=True,
     )
 
     # Set icon if available
