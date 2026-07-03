@@ -1,5 +1,24 @@
 from unittest.mock import patch
 import logging
+import sys
+import types
+
+import transformers as _transformers
+
+
+def _install_transformers_v5_clip_feature_extractor_compat():
+    if hasattr(_transformers, "CLIPFeatureExtractor") or not hasattr(_transformers, "CLIPImageProcessor"):
+        return
+
+    proxy = types.ModuleType("transformers")
+    proxy.__dict__.update(_transformers.__dict__)
+    proxy.CLIPFeatureExtractor = _transformers.CLIPImageProcessor
+    proxy.__getattr__ = lambda name: getattr(_transformers, name)
+    sys.modules["transformers"] = proxy
+
+
+_install_transformers_v5_clip_feature_extractor_compat()
+
 from library.train_util import get_optimizer
 from library.optimizer_util import parse_optimizer_kwargs
 from library.full_bf16_stochastic_util import FullBf16StochasticOptimizer
@@ -231,7 +250,7 @@ def test_muon_optimizers_receive_group_use_muon_flags():
     ]
 
     for alias, instance_type in muon_optimizers:
-        with patch("sys.argv", ["", "--optimizer_type", alias, "--optimizer_args", '"use_muon=True"']):
+        with patch("sys.argv", ["", "--optimizer_type", alias, "--optimizer_args", "use_muon=True"]):
             parser = setup_parser()
             args = parser.parse_args()
             matrix_param = Parameter(torch.ones(2, 2))
