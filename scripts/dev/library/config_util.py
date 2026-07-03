@@ -472,6 +472,8 @@ class BlueprintGenerator:
 
 def generate_dataset_group_by_blueprint(dataset_group_blueprint: DatasetGroupBlueprint) -> Tuple[DatasetGroup, Optional[DatasetGroup]]:
     datasets: List[Union[DreamBoothDataset, FineTuningDataset, ControlNetDataset]] = []
+    max_logged_subset_details = 8
+    sample_subset_dir_count = 3
 
     for dataset_blueprint in dataset_group_blueprint.datasets:
         extra_dataset_params = {}
@@ -524,12 +526,16 @@ def generate_dataset_group_by_blueprint(dataset_group_blueprint: DatasetGroupBlu
         for i, dataset in enumerate(_datasets):
             is_dreambooth = isinstance(dataset, DreamBoothDataset)
             is_controlnet = isinstance(dataset, ControlNetDataset)
+            subset_count = len(dataset.subsets)
+            total_image_count = sum(int(getattr(subset, "img_count", 0) or 0) for subset in dataset.subsets)
             info += dedent(f"""\
                 [{dataset_type} {i}]
                   batch_size: {dataset.batch_size}
                   resolution: {(dataset.width, dataset.height)}
                   resize_interpolation: {dataset.resize_interpolation}
                   enable_bucket: {dataset.enable_bucket}
+                  subset_count: {subset_count}
+                  total_image_count: {total_image_count}
             """)
 
             if dataset.enable_bucket:
@@ -541,6 +547,33 @@ def generate_dataset_group_by_blueprint(dataset_group_blueprint: DatasetGroupBlu
                 \n"""), "  ")
             else:
                 info += "\n"
+
+            if is_dreambooth:
+                reg_subset_count = sum(1 for subset in dataset.subsets if subset.is_reg)
+                info += indent(dedent(f"""\
+                  train_subset_count: {subset_count - reg_subset_count}
+                  reg_subset_count: {reg_subset_count}
+                \n"""), "  ")
+
+            if not dataset.debug_dataset and subset_count > max_logged_subset_details:
+                info += indent(dedent(f"""\
+                  subset_logging: summary_only
+                  subset_logging_reason: too_many_subsets ({subset_count} > {max_logged_subset_details})
+                """), "  ")
+                for sample_index, subset in enumerate(dataset.subsets[:sample_subset_dir_count]):
+                    info += indent(
+                        f'sample_image_dir[{sample_index}]: "{subset.image_dir}"\n',
+                        "  ",
+                    )
+                remaining_subset_count = subset_count - min(subset_count, sample_subset_dir_count)
+                if remaining_subset_count > 0:
+                    info += indent(
+                        f"remaining_subset_count_not_logged: {remaining_subset_count}\n\n",
+                        "  ",
+                    )
+                else:
+                    info += "\n"
+                continue
 
             for j, subset in enumerate(dataset.subsets):
                 info += indent(dedent(f"""\

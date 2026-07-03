@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, startTransition } from 'react';
 import { api, isApiReady } from '../api/bridge';
 import { useEvent } from '../hooks/useEvent';
 import { getTargetPageForApiResult } from '../utils/resultRouting';
@@ -194,6 +194,16 @@ const defaultDependencyCacheQueueState: RuntimeDependencyCacheQueueState = {
   requested_runtime_ids: [],
 };
 
+const CONSOLE_FLUSH_INTERVAL_MS = 75;
+const CONSOLE_LINE_LIMIT = 1200;
+
+function trimConsoleLines(lines: string[]): string[] {
+  if (lines.length <= CONSOLE_LINE_LIMIT) {
+    return lines;
+  }
+  return lines.slice(-CONSOLE_LINE_LIMIT);
+}
+
 const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -242,6 +252,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const settingsRef = useRef<Settings>(defaultSettings);
   const projectVersionRef = useRef<ProjectVersionInfo | null>(null);
   const apiReadyHandledRef = useRef(false);
+  const consoleLineBufferRef = useRef<string[]>([]);
+  const consoleFlushTimerRef = useRef<number | null>(null);
 
   // Apply theme attribute on mount and change
   useEffect(() => {
@@ -427,12 +439,59 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     projectVersionRef.current = projectVersion;
   }, [projectVersion]);
 
+  const flushConsoleLineBuffer = useCallback(() => {
+    if (consoleFlushTimerRef.current !== null) {
+      clearTimeout(consoleFlushTimerRef.current);
+      consoleFlushTimerRef.current = null;
+    }
+    if (consoleLineBufferRef.current.length === 0) {
+      return;
+    }
+    const pendingLines = consoleLineBufferRef.current;
+    consoleLineBufferRef.current = [];
+    startTransition(() => {
+      setConsoleLines((prev) => trimConsoleLines([...prev, ...pendingLines]));
+    });
+  }, []);
+
+  const queueConsoleLines = useCallback((lines: string | string[]) => {
+    const nextLines = Array.isArray(lines) ? lines : [lines];
+    if (nextLines.length === 0) {
+      return;
+    }
+    consoleLineBufferRef.current.push(...nextLines);
+    if (consoleFlushTimerRef.current !== null) {
+      return;
+    }
+    consoleFlushTimerRef.current = window.setTimeout(() => {
+      flushConsoleLineBuffer();
+    }, CONSOLE_FLUSH_INTERVAL_MS);
+  }, [flushConsoleLineBuffer]);
+
+  const resetConsoleLines = useCallback(() => {
+    if (consoleFlushTimerRef.current !== null) {
+      clearTimeout(consoleFlushTimerRef.current);
+      consoleFlushTimerRef.current = null;
+    }
+    consoleLineBufferRef.current = [];
+    setConsoleLines([]);
+  }, []);
+
   useEffect(() => {
     (window as any).__launcher_state = {
       getSettingsSnapshot: () => JSON.stringify(settingsRef.current),
     };
     return () => {
       delete (window as any).__launcher_state;
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (consoleFlushTimerRef.current !== null) {
+        clearTimeout(consoleFlushTimerRef.current);
+      }
+      consoleLineBufferRef.current = [];
     };
   }, []);
 
@@ -493,19 +552,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Event subscriptions
   useEvent('console_line', (line: string) => {
-    setConsoleLines((prev) => [...prev, line]);
+    queueConsoleLines(line);
   });
 
   useEvent('process_exit', (data: ProcessExitEvent) => {
     setIsRunning(false);
-    setConsoleLines((prev) => [
-      ...prev,
+    queueConsoleLines([
       `\nProcess exited (code: ${data.code})${data.result_code ? ` [${data.result_code}]` : ''}`,
     ]);
   });
 
   useEvent('install_log', (line: string) => {
-    setConsoleLines((prev) => [...prev, line]);
+    queueConsoleLines(line);
   });
 
   useEvent('install_done', (data: InstallDoneEvent) => {
@@ -580,24 +638,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       } else {
         setLastInstallSummary(null);
       }
-      setConsoleLines((prev) => [
-        ...prev,
+      queueConsoleLines([
         '',
-          data.success
-            ? action === 'initialize'
-              ? `[Launcher] Runtime '${data.runtime_id}' initialization completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
-              : action === 'uninstall'
-                ? `[Launcher] Runtime '${data.runtime_id}' dependency uninstall completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
-                : action === 'cache'
-                  ? `[Launcher] Runtime '${data.runtime_id}' dependency cache completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
-                : `[Launcher] Runtime '${data.runtime_id}' installation completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
-            : action === 'initialize'
-              ? `[Launcher] Runtime '${data.runtime_id}' initialization failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`
-              : action === 'uninstall'
-                ? `[Launcher] Runtime '${data.runtime_id}' dependency uninstall failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`
-                : action === 'cache'
-                  ? `[Launcher] Runtime '${data.runtime_id}' dependency cache failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`
-                : `[Launcher] Runtime '${data.runtime_id}' installation failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`,
+        data.success
+          ? action === 'initialize'
+            ? `[Launcher] Runtime '${data.runtime_id}' initialization completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
+            : action === 'uninstall'
+              ? `[Launcher] Runtime '${data.runtime_id}' dependency uninstall completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
+              : action === 'cache'
+                ? `[Launcher] Runtime '${data.runtime_id}' dependency cache completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
+              : `[Launcher] Runtime '${data.runtime_id}' installation completed successfully.${data.result_code ? ` [${data.result_code}]` : ''}`
+          : action === 'initialize'
+            ? `[Launcher] Runtime '${data.runtime_id}' initialization failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`
+            : action === 'uninstall'
+              ? `[Launcher] Runtime '${data.runtime_id}' dependency uninstall failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`
+              : action === 'cache'
+                ? `[Launcher] Runtime '${data.runtime_id}' dependency cache failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`
+              : `[Launcher] Runtime '${data.runtime_id}' installation failed. Check the log above and try again.${data.code ? ` [${data.code}]` : ''}`,
       ]);
 
       if (action === 'cache') {
@@ -657,7 +714,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     const label = language === 'zh' ? data.stage_label_zh : data.stage_label_en;
     const resultSuffix = data.result_code ? ` [${data.result_code}]` : data.code ? ` [${data.code}]` : '';
-    setConsoleLines((prev) => [...prev, `[Launcher] [${data.task_type}] ${label}${resultSuffix}`]);
+    queueConsoleLines(`[Launcher] [${data.task_type}] ${label}${resultSuffix}`);
   });
 
   useEvent('task_result', (data: TaskResultRecord) => {
@@ -881,12 +938,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return result;
       }
       setIsRunning(true);
-      setConsoleLines([]);
+      resetConsoleLines();
       return result;
     } catch (e: any) {
       return { error: e.message };
     }
-  }, [applyResultNavigation]);
+  }, [applyResultNavigation, resetConsoleLines]);
 
   const stop = useCallback(async () => {
     try {
@@ -912,7 +969,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     },
   ) => {
     if (!options?.preserveConsole) {
-      setConsoleLines([]);
+      resetConsoleLines();
     }
     if (!options?.preserveSummary) {
       setLastInstallSummary(null);
@@ -930,14 +987,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setIsInstalling(false);
       return { error: e.message };
     }
-  }, [applyResultNavigation]);
+  }, [applyResultNavigation, resetConsoleLines]);
 
   const installRuntimeAction = useCallback(async (runtimeId: string) => {
     return startInstallRuntime(runtimeId);
   }, [startInstallRuntime]);
 
   const initializeRuntimeAction = useCallback(async (runtimeId: string) => {
-    setConsoleLines([]);
+    resetConsoleLines();
     setLastInstallSummary(null);
     setIsInstalling(true);
     try {
@@ -952,10 +1009,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setIsInstalling(false);
       return { error: e.message };
     }
-  }, [applyResultNavigation]);
+  }, [applyResultNavigation, resetConsoleLines]);
 
   const uninstallRuntimeAction = useCallback(async (runtimeId: string) => {
-    setConsoleLines([]);
+    resetConsoleLines();
     setLastInstallSummary(null);
     setIsInstalling(true);
     try {
@@ -970,10 +1027,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setIsInstalling(false);
       return { error: e.message };
     }
-  }, [applyResultNavigation]);
+  }, [applyResultNavigation, resetConsoleLines]);
 
   const prefetchRuntimeDependenciesAction = useCallback(async (runtimeId: string) => {
-    setConsoleLines([]);
+    resetConsoleLines();
     setLastInstallSummary(null);
     setIsInstalling(true);
     try {
@@ -988,7 +1045,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setIsInstalling(false);
       return { error: e.message };
     }
-  }, [applyResultNavigation]);
+  }, [applyResultNavigation, resetConsoleLines]);
 
   const prefetchRuntimeDependenciesBatch = useCallback(async (runtimeIds: string[]) => {
     const normalized = runtimeIds.filter((item, index, arr) => !!item && arr.indexOf(item) === index);
@@ -1214,10 +1271,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [theme, flushSettingsNow]);
 
   const clearConsole = useCallback(() => {
-    setConsoleLines([]);
+    resetConsoleLines();
     setTaskStageEvents([]);
     setLastInstallSummary(null);
-  }, []);
+  }, [resetConsoleLines]);
 
   const clearTaskHistory = useCallback(async () => {
     try {
